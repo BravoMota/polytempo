@@ -43,3 +43,23 @@ Use stronger limited models only for:
 - checking for overengineering
 
 Do not use premium models for boilerplate.
+
+## Python environment
+
+Always use the local virtual environment.
+
+Before running tests or commands, assume the project uses:
+
+    python3 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install -e ".[dev]"
+
+When running Python commands, prefer:
+
+    .venv/bin/python -m pytest
+    .venv/bin/python -m pip
+    .venv/bin/python -m polytempo
+
+Do not install dependencies globally.
+Do not use system Python for project commands if `.venv` exists.
+Ask before installing new dependencies.
