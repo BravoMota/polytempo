@@ -1,0 +1,26 @@
+# Python build / install artifacts
+*.egg-info/
+src/*.egg-info/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Test / tooling cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local env files
+.env
+.env.*
+
+# Local generated data
+data/
+reports/
