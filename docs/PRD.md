@@ -8,6 +8,8 @@ The system should answer:
 
 > Given weather forecasts and market prices, is any bucket mispriced enough to justify a trade?
 
+Current progress: Phases 0-4 are complete. The next phase is Phase 4.5: create a local analysis/use-case layer that assembles the existing bucket parsing, distribution, edge, and decision modules using fake/local inputs.
+
 ## Non-goals
 
 - No LLM agent
@@ -16,6 +18,10 @@ The system should answer:
 - No complex dashboard
 - No database at first
 - No over-engineered plugin system
+- No APIs yet
+- No Polymarket/Gamma API yet
+- No forecast API yet
+- No NO-side edge yet
 
 ## First supported market type
 
@@ -48,3 +54,10 @@ The system should eventually output:
 - Edge table
 - Deterministic recommendation
 - Skip reasons
+
+## Current decision scope
+
+- BUY_YES only for now.
+- Assume buy and hold until settlement.
+- Spread is a warning only, not a hard blocker.
+- Liquidity is a crude temporary proxy; later prefer ask-side depth for the intended stake size.

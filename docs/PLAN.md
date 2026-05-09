@@ -13,6 +13,32 @@ Do not add LLM agents, live trading, dashboards, databases, or background schedu
 
 ---
 
+## Current progress
+
+```text
+Phase 0 complete: skeleton, docs, Cursor rules
+Phase 1 complete: temperature bucket parsing
+Phase 2 complete: distribution math from forecast values
+Phase 3 complete: YES-side edge calculation
+Phase 4 complete: deterministic BUY_YES/SKIP decision rules
+Phase 4.5 planned: local analysis/use-case layer
+```
+
+Current scope:
+
+```text
+No APIs yet.
+No Polymarket/Gamma API yet.
+No forecast API yet.
+No LLM agent.
+No dashboard.
+No live trading.
+BUY_YES only for now.
+NO-side edge is intentionally deferred.
+```
+
+---
+
 ## Phase 0 — Skeleton and rules
 
 **Goal:** create the repo safely.
@@ -158,11 +184,12 @@ Initial rules:
 ```text
 BUY_YES only if:
 - edge >= 7 percentage points
-- spread <= 10%
 - liquidity >= $100
-- no risk flags
 otherwise SKIP
 ```
+
+Spread is a warning only, not a hard blocker, because the product currently assumes BUY_YES and hold until settlement.
+Liquidity is a crude temporary proxy; later prefer ask-side depth for the intended stake size.
 
 Tests:
 
@@ -170,7 +197,30 @@ Tests:
 tests/test_decision.py
 ```
 
----
+## Phase 4.5 — Local analysis/use-case layer
+
+**Goal:** assemble existing modules into one end-to-end local analysis using fake/local inputs.
+
+Build:
+
+```text
+src/polytempo/analysis.py
+tests/test_analysis.py
+```
+
+Do:
+
+```text
+parse bucket labels
+build distribution
+compute bucket probabilities
+convert to ProbabilityQuote
+calculate edges
+apply decision rules
+return AnalysisResult
+```
+
+This layer connects buckets + distribution + edge + decision. Do not call it an agent or orchestrator.
 
 ## Phase 5 — First CLI demo
 
