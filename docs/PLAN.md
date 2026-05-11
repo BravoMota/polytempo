@@ -21,7 +21,8 @@ Phase 1 complete: temperature bucket parsing
 Phase 2 complete: distribution math from forecast values
 Phase 3 complete: YES-side edge calculation
 Phase 4 complete: deterministic BUY_YES/SKIP decision rules
-Phase 4.5 planned: local analysis/use-case layer
+Phase 4.5 complete: local analysis/use-case layer
+Phase 5 complete: first CLI demo (polytempo demo)
 ```
 
 Current scope:
