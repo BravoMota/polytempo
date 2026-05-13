@@ -8,7 +8,7 @@ The system should answer:
 
 > Given weather forecasts and market prices, is any bucket mispriced enough to justify a trade?
 
-Current progress: Phases 0-4 are complete. The next phase is Phase 4.5: create a local analysis/use-case layer that assembles the existing bucket parsing, distribution, edge, and decision modules using fake/local inputs.
+Current progress: Phases 0-6 are complete (through Polymarket/Gamma market ingestion). The next phase is Phase 7: Open-Meteo (or other) forecast ingestion and normalization.
 
 ## Non-goals
 
@@ -18,9 +18,7 @@ Current progress: Phases 0-4 are complete. The next phase is Phase 4.5: create a
 - No complex dashboard
 - No database at first
 - No over-engineered plugin system
-- No APIs yet
-- No Polymarket/Gamma API yet
-- No forecast API yet
+- No Open-Meteo / forecast API wired into the full pipeline yet
 - No NO-side edge yet
 
 ## First supported market type

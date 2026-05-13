@@ -23,14 +23,14 @@ Phase 3 complete: YES-side edge calculation
 Phase 4 complete: deterministic BUY_YES/SKIP decision rules
 Phase 4.5 complete: local analysis/use-case layer
 Phase 5 complete: first CLI demo (polytempo demo)
+Phase 6 complete: Polymarket/Gamma market ingestion (markets/polymarket.py)
 ```
 
 Current scope:
 
 ```text
-No APIs yet.
-No Polymarket/Gamma API yet.
-No forecast API yet.
+Polymarket/Gamma ingestion: implemented (HTTP client + payload parsing).
+No Open-Meteo / forecast API in the pipeline yet (Phase 7).
 No LLM agent.
 No dashboard.
 No live trading.
@@ -271,7 +271,7 @@ liquidity
 rules
 ```
 
-No weather API yet. Use fake distribution.
+**Status:** complete (`markets/polymarket.py`). Next: Phase 7 for forecast ingestion.
 
 ---
 

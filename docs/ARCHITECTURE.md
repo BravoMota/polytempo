@@ -14,7 +14,7 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: Phases 0-4 are complete. Phase 4.5 is next: add an analysis/use-case layer that assembles existing local modules using fake/local inputs.
+Current status: Phases 0-6 are complete (through Polymarket/Gamma market ingestion in `markets/polymarket.py`). Next: Phase 7 — forecast ingestion (`weather/`) and wiring real forecasts into analysis.
 
 ## Project shape
 
@@ -24,7 +24,7 @@ src/polytempo/
   markets/     # Polymarket fetching and bucket parsing
   model/       # calibration and probability distribution
   strategy/    # edge and deterministic decision rules
-  analysis.py   # planned analysis/use-case layer
+  analysis.py   # local analysis use-case layer
   paper/       # simulated paper-trading ledger
   cli/         # command entry points
   reports/     # JSON/Markdown outputs
@@ -50,7 +50,7 @@ Compare model probabilities to executable market prices and apply BUY/SKIP rules
 
 ### analysis.py
 
-Planned use-case layer that connects buckets, distribution, edge, and decision for local analysis.
+Local use-case layer that connects buckets, distribution, edge, and decision for analysis.
 
 ### paper/
 
