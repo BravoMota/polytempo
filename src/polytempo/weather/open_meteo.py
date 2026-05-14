@@ -16,6 +16,7 @@ from datetime import date
 
 import httpx
 
+from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
 
 DEFAULT_MODELS: tuple[str, ...] = (
@@ -37,6 +38,16 @@ class DailyMaxForecast:
     longitude: float
     values_c: list[float]
     models: list[str]
+
+    def to_forecast_values(self, source: str = "open_meteo") -> ForecastValues:
+        """Map into :class:`~polytempo.weather.schema.ForecastValues` for calibration and analysis."""
+        return ForecastValues(
+            source=source,
+            latitude=self.latitude,
+            longitude=self.longitude,
+            target_date=self.target_date,
+            values_c=list(self.values_c),
+        )
 
 
 def parse_forecast_payload(payload: dict, target_date: date) -> DailyMaxForecast:

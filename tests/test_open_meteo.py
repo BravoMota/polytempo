@@ -13,6 +13,7 @@ from polytempo.weather.open_meteo import (
     fetch_for_station,
     parse_forecast_payload,
 )
+from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import get_station
 
 
@@ -37,6 +38,24 @@ def test_parse_forecast_payload_collects_values_across_models() -> None:
     assert forecast.target_date == date(2026, 5, 14)
     assert forecast.values_c == pytest.approx([23.1, 22.8])
     assert forecast.models == ["ecmwf_ifs025", "gfs_seamless"]
+
+
+def test_daily_max_forecast_to_forecast_values() -> None:
+    forecast = parse_forecast_payload(_payload(), date(2026, 5, 14))
+    values = forecast.to_forecast_values()
+
+    assert isinstance(values, ForecastValues)
+    assert values.source == "open_meteo"
+    assert values.latitude == pytest.approx(forecast.latitude)
+    assert values.longitude == pytest.approx(forecast.longitude)
+    assert values.target_date == forecast.target_date
+    assert values.values_c == pytest.approx(forecast.values_c)
+    assert values.values_c is not forecast.values_c
+
+
+def test_daily_max_forecast_to_forecast_values_custom_source() -> None:
+    forecast = parse_forecast_payload(_payload(), date(2026, 5, 14))
+    assert forecast.to_forecast_values(source="open_meteo_ecmwf").source == "open_meteo_ecmwf"
 
 
 def test_parse_forecast_payload_supports_single_model_key() -> None:
