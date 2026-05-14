@@ -14,7 +14,7 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: Phases 0-6 are complete (through Polymarket/Gamma market ingestion in `markets/polymarket.py`). Next: Phase 7 — forecast ingestion (`weather/`) and wiring real forecasts into analysis.
+Current status: Phases 0-7 are complete (through Open-Meteo forecast ingestion in `weather/open_meteo.py` and the contract-station registry in `weather/stations.py`). Next: wire real forecasts into `analysis.py` and Phase 8 calibration.
 
 ## Project shape
 
@@ -34,7 +34,10 @@ src/polytempo/
 
 ### weather/
 
-Fetch and normalize weather forecast data.
+Fetch and normalize weather forecast data. Holds the contract-station registry
+(`stations.py`) that maps cities to the named airport observation station
+(ICAO, lat/lon, timezone) used by Polymarket settlement. Forecasts target the
+station, never a city centroid.
 
 ### markets/
 

@@ -16,11 +16,16 @@ from datetime import date
 
 import httpx
 
+from polytempo.weather.stations import Station
+
 DEFAULT_MODELS: tuple[str, ...] = (
     "ecmwf_ifs025",
     "gfs_seamless",
     "icon_seamless",
 )
+
+PLAUSIBLE_MIN_C = -40.0
+PLAUSIBLE_MAX_C = 60.0
 
 
 @dataclass(frozen=True)
@@ -68,9 +73,15 @@ def parse_forecast_payload(payload: dict, target_date: date) -> DailyMaxForecast
         if raw_value is None:
             continue
         try:
-            values_c.append(float(raw_value))
+            value = float(raw_value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{key}[{index}] must be numeric") from exc
+        if not PLAUSIBLE_MIN_C <= value <= PLAUSIBLE_MAX_C:
+            raise ValueError(
+                f"{key}[{index}]={value} outside plausible range "
+                f"[{PLAUSIBLE_MIN_C}, {PLAUSIBLE_MAX_C}] °C"
+            )
+        values_c.append(value)
         model_suffix = key[len("temperature_2m_max"):].lstrip("_")
         models.append(model_suffix or "default")
 
@@ -90,12 +101,15 @@ def fetch_daily_max(
     latitude: float,
     longitude: float,
     target_date: date,
+    timezone: str,
     models: tuple[str, ...] | list[str] = DEFAULT_MODELS,
     base_url: str = "https://api.open-meteo.com/v1/forecast",
 ) -> DailyMaxForecast:
     """Fetch a daily-max temperature ensemble across models for one date."""
     if not models:
         raise ValueError("models must not be empty")
+    if not timezone.strip():
+        raise ValueError("timezone must not be empty")
 
     target_iso = target_date.isoformat()
     response = httpx.get(
@@ -104,11 +118,29 @@ def fetch_daily_max(
             "latitude": latitude,
             "longitude": longitude,
             "daily": "temperature_2m_max",
+            "temperature_unit": "celsius",
             "models": ",".join(models),
-            "timezone": "auto",
+            "timezone": timezone,
             "start_date": target_iso,
             "end_date": target_iso,
         },
     )
     response.raise_for_status()
     return parse_forecast_payload(response.json(), target_date)
+
+
+def fetch_for_station(
+    station: Station,
+    target_date: date,
+    models: tuple[str, ...] | list[str] = DEFAULT_MODELS,
+    base_url: str = "https://api.open-meteo.com/v1/forecast",
+) -> DailyMaxForecast:
+    """Fetch a daily-max forecast for a registered contract station."""
+    return fetch_daily_max(
+        latitude=station.latitude,
+        longitude=station.longitude,
+        target_date=target_date,
+        timezone=station.timezone,
+        models=models,
+        base_url=base_url,
+    )

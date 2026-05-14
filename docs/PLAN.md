@@ -290,6 +290,12 @@ weather/open_meteo.py
 Output normalized forecast values. Schema was kept inline (single self-contained
 module, mirroring `markets/polymarket.py`); no separate `weather/schema.py`.
 
+Also includes `weather/stations.py`: a versioned contract-station registry
+(London/EGLC, Madrid/LEMD, Amsterdam/EHAM, Warsaw/EPWA, Paris/LFPB, Milan/LIMC)
+with ICAO, lat/lon, and IANA timezone. `fetch_for_station(station, date)` uses
+the registry directly. Forecast requests pass explicit `temperature_unit=celsius`
+and `timezone`, and parsed values are rejected if outside [-40, 60] °C.
+
 No trading decision inside the weather module.
 
 **Status:** complete. Next: wire forecasts into the analysis pipeline (Phase 8 calibration / end-to-end).
