@@ -25,6 +25,7 @@ Phase 4.5 complete: local analysis/use-case layer
 Phase 5 complete: first CLI demo (polytempo demo)
 Phase 6 complete: Polymarket/Gamma market ingestion (markets/polymarket.py)
 Phase 7 complete: Open-Meteo daily-max forecast ingestion (weather/open_meteo.py)
+Phase 8 complete: manual forecast calibration (model/calibration.py) + weather/schema.py
 ```
 
 Current scope:
@@ -32,7 +33,10 @@ Current scope:
 ```text
 Polymarket/Gamma ingestion: implemented (HTTP client + payload parsing).
 Open-Meteo ingestion: implemented (multi-model daily max temperature).
-Forecast not yet wired into the end-to-end analysis pipeline.
+weather/schema.py: ForecastValues (calibration + analyze_event). DailyMaxForecast.to_forecast_values() bridges fetch → schema.
+analyze_event: Polymarket event + ForecastValues + optional CalibrationRule → AnalysisResult.
+Opt-in live smoke: tests/test_pipeline.py (POLYTEMPO_RUN_LIVE_API_TESTS=1).
+Next plan phase: Phase 9 paper ledger (paper/ledger.py is stub only).
 No LLM agent.
 No dashboard.
 No live trading.
@@ -273,7 +277,7 @@ liquidity
 rules
 ```
 
-**Status:** complete (`markets/polymarket.py`). Next: Phase 7 for forecast ingestion.
+**Status:** complete (`markets/polymarket.py`). Forecast and calibration layers build on this (Phases 7–8).
 
 ---
 
@@ -287,8 +291,9 @@ Build:
 weather/open_meteo.py
 ```
 
-Output normalized forecast values. Schema was kept inline (single self-contained
-module, mirroring `markets/polymarket.py`); no separate `weather/schema.py`.
+Output starts as `DailyMaxForecast` (multi-model `values_c` for the target date).
+`weather/schema.py` defines `ForecastValues` for calibration/analysis; use
+`DailyMaxForecast.to_forecast_values()` at the boundary.
 
 Also includes `weather/stations.py`: a versioned contract-station registry
 (London/EGLC, Madrid/LEMD, Amsterdam/EHAM, Warsaw/EPWA, Paris/LFPB, Milan/LIMC)
@@ -298,7 +303,7 @@ and `timezone`, and parsed values are rejected if outside [-40, 60] °C.
 
 No trading decision inside the weather module.
 
-**Status:** complete. Next: wire forecasts into the analysis pipeline (Phase 8 calibration / end-to-end).
+**Status:** complete. Next: Phase 9 paper ledger (and product wiring such as event-specific location/date for live pipeline).
 
 ---
 
@@ -333,6 +338,8 @@ raw forecasts
   -> distribution
   -> bucket probabilities
 ```
+
+**Status:** complete (`model/calibration.py`). Wired through `analyze_event` on `ForecastValues`. Next: Phase 9 paper ledger.
 
 ---
 

@@ -14,7 +14,7 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: Phases 0-7 are complete (through Open-Meteo forecast ingestion in `weather/open_meteo.py` and the contract-station registry in `weather/stations.py`). Next: wire real forecasts into `analysis.py` and Phase 8 calibration.
+Current status: Phases **0–8** are complete through Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`** (`ForecastValues` + `DailyMaxForecast.to_forecast_values()`), **`analyze_event`** with optional calibration, and **`model/calibration.py`**. Next: **Phase 9** paper ledger (`paper/ledger.py` is still a stub) and product wiring (e.g. event-specific location/date for meaningful live runs).
 
 ## Project shape
 
@@ -34,7 +34,9 @@ src/polytempo/
 
 ### weather/
 
-Fetch and normalize weather forecast data. Holds the contract-station registry
+Fetch and normalize weather forecast data. **`schema.py`** holds `ForecastValues`
+for downstream calibration/analysis; **`open_meteo.py`** returns `DailyMaxForecast`
+with `to_forecast_values()` at the boundary. Holds the contract-station registry
 (`stations.py`) that maps cities to the named airport observation station
 (ICAO, lat/lon, timezone) used by Polymarket settlement. Forecasts target the
 station, never a city centroid.
