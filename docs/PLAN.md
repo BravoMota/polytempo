@@ -24,13 +24,15 @@ Phase 4 complete: deterministic BUY_YES/SKIP decision rules
 Phase 4.5 complete: local analysis/use-case layer
 Phase 5 complete: first CLI demo (polytempo demo)
 Phase 6 complete: Polymarket/Gamma market ingestion (markets/polymarket.py)
+Phase 7 complete: Open-Meteo daily-max forecast ingestion (weather/open_meteo.py)
 ```
 
 Current scope:
 
 ```text
 Polymarket/Gamma ingestion: implemented (HTTP client + payload parsing).
-No Open-Meteo / forecast API in the pipeline yet (Phase 7).
+Open-Meteo ingestion: implemented (multi-model daily max temperature).
+Forecast not yet wired into the end-to-end analysis pipeline.
 No LLM agent.
 No dashboard.
 No live trading.
@@ -283,12 +285,14 @@ Build:
 
 ```text
 weather/open_meteo.py
-weather/schema.py
 ```
 
-Output normalized forecast values.
+Output normalized forecast values. Schema was kept inline (single self-contained
+module, mirroring `markets/polymarket.py`); no separate `weather/schema.py`.
 
 No trading decision inside the weather module.
+
+**Status:** complete. Next: wire forecasts into the analysis pipeline (Phase 8 calibration / end-to-end).
 
 ---
 
