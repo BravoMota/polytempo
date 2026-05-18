@@ -14,7 +14,7 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: Phases **0–8** are complete through Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`** (`ForecastValues` + `DailyMaxForecast.to_forecast_values()`), **`analyze_event`** with optional calibration, and **`model/calibration.py`**. Next: **Phase 9** paper ledger (`paper/ledger.py` is still a stub) and product wiring (e.g. event-specific location/date for meaningful live runs).
+Current status: Phases **0–9** complete. Engine: Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`** (`ForecastValues` + `DailyMaxForecast.to_forecast_values()`), **`analyze_event`** with optional calibration, **`model/calibration.py`**, and the **paper ledger** (`paper/ledger.py`, append-only JSONL OPEN/SETTLE records, $1000 demo balance, 2-5% edge-scaled sizing) wired through `polytempo paper {open,settle,status,list-london}` for London. Next: **Phase 10** reports (`reports/writer.py`) and product wiring (event-specific settlement date + auto-resolution from the Gamma payload).
 
 ## Project shape
 
@@ -59,7 +59,11 @@ Local use-case layer that connects buckets, distribution, edge, and decision for
 
 ### paper/
 
-Record simulated trades and outcomes. No real trading.
+Record simulated trades and outcomes. No real trading. `ledger.py` writes an
+append-only JSONL of `OPEN`/`SETTLE` records; balance and open positions are
+always derived by replaying the log. Stake sizing is `2%-5%` of the current
+balance, scaled linearly by model edge (`edge_pp ≤ 7` → 2%, `edge_pp ≥ 15` →
+5%).
 
 ### cli/
 

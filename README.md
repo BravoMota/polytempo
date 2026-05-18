@@ -4,7 +4,7 @@ PolyTempo is a deterministic weather-market analysis tool.
 
 The goal is to compare weather forecast distributions against Polymarket temperature bucket prices, estimate edge, and produce strict BUY/SKIP recommendations.
 
-Current status: **Phases 0–8 complete** on the plan: Polymarket/Gamma ingestion (`markets/polymarket.py`), Open-Meteo daily-max ensemble (`weather/open_meteo.py` + `weather/stations.py`), shared **`ForecastValues`** in `weather/schema.py` (with **`DailyMaxForecast.to_forecast_values()`** for the pipeline), and **manual bias calibration** (`model/calibration.py`, used by **`analyze_event`**). **Phase 9** (paper ledger) is next. Live API smoke: `POLYTEMPO_RUN_LIVE_API_TESTS=1 pytest tests/test_pipeline.py` (opt-in; may still skip if no parseable event).
+Current status: **Phases 0–9 complete** on the plan: Polymarket/Gamma ingestion (`markets/polymarket.py`), Open-Meteo daily-max ensemble (`weather/open_meteo.py` + `weather/stations.py`), shared **`ForecastValues`** in `weather/schema.py` (with **`DailyMaxForecast.to_forecast_values()`** for the pipeline), **manual bias calibration** (`model/calibration.py`, used by **`analyze_event`**), and a **paper trading ledger** (`paper/ledger.py`, $1000 demo balance, 2-5% edge-scaled stake, append-only JSONL) wired through `polytempo paper {open,settle,status,list-london}` for London. **Phase 10** (reports) is next. Live API smoke: `POLYTEMPO_RUN_LIVE_API_TESTS=1 pytest tests/test_pipeline.py` (opt-in; may still skip if no parseable event).
 
 ## Quickstart
 
@@ -25,6 +25,25 @@ Run the test suite:
 ```bash
 python3 -m pytest
 ```
+
+## Paper trading (London, demo only)
+
+```bash
+# 1. find an active London weather event
+polytempo paper list-london
+
+# 2. lock paper trades against it for a given settlement date
+polytempo paper open --event-id <id> --date 2026-05-19
+
+# 3. after the market resolves, settle against the winning bucket label
+polytempo paper settle --event-id <id> --winner "23°C"
+
+# 4. inspect the account
+polytempo paper status
+```
+
+The ledger lives at `paper_ledger.jsonl` (append-only). Starting balance is
+$1000; each BUY_YES gets 2-5% of the live balance based on edge.
 
 ## Principles
 

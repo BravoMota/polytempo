@@ -26,6 +26,7 @@ Phase 5 complete: first CLI demo (polytempo demo)
 Phase 6 complete: Polymarket/Gamma market ingestion (markets/polymarket.py)
 Phase 7 complete: Open-Meteo daily-max forecast ingestion (weather/open_meteo.py)
 Phase 8 complete: manual forecast calibration (model/calibration.py) + weather/schema.py
+Phase 9 complete: paper trading ledger (paper/ledger.py) + `polytempo paper {open,settle,status,list-london}` CLI
 ```
 
 Current scope:
@@ -35,8 +36,9 @@ Polymarket/Gamma ingestion: implemented (HTTP client + payload parsing).
 Open-Meteo ingestion: implemented (multi-model daily max temperature).
 weather/schema.py: ForecastValues (calibration + analyze_event). DailyMaxForecast.to_forecast_values() bridges fetch → schema.
 analyze_event: Polymarket event + ForecastValues + optional CalibrationRule → AnalysisResult.
+paper/ledger.py: append-only JSONL of OPEN/SETTLE records. $1000 demo balance. Stake 2-5% of balance, linear ramp on edge_pp (2% at 7pp → 5% at >=15pp). London-only entry-point for now.
 Opt-in live smoke: tests/test_pipeline.py (POLYTEMPO_RUN_LIVE_API_TESTS=1).
-Next plan phase: Phase 9 paper ledger (paper/ledger.py is stub only).
+Next plan phase: Phase 10 reports (reports/writer.py).
 No LLM agent.
 No dashboard.
 No live trading.
@@ -363,6 +365,18 @@ CANCEL
 ```
 
 Use an append-only JSONL file.
+
+**Status:** complete (`paper/ledger.py`). $1000 starting balance, stake 2-5% of
+live balance per BUY_YES bucket, scaled linearly by edge (floor 7pp → 2%,
+ceiling 15pp → 5%). Records are append-only JSONL with `OPEN` and `SETTLE`
+events; balance is always derived by replaying the log. Sizing reads the
+current balance before each batch and decrements it sequentially so multiple
+buys in the same event do not over-stake. YES shares pay $1 each when the
+bucket label matches the winner, $0 otherwise. CLI: `polytempo paper open`,
+`polytempo paper settle --winner "<label>"`, `polytempo paper status`,
+`polytempo paper list-london`. London-only for now (the open command pulls
+from `weather/stations.py` `london`). NO-side and auto-resolution from the
+Gamma payload are deferred.
 
 ---
 
