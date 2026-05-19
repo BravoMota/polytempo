@@ -6,9 +6,9 @@ from datetime import date, timedelta
 import pytest
 
 from polytempo.analysis import analyze_event
-from polytempo.markets.buckets import parse_temperature_bucket
-from polytempo.markets.polymarket import PolymarketEvent, fetch_weather_events
+from polytempo.markets.polymarket import fetch_weather_events, first_parseable_weather_event
 from polytempo.weather.open_meteo import fetch_daily_max
+from polytempo.weather.stations import get_station
 
 
 def test_live_real_market_and_forecast_pipeline_smoke() -> None:
@@ -16,33 +16,39 @@ def test_live_real_market_and_forecast_pipeline_smoke() -> None:
     if os.environ.get("POLYTEMPO_RUN_LIVE_API_TESTS") != "1":
         pytest.skip("set POLYTEMPO_RUN_LIVE_API_TESTS=1 to run live pipeline test")
 
-    events = fetch_weather_events(limit=20)
-    event = _first_parseable_temperature_event(events)
+    target_date = date.today() + timedelta(days=1)
+
+    events = fetch_weather_events(limit=20, end_on_date=target_date)
+    event = first_parseable_weather_event(
+        events,
+        city="london",
+        settlement_date=target_date,
+    )
     if event is None:
         pytest.skip(
-            "No fetched weather event had bucket labels that the current Celsius "
-            "bucket parser can parse. Missing next piece: normalize real "
-            "Polymarket bucket labels/units and infer event location/date."
+            "No London-titled weather event with matching Gamma end date, "
+            "parseable Celsius buckets, and within fetch limit. "
+            "Try a larger limit or a different day (--days-ahead)."
         )
 
-    # Temporary real forecast input: Madrid, two days ahead. The pipeline can run
-    # end-to-end, but event-specific city/date extraction is not implemented yet.
-    target_date = date.today() + timedelta(days=2)
+    london = get_station("london")
     daily = fetch_daily_max(
-        latitude=40.4168,
-        longitude=-3.7038,
+        latitude=london.latitude,
+        longitude=london.longitude,
         target_date=target_date,
-        timezone="Europe/Madrid",
+        timezone=london.timezone,
     )
     forecast = daily.to_forecast_values()
 
     result = analyze_event(forecast, event)
 
     print(f"\nEvent: {event.title} ({event.event_id})")
-    print(f"Forecast proxy: Madrid {target_date.isoformat()} -> {forecast.values_c}")
     print(
-        "Missing: event-specific location/date extraction before decisions are "
-        "product-meaningful."
+        f"Forecast: London EGLC {target_date.isoformat()} -> {forecast.values_c}"
+    )
+    print(
+        "Event: Gamma list for that end date + London title/slug + parseable buckets; "
+        "forecast: same calendar day at EGLC."
     )
     for row in result.rows:
         print(
@@ -58,18 +64,3 @@ def test_live_real_market_and_forecast_pipeline_smoke() -> None:
         )
 
     assert result.rows
-
-
-def _first_parseable_temperature_event(
-    events: list[PolymarketEvent],
-) -> PolymarketEvent | None:
-    for event in events:
-        if not event.buckets:
-            continue
-        try:
-            for bucket in event.buckets:
-                parse_temperature_bucket(bucket.label)
-        except ValueError:
-            continue
-        return event
-    return None

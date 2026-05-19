@@ -297,6 +297,7 @@ def _event(
         event_id="event-1",
         slug="temperature-event",
         title="Temperature Event",
+        settlement_date=None,
         buckets=[
             PolymarketBucket(
                 market_id=f"market-{i}",

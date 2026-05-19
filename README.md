@@ -8,11 +8,35 @@ Current status: **Phases 0–9 complete** on the plan: Polymarket/Gamma ingestio
 
 ## Quickstart
 
-Run the local end-to-end demo on hardcoded fake inputs (after `pip install -e .` from the repo root):
+Create and activate the virtual environment (from the repo root):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+Run the local end-to-end demo on hardcoded fake inputs:
 
 ```bash
 polytempo demo
 ```
+
+Run against **live** Polymarket (Gamma) + Open-Meteo. By default **`--city london`** and **`--days-ahead 1`** (tomorrow): Gamma is queried for weather events whose **end date** falls on that UTC day (`end_date_min` / `end_date_max`), then the first **London** title/slug match with **parseable** Celsius buckets is used. Open-Meteo requests the **same calendar day** max temperature at the **London contract station** (EGLC) from `weather/stations.py`.
+
+```bash
+polytempo live
+```
+
+Other registry cities (same station table): `polytempo live --city madrid`, etc.
+
+Use a specific Gamma event (forecast still uses `--days-ahead` for the Open-Meteo day; you get a warning if the event’s parsed `endDate` differs):
+
+```bash
+polytempo live --event-id YOUR_EVENT_ID --city london
+```
+
+Shift the shared target day (default `1` = tomorrow): `polytempo live --days-ahead 0` for **today**.
 
 Same via Typer programmatically (e.g. Windows `py -3`):
 

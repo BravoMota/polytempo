@@ -3,6 +3,7 @@
 Exposes the `polytempo` command:
 
 * `demo`            - run the analysis on hardcoded fake inputs (no APIs).
+* `live`            - fetch Polymarket + Open-Meteo, run analysis, write a markdown report.
 * `paper open`      - fetch a London event + forecast, run analysis, lock paper trades.
 * `paper settle`    - settle open paper trades for an event against a winning bucket.
 * `paper status`    - print the paper account balance and open positions.
@@ -11,7 +12,7 @@ Exposes the `polytempo` command:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import typer
 
@@ -28,7 +29,13 @@ from polytempo.analysis import (
     analyze,
     analyze_event,
 )
-from polytempo.markets.polymarket import fetch_event, fetch_weather_events
+from polytempo.markets.polymarket import (
+    PolymarketEvent,
+    fetch_event,
+    fetch_weather_events,
+    first_parseable_weather_event,
+)
+from polytempo.reports.writer import RunReporter
 from polytempo.paper.ledger import (
     DEFAULT_LEDGER_PATH,
     open_trades_from_analysis,
@@ -36,8 +43,9 @@ from polytempo.paper.ledger import (
     settle_event,
 )
 from polytempo.strategy.edge import MarketPrice
-from polytempo.weather.open_meteo import fetch_for_station
-from polytempo.weather.stations import get_station
+from polytempo.weather.open_meteo import DailyMaxForecast, fetch_for_station
+from polytempo.weather.schema import ForecastValues
+from polytempo.weather.stations import STATIONS, Station, get_station
 
 app = typer.Typer()
 paper_app = typer.Typer(help="Paper trading ledger (demo account, no live orders).")
@@ -101,6 +109,184 @@ def demo() -> None:
     """Run the local analysis on fake inputs and print the result."""
     result = analyze(_demo_input())
     typer.echo(_render(result))
+
+
+# ---------------------------------------------------------------------------
+# live (real APIs + markdown report)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def live(
+    event_id: str | None = typer.Option(
+        None,
+        "--event-id",
+        help="Gamma event id. If omitted, scans popular weather events for this --city.",
+    ),
+    city: str = typer.Option(
+        "london",
+        "--city",
+        help="Registry city (contract station for Open-Meteo; filters Polymarket list by title/slug).",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        min=1,
+        help="How many weather events to scan when --event-id is not set.",
+    ),
+    days_ahead: int = typer.Option(
+        1,
+        "--days-ahead",
+        min=0,
+        help="Target calendar day = today + N (Open-Meteo max temp + Gamma end-date filter). Default 1 = tomorrow.",
+    ),
+) -> None:
+    """Fetch Polymarket + Open-Meteo data, print analysis, and write a markdown report."""
+    try:
+        station = get_station(city)
+    except KeyError:
+        typer.echo(
+            f"Unknown --city {city!r}. Registry keys: {', '.join(sorted(STATIONS))}",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    target_date = date.today() + timedelta(days=days_ahead)
+    reporter = RunReporter()
+
+    try:
+        with reporter:
+            reporter.section(
+                "Inputs",
+                "\n".join(
+                    [
+                        f"- city: `{city}` (station {station.icao})",
+                        f"- target_date: `{target_date.isoformat()}` (days_ahead={days_ahead})",
+                        f"- event mode: {'explicit (--event-id)' if event_id else f'scan (limit={limit})'}",
+                    ]
+                ),
+            )
+
+            if event_id:
+                event = fetch_event(event_id.strip())
+                if event.settlement_date is not None and event.settlement_date != target_date:
+                    typer.echo(
+                        f"Warning: event end date {event.settlement_date} != target day {target_date} "
+                        f"(from --days-ahead). Forecast still uses {target_date}.",
+                        err=True,
+                    )
+            else:
+                events = fetch_weather_events(limit=limit, end_on_date=target_date)
+                event = first_parseable_weather_event(
+                    events,
+                    city=city,
+                    settlement_date=target_date,
+                )
+                if event is None:
+                    typer.echo(
+                        f"No weather event matched city={city!r}, end date {target_date.isoformat()}, "
+                        "and parseable Celsius buckets. Try a larger --limit or pass --event-id.",
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+
+            reporter.section("Event", _md_event(event))
+
+            daily = fetch_for_station(station, target_date)
+            forecast = daily.to_forecast_values()
+            reporter.section(
+                "Forecast",
+                _md_forecast(station, target_date, daily, forecast),
+            )
+
+            result = analyze_event(forecast, event)
+            reporter.section("Analysis result", _md_result(result))
+
+            typer.echo(f"event: {event.title} ({event.event_id})")
+            end_s = event.settlement_date.isoformat() if event.settlement_date else "unknown"
+            typer.echo(f"event Gamma end date (UTC day): {end_s}")
+            typer.echo(
+                f"forecast: {station.city} ({station.icao}) lat={station.latitude} lon={station.longitude} "
+                f"tz={station.timezone} date={target_date.isoformat()} -> {forecast.values_c}"
+            )
+            if event_id is None:
+                typer.echo(
+                    f"(Event: Gamma list filtered by --city, end date {target_date.isoformat()}, "
+                    "parseable buckets; Open-Meteo uses the contract station for that same day.)\n"
+                )
+            else:
+                typer.echo(
+                    f"(Forecast uses contract station for --city on {target_date.isoformat()}; "
+                    "verify --event-id matches that settlement day.)\n"
+                )
+            typer.echo(_render(result))
+    finally:
+        path = reporter.write()
+        typer.echo(f"report written: {path}")
+
+
+def _md_event(event: PolymarketEvent) -> str:
+    end_iso = event.settlement_date.isoformat() if event.settlement_date else "unknown"
+    lines = [
+        f"- title: {event.title}",
+        f"- event_id: `{event.event_id}`",
+        f"- slug: `{event.slug}`",
+        f"- settlement_date: `{end_iso}`",
+        f"- buckets ({len(event.buckets)}):",
+        "",
+        "| label | yes_bid | yes_ask | liquidity_usd | spread |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for bucket in event.buckets:
+        lines.append(
+            f"| {bucket.label} | "
+            f"{_format_optional(bucket.yes_bid, '.4f')} | "
+            f"{_format_optional(bucket.yes_ask, '.4f')} | "
+            f"{_format_optional(bucket.liquidity_usd, '.2f')} | "
+            f"{_format_optional(bucket.spread, '.4f')} |"
+        )
+    return "\n".join(lines)
+
+
+def _md_forecast(
+    station: Station,
+    target_date: date,
+    daily: DailyMaxForecast,
+    forecast: ForecastValues,
+) -> str:
+    return "\n".join(
+        [
+            f"- station: {station.city} ({station.icao})",
+            f"- coordinates: lat={station.latitude} lon={station.longitude} tz={station.timezone}",
+            f"- target_date: `{target_date.isoformat()}`",
+            f"- models: {', '.join(daily.models) if daily.models else '-'}",
+            f"- raw values_c: {daily.values_c}",
+            f"- normalized ForecastValues.values_c: {forecast.values_c}",
+        ]
+    )
+
+
+def _md_result(result: AnalysisResult) -> str:
+    lines = [
+        f"- distribution: mean={result.distribution_mean_c:.2f}°C "
+        f"sigma={result.distribution_sigma_c:.2f}°C",
+        "",
+        "| bucket | prob | ask | edge_pp | action | confidence | reason | warnings |",
+        "| --- | ---: | ---: | ---: | --- | --- | --- | --- |",
+    ]
+    for row in result.rows:
+        warns = ", ".join(row.warnings) if row.warnings else ""
+        lines.append(
+            f"| {row.label} | "
+            f"{row.probability:.3f} | "
+            f"{_format_optional(row.yes_ask, '.4f')} | "
+            f"{_format_optional(row.edge_yes_pp, '.2f')} | "
+            f"{row.action} | "
+            f"{row.confidence} | "
+            f"{row.reason} | "
+            f"{warns} |"
+        )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

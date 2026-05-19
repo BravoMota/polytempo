@@ -1,6 +1,7 @@
 """Tests for Polymarket/Gamma market ingestion."""
 
 import os
+from datetime import date
 
 import httpx
 import pytest
@@ -9,6 +10,7 @@ from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
     fetch_weather_events,
+    first_parseable_weather_event,
     parse_event_payload,
     to_market_prices,
 )
@@ -50,6 +52,7 @@ def test_parse_event_payload_parses_event_fields() -> None:
     assert event.event_id == "event-1"
     assert event.slug == "madrid-high-temp"
     assert event.title == "Madrid high temperature"
+    assert event.settlement_date is None
 
 
 def test_parse_event_payload_parses_multiple_buckets() -> None:
@@ -57,6 +60,15 @@ def test_parse_event_payload_parses_multiple_buckets() -> None:
 
     assert [bucket.market_id for bucket in event.buckets] == ["m1", "m2"]
     assert [bucket.label for bucket in event.buckets] == ["23°C", "24°C"]
+    assert event.settlement_date is None
+
+
+def test_parse_event_payload_reads_end_date() -> None:
+    payload = _payload()
+    payload["endDate"] = "2026-05-14T16:00:00Z"
+    event = parse_event_payload(payload)
+
+    assert event.settlement_date == date(2026, 5, 14)
 
 
 def test_parse_event_payload_prefers_group_item_title() -> None:
@@ -127,6 +139,87 @@ def test_to_market_prices_preserves_order_and_maps_fields() -> None:
     assert prices[0].spread == pytest.approx(0.03)
 
 
+def test_first_parseable_weather_event_returns_none_for_empty_list() -> None:
+    assert first_parseable_weather_event([]) is None
+
+
+def test_first_parseable_weather_event_skips_unparseable_buckets() -> None:
+    bad = parse_event_payload(
+        {
+            "id": "bad",
+            "title": "Bad",
+            "markets": [{"id": "x", "groupItemTitle": "Yes"}],
+        }
+    )
+    good = parse_event_payload(_payload())
+
+    assert first_parseable_weather_event([bad, good]) is good
+
+
+def test_first_parseable_weather_event_returns_none_when_no_match() -> None:
+    bad = parse_event_payload(
+        {
+            "id": "bad",
+            "title": "Bad",
+            "markets": [{"id": "x", "groupItemTitle": "Yes"}],
+        }
+    )
+
+    assert first_parseable_weather_event([bad]) is None
+
+
+def test_first_parseable_weather_event_filters_by_city_in_title_or_slug() -> None:
+    hk = parse_event_payload(
+        {
+            "id": "hk",
+            "title": "Hong Kong max temp",
+            "slug": "hong-kong-max",
+            "markets": [{"id": "m", "groupItemTitle": "25°C"}],
+        }
+    )
+    lon = parse_event_payload(
+        {
+            "id": "lon",
+            "title": "Highest temperature in London on …",
+            "slug": "highest-temperature-in-london-on",
+            "markets": [{"id": "m", "groupItemTitle": "24°C"}],
+        }
+    )
+
+    assert first_parseable_weather_event([hk, lon], city="london") is lon
+    assert first_parseable_weather_event([hk, lon], city="hong kong") is hk
+
+
+def test_first_parseable_weather_event_filters_by_settlement_date() -> None:
+    d1 = date(2026, 5, 10)
+    d2 = date(2026, 5, 14)
+    wrong_day = parse_event_payload(
+        {
+            "id": "a",
+            "title": "London A",
+            "slug": "london-a",
+            "endDate": f"{d1.isoformat()}T12:00:00Z",
+            "markets": [{"id": "m", "groupItemTitle": "20°C"}],
+        }
+    )
+    right_day = parse_event_payload(
+        {
+            "id": "b",
+            "title": "London B",
+            "slug": "london-b",
+            "endDate": f"{d2.isoformat()}T12:00:00Z",
+            "markets": [{"id": "m", "groupItemTitle": "21°C"}],
+        }
+    )
+
+    picked = first_parseable_weather_event(
+        [wrong_day, right_day],
+        city="london",
+        settlement_date=d2,
+    )
+    assert picked is right_day
+
+
 def test_fetch_event_calls_expected_url(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
@@ -189,6 +282,30 @@ def test_fetch_weather_events_calls_expected_url_and_params(
             },
         )
     ]
+
+
+def test_fetch_weather_events_end_on_date_adds_end_date_range_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return [_payload()]
+
+    def fake_get(url: str, params: dict) -> FakeResponse:
+        calls.append(params)
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    fetch_weather_events(limit=3, base_url="https://example.test/", end_on_date=date(2026, 5, 14))
+
+    assert calls[0]["end_date_min"] == "2026-05-14T00:00:00Z"
+    assert calls[0]["end_date_max"] == "2026-05-14T23:59:59Z"
 
 
 def test_fetch_weather_events_rejects_invalid_limit() -> None:

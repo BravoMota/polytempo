@@ -256,6 +256,8 @@ edge table
 recommendation
 ```
 
+`polytempo live` uses the same report layout with real Gamma + Open-Meteo fetches (default `--city london`: title/slug filter + contract station forecast; see README).
+
 ---
 
 ## Phase 6 — Polymarket ingestion

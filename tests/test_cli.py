@@ -5,6 +5,13 @@ from typer.testing import CliRunner
 from polytempo.cli.main import app
 
 
+def test_live_command_help_exits_zero() -> None:
+    result = CliRunner().invoke(app, ["live", "--help"])
+    assert result.exit_code == 0
+    assert "--event-id" in result.stdout
+    assert "--city" in result.stdout
+
+
 def test_demo_command_exits_zero() -> None:
     result = CliRunner().invoke(app, ["demo"])
     assert result.exit_code == 0
