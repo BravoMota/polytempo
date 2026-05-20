@@ -103,6 +103,8 @@ def test_analyze_returns_buy_yes_when_edge_and_liquidity_pass() -> None:
 
 
 def test_analyze_returns_skip_when_edge_below_threshold() -> None:
+    from polytempo.strategy import ArgmaxYesStrategy
+
     result = analyze(
         AnalysisInput(
             forecast_values_c=[24.0],
@@ -115,7 +117,8 @@ def test_analyze_returns_skip_when_edge_below_threshold() -> None:
                     liquidity_usd=250.0,
                 )
             ],
-        )
+        ),
+        strategy=ArgmaxYesStrategy(config=DecisionConfig(min_edge_pp=7.0)),
     )
 
     assert result.rows[0].action == "SKIP"
@@ -238,6 +241,7 @@ def test_analyze_event_returns_skip_when_edge_below_threshold() -> None:
     result = analyze_event(
         _forecast([24.0]),
         _event(["24°C"], yes_ask=0.96, liquidity_usd=250.0),
+        decision_config=DecisionConfig(min_edge_pp=7.0),
     )
 
     assert result.rows[0].action == "SKIP"
@@ -252,6 +256,31 @@ def test_analyze_event_carries_spread_warning_from_decision_rules() -> None:
 
     assert result.rows[0].action == "BUY_YES"
     assert result.rows[0].warnings == ["high spread"]
+
+
+def test_analyze_event_accepts_custom_strategy() -> None:
+    from polytempo.strategy import ArgmaxYesStrategy
+    from polytempo.strategy.decision import DecisionConfig
+
+    result = analyze_event(
+        _forecast([24.0]),
+        _event(["24°C"], yes_ask=0.94, liquidity_usd=250.0),
+        strategy=ArgmaxYesStrategy(config=DecisionConfig(min_edge_pp=5.0)),
+    )
+
+    assert result.rows[0].action == "BUY_YES"
+
+
+def test_analyze_event_rejects_strategy_and_decision_config_together() -> None:
+    from polytempo.strategy import ArgmaxYesStrategy
+
+    with pytest.raises(ValueError):
+        analyze_event(
+            _forecast([24.0]),
+            _event(["24°C"]),
+            strategy=ArgmaxYesStrategy(),
+            decision_config=DecisionConfig(),
+        )
 
 
 def test_analyze_event_accepts_custom_decision_config() -> None:

@@ -36,8 +36,25 @@ def test_skip_missing_edge() -> None:
     assert d.reason == "missing edge"
 
 
-def test_skip_edge_below_threshold() -> None:
-    d = decide_bucket(_edge(edge_yes_pp=5.0))
+def test_skip_when_edge_is_zero() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=0.0))
+    assert d.action == "SKIP"
+    assert d.reason == "edge below threshold"
+
+
+def test_skip_when_edge_is_negative() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=-3.0))
+    assert d.action == "SKIP"
+    assert d.reason == "edge below threshold"
+
+
+def test_buy_yes_on_any_positive_edge_by_default() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=0.5))
+    assert d.action == "BUY_YES"
+
+
+def test_skip_below_custom_threshold() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=5.0), DecisionConfig(min_edge_pp=7.0))
     assert d.action == "SKIP"
     assert d.reason == "edge below threshold"
 
@@ -70,14 +87,14 @@ def test_no_warning_when_spread_below_threshold() -> None:
     assert d.warnings == []
 
 
-def test_high_confidence_when_edge_at_least_twice_threshold() -> None:
-    d = decide_bucket(_edge(edge_yes_pp=14.0))
+def test_high_confidence_at_or_above_high_threshold() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=15.0))
     assert d.action == "BUY_YES"
     assert d.confidence == "high"
 
 
-def test_medium_confidence_buy_yes_below_twice_threshold() -> None:
-    d = decide_bucket(_edge(edge_yes_pp=13.9))
+def test_medium_confidence_below_high_threshold() -> None:
+    d = decide_bucket(_edge(edge_yes_pp=14.9))
     assert d.action == "BUY_YES"
     assert d.confidence == "medium"
 

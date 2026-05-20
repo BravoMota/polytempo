@@ -13,9 +13,15 @@ from polytempo.strategy.edge import BucketEdge
 
 @dataclass(frozen=True)
 class DecisionConfig:
-    """Thresholds for deterministic trade recommendations."""
+    """Thresholds for deterministic trade recommendations.
 
-    min_edge_pp: float = 7.0
+    ``min_edge_pp`` is the BUY gate. ``high_confidence_edge_pp`` only labels
+    the row's confidence and has no effect on sizing (the ledger's edge ramp
+    handles stake scaling independently).
+    """
+
+    min_edge_pp: float = 0.0
+    high_confidence_edge_pp: float = 15.0
     min_liquidity_usd: float = 100.0
     high_spread_warning: float = 0.10
 
@@ -47,7 +53,7 @@ def decide_bucket(edge: BucketEdge, config: DecisionConfig | None = None) -> Tra
             warnings=warnings,
         )
 
-    if edge.edge_yes_pp < cfg.min_edge_pp:
+    if edge.edge_yes_pp <= cfg.min_edge_pp:
         return TradeDecision(
             label=edge.label,
             action="SKIP",
@@ -78,7 +84,7 @@ def decide_bucket(edge: BucketEdge, config: DecisionConfig | None = None) -> Tra
         )
 
     confidence = (
-        "high" if edge.edge_yes_pp >= 2.0 * cfg.min_edge_pp else "medium"
+        "high" if edge.edge_yes_pp >= cfg.high_confidence_edge_pp else "medium"
     )
     return TradeDecision(
         label=edge.label,
