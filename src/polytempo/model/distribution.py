@@ -32,7 +32,31 @@ class BucketProbability:
     upper_c: float | None
 
 
-def build_distribution(values_c: list[float], default_sigma_c: float = 1.0) -> ForecastDistribution:
+def lead_time_sigma_floor(lead_hours: float) -> float:
+    """Minimum sigma (°C) from forecast lead time before model disagreement is added."""
+    if lead_hours < 0:
+        raise ValueError("lead_hours must be non-negative")
+    if lead_hours < 12:
+        return 0.5
+    if lead_hours < 24:
+        return 0.8
+    if lead_hours < 48:
+        return 1.2
+    if lead_hours < 72:
+        return 1.6
+    return 2.0
+
+
+def _combine_sigma(base_sigma_c: float, model_disagreement: float) -> float:
+    """Quadrature combination of lead-time floor and ensemble spread."""
+    return math.sqrt(base_sigma_c**2 + model_disagreement**2)
+
+
+def build_distribution(
+    values_c: list[float],
+    default_sigma_c: float = 1.0,
+    lead_hours: float | None = None,
+) -> ForecastDistribution:
     """Build N(mean, sigma) parameters from one or more Celsius forecast samples."""
     if default_sigma_c <= 0:
         raise ValueError("default_sigma_c must be positive")
@@ -40,6 +64,19 @@ def build_distribution(values_c: list[float], default_sigma_c: float = 1.0) -> F
         raise ValueError("values_c must not be empty")
 
     source = list(values_c)
+
+    if lead_hours is not None:
+        base_sigma = lead_time_sigma_floor(lead_hours)
+        if len(source) == 1:
+            return ForecastDistribution(
+                mean_c=source[0],
+                sigma_c=base_sigma,
+                source_values_c=source,
+            )
+        mean_c = statistics.mean(source)
+        disagreement = statistics.stdev(source)
+        sigma_c = _combine_sigma(base_sigma, disagreement)
+        return ForecastDistribution(mean_c=mean_c, sigma_c=sigma_c, source_values_c=source)
 
     if len(source) == 1:
         return ForecastDistribution(
