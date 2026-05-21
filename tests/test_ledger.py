@@ -148,6 +148,51 @@ def test_settle_only_touches_matching_event(tmp_path: Path) -> None:
     assert {t.event_id for t in state.open_trades} == {"evt-2"}
 
 
+def test_rerun_does_not_duplicate_open_for_same_event_bucket_side(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    result = _result([_row("23°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES")])
+
+    first = open_trades_from_analysis(result, event_id="evt-1", path=path)
+    second = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    assert len(first) == 1
+    assert second == []
+    state = read_state(path)
+    assert len(state.open_trades) == 1
+
+
+def test_rerun_after_settlement_can_reopen_same_bucket(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    result = _result([_row("23°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES")])
+
+    open_trades_from_analysis(result, event_id="evt-1", path=path)
+    settle_event("evt-1", winning_label="23°C", path=path)
+    reopened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    assert len(reopened) == 1
+
+
+def test_rerun_distinct_sides_on_same_bucket_both_open(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    open_trades_from_analysis(
+        _result([_row("23°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES")]),
+        event_id="evt-1",
+        path=path,
+    )
+    no_row = _row(
+        "23°C",
+        yes_ask=0.40,
+        edge_pp=10.0,
+        action="BUY_NO",
+        side="NO",
+        yes_bid=0.30,
+    )
+    second = open_trades_from_analysis(_result([no_row]), event_id="evt-1", path=path)
+
+    assert len(second) == 1
+    assert second[0].side == "NO"
+
+
 def test_ledger_file_is_append_only_jsonl(tmp_path: Path) -> None:
     path = tmp_path / "ledger.jsonl"
     open_trades_from_analysis(
@@ -167,6 +212,8 @@ def _row(
     yes_ask: float,
     edge_pp: float,
     action: str,
+    side: str = "YES",
+    yes_bid: float | None = None,
 ) -> AnalysisRow:
     return AnalysisRow(
         label=label,
@@ -177,7 +224,120 @@ def _row(
         reason="test",
         confidence="medium",
         warnings=[],
+        side=side,
+        yes_bid=yes_bid,
     )
+
+
+def test_buy_no_opens_with_entry_price_one_minus_bid(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    result = _result(
+        [
+            _row(
+                "23°C",
+                yes_ask=0.40,
+                edge_pp=10.0,
+                action="BUY_NO",
+                side="NO",
+                yes_bid=0.30,
+            )
+        ]
+    )
+
+    opened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    assert len(opened) == 1
+    assert opened[0].side == "NO"
+    assert opened[0].entry_price == pytest.approx(0.70)
+    assert opened[0].shares == pytest.approx(opened[0].stake_usd / 0.70, rel=1e-3)
+
+
+def test_settle_no_side_pays_when_bucket_loses(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    result = _result(
+        [
+            _row(
+                "23°C",
+                yes_ask=0.40,
+                edge_pp=10.0,
+                action="BUY_NO",
+                side="NO",
+                yes_bid=0.30,
+            )
+        ]
+    )
+    opened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    settle_event("evt-1", winning_label="24°C", path=path)
+    state = read_state(path)
+
+    expected = STARTING_BALANCE_USD - opened[0].stake_usd + opened[0].shares
+    assert state.balance_usd == pytest.approx(expected)
+    assert state.realized_pnl_usd == pytest.approx(opened[0].shares - opened[0].stake_usd)
+
+
+def test_stake_override_bypasses_edge_ramp(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    row = AnalysisRow(
+        label="23°C",
+        probability=0.5,
+        yes_ask=0.40,
+        edge_yes_pp=2.0,
+        action="BUY_YES",
+        reason="test",
+        confidence="medium",
+        warnings=[],
+        stake_usd=5.0,
+    )
+    result = _result([row])
+
+    opened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    assert opened[0].stake_usd == pytest.approx(5.0)
+    assert opened[0].shares == pytest.approx(5.0 / 0.40, rel=1e-3)
+
+
+def test_stake_override_skipped_when_exceeds_balance(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    row = AnalysisRow(
+        label="23°C",
+        probability=0.5,
+        yes_ask=0.40,
+        edge_yes_pp=2.0,
+        action="BUY_YES",
+        reason="test",
+        confidence="medium",
+        warnings=[],
+        stake_usd=999_999.0,
+    )
+    result = _result([row])
+
+    opened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    assert opened == []
+
+
+def test_settle_no_side_pays_zero_when_bucket_wins(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    result = _result(
+        [
+            _row(
+                "23°C",
+                yes_ask=0.40,
+                edge_pp=10.0,
+                action="BUY_NO",
+                side="NO",
+                yes_bid=0.30,
+            )
+        ]
+    )
+    opened = open_trades_from_analysis(result, event_id="evt-1", path=path)
+
+    settle_event("evt-1", winning_label="23°C", path=path)
+    state = read_state(path)
+
+    assert state.balance_usd == pytest.approx(STARTING_BALANCE_USD - opened[0].stake_usd)
+    assert state.realized_pnl_usd == pytest.approx(-opened[0].stake_usd)
 
 
 def _result(rows: list[AnalysisRow]) -> AnalysisResult:

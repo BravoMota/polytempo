@@ -327,3 +327,48 @@ def test_live_gamma_weather_event_list_and_fetch() -> None:
     assert fetched.event_id == first_event.event_id
     assert fetched.title
     assert isinstance(fetched.buckets, list)
+
+
+def test_resolved_bucket_parses_outcome_yes() -> None:
+    from polytempo.markets.polymarket import is_event_resolved, winning_label_from_event
+
+    payload = {
+        "id": "e1", "title": "t", "slug": "s",
+        "markets": [
+            {"id": "m1", "groupItemTitle": "23°C", "closed": True, "outcomePrices": ["1", "0"]},
+            {"id": "m2", "groupItemTitle": "24°C", "closed": True, "outcomePrices": ["0", "1"]},
+        ],
+    }
+    event = parse_event_payload(payload)
+    assert event.buckets[0].resolved is True
+    assert event.buckets[0].outcome == "YES"
+    assert event.buckets[1].outcome == "NO"
+    assert is_event_resolved(event) is True
+    assert winning_label_from_event(event) == "23°C"
+
+
+def test_outcome_prices_accepts_json_string() -> None:
+    payload = {
+        "id": "e1", "title": "t", "slug": "s",
+        "markets": [
+            {"id": "m1", "groupItemTitle": "23°C", "closed": True, "outcomePrices": "[\"1\", \"0\"]"},
+        ],
+    }
+    event = parse_event_payload(payload)
+    assert event.buckets[0].resolved is True
+    assert event.buckets[0].outcome == "YES"
+
+
+def test_unresolved_event_has_no_winner() -> None:
+    from polytempo.markets.polymarket import is_event_resolved, winning_label_from_event
+
+    payload = {
+        "id": "e1", "title": "t", "slug": "s",
+        "markets": [
+            {"id": "m1", "groupItemTitle": "23°C"},
+            {"id": "m2", "groupItemTitle": "24°C"},
+        ],
+    }
+    event = parse_event_payload(payload)
+    assert is_event_resolved(event) is False
+    assert winning_label_from_event(event) is None

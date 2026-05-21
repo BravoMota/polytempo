@@ -305,6 +305,48 @@ def test_analyze_event_does_not_mutate_original_forecast() -> None:
     assert forecast.values_c is original_values
 
 
+def test_analyze_event_multi_runs_each_strategy_against_same_inputs() -> None:
+    from polytempo.analysis import analyze_event_multi
+    from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy
+
+    strategies = [ArgmaxYesStrategy(), DistArbStrategy()]
+    results = analyze_event_multi(
+        _forecast([24.0]),
+        _event(["24°C"], yes_ask=0.80, liquidity_usd=250.0),
+        strategies=strategies,
+    )
+
+    assert set(results.keys()) == {"argmax_yes", "dist_arb"}
+    for name in results:
+        assert results[name].rows[0].action == "BUY_YES"
+
+
+def test_analyze_event_multi_rejects_duplicate_names() -> None:
+    from polytempo.analysis import analyze_event_multi
+    from polytempo.strategy import ArgmaxYesStrategy
+
+    with pytest.raises(ValueError):
+        analyze_event_multi(
+            _forecast([24.0]),
+            _event(["24°C"]),
+            strategies=[ArgmaxYesStrategy(), ArgmaxYesStrategy()],
+        )
+
+
+def test_ledger_path_for_returns_per_strategy_jsonl(tmp_path) -> None:
+    from polytempo.paper.ledger import ledger_path_for
+
+    path = ledger_path_for("dist_arb", base_dir=tmp_path)
+    assert path == tmp_path / "dist_arb.jsonl"
+
+
+def test_ledger_path_for_rejects_path_separators() -> None:
+    from polytempo.paper.ledger import ledger_path_for
+
+    with pytest.raises(ValueError):
+        ledger_path_for("../evil")
+
+
 def _forecast(values_c: list[float]) -> ForecastValues:
     return ForecastValues(
         source="open_meteo",

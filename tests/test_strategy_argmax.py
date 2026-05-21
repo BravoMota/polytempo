@@ -13,6 +13,7 @@ def _edge(edge_pp: float | None, liquidity: float | None = 200.0) -> BucketEdge:
         yes_ask=0.35,
         edge_yes=0.15,
         edge_yes_pp=edge_pp,
+        edge_no_pp=None,
         liquidity_usd=liquidity,
         spread=None,
     )

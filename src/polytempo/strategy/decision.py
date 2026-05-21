@@ -35,6 +35,8 @@ class TradeDecision:
     reason: str
     edge_yes_pp: float | None
     confidence: str
+    side: str = "YES"
+    stake_usd: float | None = None
     warnings: list[str] = field(default_factory=list)
 
 

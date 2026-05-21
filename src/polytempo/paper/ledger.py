@@ -34,12 +34,27 @@ MIN_STAKE_FRAC = 0.02
 MAX_STAKE_FRAC = 0.05
 EDGE_FLOOR_PP = 7.0
 EDGE_CEILING_PP = 15.0
+DEFAULT_LEDGER_DIR = Path("paper_ledger")
 DEFAULT_LEDGER_PATH = Path("paper_ledger.jsonl")
+
+
+def ledger_path_for(
+    strategy_name: str,
+    base_dir: Path = DEFAULT_LEDGER_DIR,
+) -> Path:
+    """Per-strategy JSONL path: ``<base_dir>/<strategy_name>.jsonl``.
+
+    Each strategy keeps an independent bankroll, so they must not share a file.
+    """
+    if not strategy_name or "/" in strategy_name or "\\" in strategy_name:
+        raise ValueError(f"invalid strategy name: {strategy_name!r}")
+    return base_dir / f"{strategy_name}.jsonl"
 
 
 @dataclass(frozen=True)
 class OpenTrade:
-    """One unsettled BUY_YES position."""
+    """One unsettled position. ``side`` is YES or NO; ``entry_price`` is what
+    one share costs (``yes_ask`` for YES, ``1 - yes_bid`` for NO)."""
 
     trade_id: str
     event_id: str
@@ -48,6 +63,8 @@ class OpenTrade:
     edge_pp: float
     stake_usd: float
     shares: float
+    side: str = "YES"
+    entry_price: float | None = None
 
 
 @dataclass(frozen=True)
@@ -107,27 +124,43 @@ def open_trades_from_analysis(
     """Append OPEN records for every BUY_YES row, sized off live balance."""
     state = read_state(path)
     balance = state.balance_usd
+    held = {
+        (t.event_id, t.bucket_label, t.side)
+        for t in state.open_trades
+    }
     opened: list[OpenTrade] = []
     for row in analysis.rows:
-        if row.action != "BUY_YES":
+        if row.action not in ("BUY_YES", "BUY_NO"):
             continue
-        if row.yes_ask is None or row.edge_yes_pp is None or row.yes_ask <= 0:
+        if (event_id, row.label, row.side) in held:
+            continue
+        if row.edge_yes_pp is None:
+            continue
+        entry_price = _entry_price(row)
+        if entry_price is None or entry_price <= 0:
             continue
         if balance <= 0:
             break
-        frac = stake_fraction(row.edge_yes_pp)
-        stake = round(balance * frac, 2)
+        if row.stake_usd is not None:
+            stake = round(row.stake_usd, 2)
+        else:
+            frac = stake_fraction(row.edge_yes_pp)
+            stake = round(balance * frac, 2)
         if stake <= 0:
             continue
-        shares = round(stake / row.yes_ask, 4)
+        if stake > balance:
+            continue
+        shares = round(stake / entry_price, 4)
         trade = OpenTrade(
             trade_id=uuid.uuid4().hex[:12],
             event_id=event_id,
             bucket_label=row.label,
-            yes_ask=row.yes_ask,
+            yes_ask=row.yes_ask if row.yes_ask is not None else 0.0,
             edge_pp=row.edge_yes_pp,
             stake_usd=stake,
             shares=shares,
+            side=row.side,
+            entry_price=entry_price,
         )
         _append(
             path,
@@ -137,7 +170,10 @@ def open_trades_from_analysis(
                 "ts": _now_iso(),
                 "event_id": trade.event_id,
                 "bucket_label": trade.bucket_label,
-                "yes_ask": trade.yes_ask,
+                "side": trade.side,
+                "entry_price": trade.entry_price,
+                "yes_bid": row.yes_bid,
+                "yes_ask": row.yes_ask,
                 "edge_pp": trade.edge_pp,
                 "stake_usd": trade.stake_usd,
                 "shares": trade.shares,
@@ -146,6 +182,13 @@ def open_trades_from_analysis(
         opened.append(trade)
         balance -= stake
     return opened
+
+
+def _entry_price(row) -> float | None:  # type: ignore[no-untyped-def]
+    """Cost-per-share for the row's side. YES = yes_ask, NO = 1 - yes_bid."""
+    if row.side == "NO":
+        return None if row.yes_bid is None else 1.0 - row.yes_bid
+    return row.yes_ask
 
 
 def settle_event(
@@ -163,7 +206,8 @@ def settle_event(
     for trade in state.open_trades:
         if trade.event_id != event_id:
             continue
-        won = trade.bucket_label == winning_label
+        bucket_won = trade.bucket_label == winning_label
+        won = bucket_won if trade.side == "YES" else not bucket_won
         payout = round(trade.shares, 4) if won else 0.0
         _append(
             path,
@@ -173,6 +217,7 @@ def settle_event(
                 "ts": _now_iso(),
                 "event_id": event_id,
                 "bucket_label": trade.bucket_label,
+                "side": trade.side,
                 "winning_label": winning_label,
                 "outcome": "YES" if won else "NO",
                 "payout_usd": payout,
@@ -183,14 +228,20 @@ def settle_event(
 
 
 def _open_trade_from_record(record: dict) -> OpenTrade:
+    side = record.get("side", "YES")
+    raw_yes_ask = record.get("yes_ask")
+    yes_ask = float(raw_yes_ask) if raw_yes_ask is not None else 0.0
+    entry_price = record.get("entry_price")
     return OpenTrade(
         trade_id=record["trade_id"],
         event_id=record["event_id"],
         bucket_label=record["bucket_label"],
-        yes_ask=float(record["yes_ask"]),
+        yes_ask=yes_ask,
         edge_pp=float(record["edge_pp"]),
         stake_usd=float(record["stake_usd"]),
         shares=float(record["shares"]),
+        side=side,
+        entry_price=float(entry_price) if entry_price is not None else None,
     )
 
 

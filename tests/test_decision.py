@@ -18,6 +18,7 @@ def _edge(
         yes_ask=0.35,
         edge_yes=0.15,
         edge_yes_pp=edge_yes_pp,
+        edge_no_pp=None,
         liquidity_usd=liquidity_usd,
         spread=spread,
     )

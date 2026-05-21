@@ -16,7 +16,12 @@ from polytempo.strategy.edge import MarketPrice
 
 @dataclass(frozen=True)
 class PolymarketBucket:
-    """Normalized market row for one temperature bucket."""
+    """Normalized market row for one temperature bucket.
+
+    ``resolved`` is True once the underlying market is closed and Gamma has
+    posted outcome prices. ``outcome`` is "YES" if the YES leg paid (this is
+    the winning bucket), "NO" otherwise. Both are None on unresolved markets.
+    """
 
     market_id: str
     label: str
@@ -25,6 +30,8 @@ class PolymarketBucket:
     liquidity_usd: float | None
     spread: float | None
     rules: str | None
+    resolved: bool = False
+    outcome: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,7 @@ def parse_event_payload(payload: dict) -> PolymarketEvent:
 
         market_id = market.get("id")
         label = market.get("groupItemTitle") or market.get("question") or ""
+        resolved, outcome = _parse_resolution(market)
         buckets.append(
             PolymarketBucket(
                 market_id=str(market_id) if market_id is not None else "",
@@ -70,6 +78,8 @@ def parse_event_payload(payload: dict) -> PolymarketEvent:
                 ),
                 spread=_to_optional_float(market.get("spread"), "spread"),
                 rules=market.get("description"),
+                resolved=resolved,
+                outcome=outcome,
             )
         )
 
@@ -84,6 +94,55 @@ def parse_event_payload(payload: dict) -> PolymarketEvent:
         settlement_date=settlement_date,
         buckets=buckets,
     )
+
+
+def winning_label_from_event(event: PolymarketEvent) -> str | None:
+    """Return the bucket label whose YES leg resolved, or None if undetermined.
+
+    Polymarket weather events are a set of mutually-exclusive bucket markets;
+    exactly one bucket should resolve YES. Returns None if zero or more than
+    one bucket reports a YES outcome (event is unresolved or in a weird state).
+    """
+    winners = [b.label for b in event.buckets if b.resolved and b.outcome == "YES"]
+    if len(winners) == 1:
+        return winners[0]
+    return None
+
+
+def is_event_resolved(event: PolymarketEvent) -> bool:
+    """True once at least one bucket has a YES/NO outcome from Gamma."""
+    return any(bucket.resolved for bucket in event.buckets)
+
+
+def _parse_resolution(market: dict) -> tuple[bool, str | None]:
+    """Map Gamma ``closed`` + ``outcomePrices`` to (resolved, "YES"|"NO"|None).
+
+    ``outcomePrices`` is sometimes a JSON-encoded string like '["1","0"]' and
+    sometimes a list. The first element is the YES payout (1 means YES won).
+    """
+    closed = bool(market.get("closed"))
+    raw = market.get("outcomePrices")
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("["):
+            import json
+
+            try:
+                raw = json.loads(text)
+            except ValueError:
+                raw = None
+    if not isinstance(raw, list) or not raw:
+        return closed, None
+    yes_price = raw[0]
+    try:
+        yes_value = float(yes_price)
+    except (TypeError, ValueError):
+        return closed, None
+    if yes_value == 1.0:
+        return True, "YES"
+    if yes_value == 0.0:
+        return True, "NO"
+    return closed, None
 
 
 def to_market_prices(event: PolymarketEvent) -> list[MarketPrice]:

@@ -40,6 +40,10 @@ class AnalysisRow:
     reason: str
     confidence: str
     warnings: list[str]
+    side: str = "YES"
+    yes_bid: float | None = None
+    edge_no_pp: float | None = None
+    stake_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -72,11 +76,15 @@ def analyze(
             label=probability.label,
             probability=probability.probability,
             yes_ask=edge.yes_ask,
-            edge_yes_pp=edge.edge_yes_pp,
+            edge_yes_pp=decision.edge_yes_pp,
             action=decision.action,
             reason=decision.reason,
             confidence=decision.confidence,
             warnings=list(decision.warnings),
+            side=decision.side,
+            yes_bid=edge.yes_bid,
+            edge_no_pp=edge.edge_no_pp,
+            stake_usd=decision.stake_usd,
         )
         for probability, edge, decision in zip(
             probabilities,
@@ -91,6 +99,69 @@ def analyze(
         distribution_sigma_c=distribution.sigma_c,
         rows=rows,
     )
+
+
+def analyze_event_multi(
+    forecast: ForecastValues,
+    event: PolymarketEvent,
+    strategies: list[Strategy],
+    calibration_rule: CalibrationRule | None = None,
+) -> dict[str, AnalysisResult]:
+    """Run several strategies against the same model+market output.
+
+    Builds the distribution and edges once, then dispatches to each strategy.
+    Returns a mapping from ``strategy.name`` to its AnalysisResult. Phase B
+    paper trading uses this so the three strategies share one model fit.
+    """
+    if not strategies:
+        raise ValueError("strategies must not be empty")
+    names = [s.name for s in strategies]
+    if len(set(names)) != len(names):
+        raise ValueError(f"strategy names must be unique, got {names!r}")
+
+    market_prices = to_market_prices(event)
+    bucket_labels = [bucket.label for bucket in event.buckets]
+    calibrated = calibrate_forecast(forecast, calibration_rule)
+    buckets = [parse_temperature_bucket(label) for label in bucket_labels]
+    distribution = build_distribution(calibrated.values_c)
+    probabilities = probabilities_for_buckets(distribution, buckets)
+    quotes = [
+        ProbabilityQuote(label=p.label, probability=p.probability)
+        for p in probabilities
+    ]
+    edges = calculate_bucket_edges(quotes, market_prices)
+
+    results: dict[str, AnalysisResult] = {}
+    for strategy in strategies:
+        decisions = strategy.decide(edges)
+        rows = [
+            AnalysisRow(
+                label=probability.label,
+                probability=probability.probability,
+                yes_ask=edge.yes_ask,
+                edge_yes_pp=decision.edge_yes_pp,
+                action=decision.action,
+                reason=decision.reason,
+                confidence=decision.confidence,
+                warnings=list(decision.warnings),
+                side=decision.side,
+                yes_bid=edge.yes_bid,
+                edge_no_pp=edge.edge_no_pp,
+                stake_usd=decision.stake_usd,
+            )
+            for probability, edge, decision in zip(
+                probabilities,
+                edges,
+                decisions,
+                strict=True,
+            )
+        ]
+        results[strategy.name] = AnalysisResult(
+            distribution_mean_c=distribution.mean_c,
+            distribution_sigma_c=distribution.sigma_c,
+            rows=rows,
+        )
+    return results
 
 
 def analyze_event(
@@ -129,11 +200,15 @@ def analyze_event(
             label=probability.label,
             probability=probability.probability,
             yes_ask=edge.yes_ask,
-            edge_yes_pp=edge.edge_yes_pp,
+            edge_yes_pp=decision.edge_yes_pp,
             action=decision.action,
             reason=decision.reason,
             confidence=decision.confidence,
             warnings=list(decision.warnings),
+            side=decision.side,
+            yes_bid=edge.yes_bid,
+            edge_no_pp=edge.edge_no_pp,
+            stake_usd=decision.stake_usd,
         )
         for probability, edge, decision in zip(
             probabilities,

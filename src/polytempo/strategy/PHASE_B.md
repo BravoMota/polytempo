@@ -122,6 +122,9 @@ NO leg pays `shares × $1` if `winning_label != bucket_label`, else $0.
 
 - Kelly sizing (revisit in Phase C if backtest motivates it).
 - Active-sell logic for `mid_band` (Phase D, needs websocket).
+- **Take-profit / early-exit when a held bucket re-prices favorably against the
+  model.** Phase B is hold-to-settlement only. Phase D feature; see also the
+  de-dup guard on re-runs that prevents same-day exposure stacking.
 - Event-level caps (`max_legs_per_event`, `max_pct_per_event`).
 - Backtest harness (Phase C).
 - Wallet tracker for the three observed wallets (Phase D, parallel track).

@@ -24,3 +24,7 @@ env/
 # Local generated data
 data/
 reports/
+paper_ledger/
+
+# Local Claude Code state
+.claude/

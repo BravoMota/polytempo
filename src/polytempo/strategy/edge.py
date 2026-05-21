@@ -38,6 +38,7 @@ class BucketEdge:
     yes_ask: float | None
     edge_yes: float | None
     edge_yes_pp: float | None
+    edge_no_pp: float | None
     liquidity_usd: float | None
     spread: float | None
 
@@ -47,6 +48,18 @@ def calculate_yes_edge(model_probability: float, yes_ask: float) -> float:
     _validate_unit_interval(model_probability, "model_probability")
     _validate_unit_interval(yes_ask, "yes_ask")
     return model_probability - yes_ask
+
+
+def calculate_no_edge(model_probability: float, yes_bid: float) -> float:
+    """Edge for buying NO: yes_bid minus model probability.
+
+    NO entry executes at ``1 - yes_bid``; if model probability for the bucket
+    is below ``yes_bid``, paying ``1 - yes_bid`` for NO has positive expected
+    value of ``yes_bid - p_model``.
+    """
+    _validate_unit_interval(model_probability, "model_probability")
+    _validate_unit_interval(yes_bid, "yes_bid")
+    return yes_bid - model_probability
 
 
 def _validate_unit_interval(value: float, name: str) -> None:
@@ -75,6 +88,7 @@ def calculate_bucket_edges(
                     yes_ask=None,
                     edge_yes=None,
                     edge_yes_pp=None,
+                    edge_no_pp=None,
                     liquidity_usd=None,
                     spread=None,
                 )
@@ -89,6 +103,11 @@ def calculate_bucket_edges(
             edge_yes = calculate_yes_edge(pq.probability, yes_ask)
             edge_yes_pp = edge_yes * 100.0
 
+        if mp.yes_bid is None:
+            edge_no_pp = None
+        else:
+            edge_no_pp = calculate_no_edge(pq.probability, mp.yes_bid) * 100.0
+
         out.append(
             BucketEdge(
                 label=pq.label,
@@ -97,6 +116,7 @@ def calculate_bucket_edges(
                 yes_ask=yes_ask,
                 edge_yes=edge_yes,
                 edge_yes_pp=edge_yes_pp,
+                edge_no_pp=edge_no_pp,
                 liquidity_usd=mp.liquidity_usd,
                 spread=mp.spread,
             )
