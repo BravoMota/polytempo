@@ -23,6 +23,20 @@ class ForecastDistribution:
 
 
 @dataclass(frozen=True)
+class DistributionBuildInfo:
+    """Inputs and outputs recorded when building a forecast distribution."""
+
+    values_used_c: list[float]
+    default_sigma_c: float
+    lead_hours: float | None
+    lead_hours_sigma_floor_c: float | None
+    ensemble_stdev_c: float | None
+    mean_c: float
+    sigma_c: float
+    method: str
+
+
+@dataclass(frozen=True)
 class BucketProbability:
     """Probability mass for one temperature bucket under the forecast model."""
 
@@ -56,7 +70,7 @@ def build_distribution(
     values_c: list[float],
     default_sigma_c: float = 1.0,
     lead_hours: float | None = None,
-) -> ForecastDistribution:
+) -> tuple[ForecastDistribution, DistributionBuildInfo]:
     """Build N(mean, sigma) parameters from one or more Celsius forecast samples."""
     if default_sigma_c <= 0:
         raise ValueError("default_sigma_c must be positive")
@@ -68,29 +82,184 @@ def build_distribution(
     if lead_hours is not None:
         base_sigma = lead_time_sigma_floor(lead_hours)
         if len(source) == 1:
-            return ForecastDistribution(
+            dist = ForecastDistribution(
                 mean_c=source[0],
                 sigma_c=base_sigma,
                 source_values_c=source,
             )
+            info = DistributionBuildInfo(
+                values_used_c=source,
+                default_sigma_c=default_sigma_c,
+                lead_hours=lead_hours,
+                lead_hours_sigma_floor_c=base_sigma,
+                ensemble_stdev_c=None,
+                mean_c=dist.mean_c,
+                sigma_c=dist.sigma_c,
+                method="lead_time_single_floor",
+            )
+            return dist, info
         mean_c = statistics.mean(source)
         disagreement = statistics.stdev(source)
         sigma_c = _combine_sigma(base_sigma, disagreement)
-        return ForecastDistribution(mean_c=mean_c, sigma_c=sigma_c, source_values_c=source)
+        dist = ForecastDistribution(mean_c=mean_c, sigma_c=sigma_c, source_values_c=source)
+        info = DistributionBuildInfo(
+            values_used_c=source,
+            default_sigma_c=default_sigma_c,
+            lead_hours=lead_hours,
+            lead_hours_sigma_floor_c=base_sigma,
+            ensemble_stdev_c=disagreement,
+            mean_c=dist.mean_c,
+            sigma_c=dist.sigma_c,
+            method="lead_time_multi_quadrature",
+        )
+        return dist, info
 
     if len(source) == 1:
-        return ForecastDistribution(
+        dist = ForecastDistribution(
             mean_c=source[0],
             sigma_c=default_sigma_c,
             source_values_c=source,
         )
+        info = DistributionBuildInfo(
+            values_used_c=source,
+            default_sigma_c=default_sigma_c,
+            lead_hours=None,
+            lead_hours_sigma_floor_c=None,
+            ensemble_stdev_c=None,
+            mean_c=dist.mean_c,
+            sigma_c=dist.sigma_c,
+            method="legacy_single_default_sigma",
+        )
+        return dist, info
 
     mean_c = statistics.mean(source)
     sigma_c = statistics.stdev(source)
     if sigma_c == 0:
-        sigma_c = default_sigma_c
+        dist = ForecastDistribution(
+            mean_c=mean_c,
+            sigma_c=default_sigma_c,
+            source_values_c=source,
+        )
+        info = DistributionBuildInfo(
+            values_used_c=source,
+            default_sigma_c=default_sigma_c,
+            lead_hours=None,
+            lead_hours_sigma_floor_c=None,
+            ensemble_stdev_c=0.0,
+            mean_c=dist.mean_c,
+            sigma_c=dist.sigma_c,
+            method="legacy_multi_zero_stdev_uses_default_sigma",
+        )
+        return dist, info
 
-    return ForecastDistribution(mean_c=mean_c, sigma_c=sigma_c, source_values_c=source)
+    dist = ForecastDistribution(mean_c=mean_c, sigma_c=sigma_c, source_values_c=source)
+    info = DistributionBuildInfo(
+        values_used_c=source,
+        default_sigma_c=default_sigma_c,
+        lead_hours=None,
+        lead_hours_sigma_floor_c=None,
+        ensemble_stdev_c=sigma_c,
+        mean_c=dist.mean_c,
+        sigma_c=dist.sigma_c,
+        method="legacy_multi_ensemble_stdev",
+    )
+    return dist, info
+
+
+def build_calibrated_distribution(
+    mu: float,
+    sigma: float,
+    *,
+    source_values_c: list[float] | None = None,
+    method: str = "calibrated_single_model",
+) -> tuple[ForecastDistribution, DistributionBuildInfo]:
+    """Build a normal distribution from a pre-chosen ``(mu, sigma)`` pair.
+
+    Used by the ``best_historical`` live strategy: the selected model's
+    bias-corrected prediction is the mean, and its empirical error sigma
+    (``error_std_c`` or ``rmse_c``) is the spread. Lead-time floors and
+    ensemble stdev are intentionally bypassed since ``sigma`` already reflects
+    empirical forecast error.
+    """
+    if not math.isfinite(mu):
+        raise ValueError("mu must be finite")
+    if not math.isfinite(sigma) or sigma <= 0:
+        raise ValueError("sigma must be positive and finite")
+
+    values = list(source_values_c) if source_values_c is not None else [mu]
+    dist = ForecastDistribution(mean_c=mu, sigma_c=sigma, source_values_c=values)
+    info = DistributionBuildInfo(
+        values_used_c=values,
+        default_sigma_c=sigma,
+        lead_hours=None,
+        lead_hours_sigma_floor_c=None,
+        ensemble_stdev_c=None,
+        mean_c=mu,
+        sigma_c=sigma,
+        method=method,
+    )
+    return dist, info
+
+
+_METHOD_DESCRIPTIONS: dict[str, str] = {
+    "legacy_single_default_sigma": (
+        "Single forecast value; sigma = default_sigma_c (lead time not used)."
+    ),
+    "legacy_multi_ensemble_stdev": (
+        "Multiple values; sigma = ensemble stdev (lead time not used)."
+    ),
+    "legacy_multi_zero_stdev_uses_default_sigma": (
+        "Multiple identical values (stdev=0); sigma = default_sigma_c (lead time not used)."
+    ),
+    "lead_time_single_floor": (
+        "Single value with lead time; sigma = lead_hours_sigma_floor."
+    ),
+    "lead_time_multi_quadrature": (
+        "Multiple values with lead time; "
+        "sigma = sqrt(lead_hours_sigma_floor² + ensemble_stdev²)."
+    ),
+    "calibrated_single_model": (
+        "Best historical model with bias-corrected mean and empirical sigma "
+        "(error_std_c or rmse_c) from offline calibration stats."
+    ),
+}
+
+
+def format_distribution_build_markdown(info: DistributionBuildInfo) -> str:
+    """Render distribution build inputs and final parameters for reports."""
+    method_desc = _METHOD_DESCRIPTIONS.get(info.method, info.method)
+    lead_s = (
+        f"{info.lead_hours:.2f} h"
+        if info.lead_hours is not None
+        else "not used (legacy mode)"
+    )
+    floor_s = (
+        f"{info.lead_hours_sigma_floor_c:.2f} °C"
+        if info.lead_hours_sigma_floor_c is not None
+        else "—"
+    )
+    stdev_s = (
+        f"{info.ensemble_stdev_c:.4f} °C"
+        if info.ensemble_stdev_c is not None
+        else "—"
+    )
+    return "\n".join(
+        [
+            "### Parameters chosen",
+            f"- values_used_c: `{info.values_used_c}`",
+            f"- default_sigma_c: `{info.default_sigma_c}` °C",
+            f"- lead_hours: {lead_s}",
+            f"- lead_hours_sigma_floor: {floor_s}",
+            f"- ensemble_stdev (model disagreement): {stdev_s}",
+            "",
+            "### Method",
+            f"- `{info.method}`: {method_desc}",
+            "",
+            "### Final distribution",
+            f"- mean_c: **{info.mean_c:.4f}** °C",
+            f"- sigma_c: **{info.sigma_c:.4f}** °C",
+        ]
+    )
 
 
 def _normal_cdf(x: float, mu: float, sigma: float) -> float:

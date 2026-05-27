@@ -41,4 +41,5 @@ def calibrate_forecast(
         longitude=forecast.longitude,
         target_date=forecast.target_date,
         values_c=apply_bias_to_values(forecast.values_c, bias_c),
+        models=list(forecast.models) if forecast.models is not None else None,
     )

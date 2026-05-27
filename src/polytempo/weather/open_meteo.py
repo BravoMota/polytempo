@@ -20,9 +20,10 @@ from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
 
 DEFAULT_MODELS: tuple[str, ...] = (
-    "ecmwf_ifs025",
-    "gfs_seamless",
-    "icon_seamless",
+    "ukmo_uk_deterministic_2km",  # UK Met Office UK 2 km (UKV)
+    "ukmo_seamless",  # UKMO Seamless (Global 10 km + UK 2 km)
+    "ecmwf_ifs",  # ECMWF IFS HRES 9 km
+    "icon_seamless",  # DWD ICON EU / Global seamless
 )
 
 PLAUSIBLE_MIN_C = -40.0
@@ -47,6 +48,7 @@ class DailyMaxForecast:
             longitude=self.longitude,
             target_date=self.target_date,
             values_c=list(self.values_c),
+            models=list(self.models) if self.models else None,
         )
 
 
