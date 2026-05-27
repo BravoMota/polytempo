@@ -23,8 +23,9 @@ def _payload() -> dict:
         "longitude": -3.7038,
         "daily": {
             "time": ["2026-05-13", "2026-05-14", "2026-05-15"],
-            "temperature_2m_max_ecmwf_ifs025": [21.5, 23.1, 24.0],
-            "temperature_2m_max_gfs_seamless": ["22.0", 22.8, 23.6],
+            "temperature_2m_max_ukmo_uk_deterministic_2km": [21.5, 23.1, 24.0],
+            "temperature_2m_max_ukmo_seamless": ["22.0", 22.8, 23.6],
+            "temperature_2m_max_ecmwf_ifs": [21.8, 23.0, 24.2],
             "temperature_2m_max_icon_seamless": [21.9, None, 24.4],
         },
     }
@@ -36,8 +37,12 @@ def test_parse_forecast_payload_collects_values_across_models() -> None:
     assert forecast.latitude == pytest.approx(40.4168)
     assert forecast.longitude == pytest.approx(-3.7038)
     assert forecast.target_date == date(2026, 5, 14)
-    assert forecast.values_c == pytest.approx([23.1, 22.8])
-    assert forecast.models == ["ecmwf_ifs025", "gfs_seamless"]
+    assert forecast.values_c == pytest.approx([23.1, 22.8, 23.0])
+    assert forecast.models == [
+        "ukmo_uk_deterministic_2km",
+        "ukmo_seamless",
+        "ecmwf_ifs",
+    ]
 
 
 def test_daily_max_forecast_to_forecast_values() -> None:
@@ -51,6 +56,8 @@ def test_daily_max_forecast_to_forecast_values() -> None:
     assert values.target_date == forecast.target_date
     assert values.values_c == pytest.approx(forecast.values_c)
     assert values.values_c is not forecast.values_c
+    assert values.models == forecast.models
+    assert values.models is not forecast.models
 
 
 def test_daily_max_forecast_to_forecast_values_custom_source() -> None:
@@ -145,7 +152,7 @@ def test_fetch_daily_max_calls_expected_url_and_params(
         longitude=-3.7038,
         target_date=date(2026, 5, 14),
         timezone="Europe/Madrid",
-        models=("ecmwf_ifs025", "gfs_seamless"),
+        models=("ukmo_seamless", "ecmwf_ifs"),
         base_url="https://example.test/v1/forecast",
     )
 
@@ -158,7 +165,7 @@ def test_fetch_daily_max_calls_expected_url_and_params(
                 "longitude": -3.7038,
                 "daily": "temperature_2m_max",
                 "temperature_unit": "celsius",
-                "models": "ecmwf_ifs025,gfs_seamless",
+                "models": "ukmo_seamless,ecmwf_ifs",
                 "timezone": "Europe/Madrid",
                 "start_date": "2026-05-14",
                 "end_date": "2026-05-14",

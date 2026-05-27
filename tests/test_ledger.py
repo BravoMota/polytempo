@@ -341,8 +341,21 @@ def test_settle_no_side_pays_zero_when_bucket_wins(tmp_path: Path) -> None:
 
 
 def _result(rows: list[AnalysisRow]) -> AnalysisResult:
+    from polytempo.model.distribution import DistributionBuildInfo
+
+    build = DistributionBuildInfo(
+        values_used_c=[24.0],
+        default_sigma_c=1.0,
+        lead_hours=None,
+        lead_hours_sigma_floor_c=None,
+        ensemble_stdev_c=None,
+        mean_c=24.0,
+        sigma_c=1.0,
+        method="legacy_single_default_sigma",
+    )
     return AnalysisResult(
         distribution_mean_c=24.0,
         distribution_sigma_c=1.0,
+        distribution_build=build,
         rows=rows,
     )

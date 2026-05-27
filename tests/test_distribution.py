@@ -8,7 +8,9 @@ import pytest
 from polytempo.markets.buckets import parse_temperature_bucket
 from polytempo.model.distribution import (
     ForecastDistribution,
+    build_calibrated_distribution,
     build_distribution,
+    format_distribution_build_markdown,
     lead_time_sigma_floor,
     probabilities_for_buckets,
     probability_for_bucket,
@@ -16,7 +18,8 @@ from polytempo.model.distribution import (
 
 
 def test_build_distribution_single_value_uses_default_sigma() -> None:
-    d = build_distribution([24.2], default_sigma_c=1.5)
+    d, info = build_distribution([24.2], default_sigma_c=1.5)
+    assert info.method == "legacy_single_default_sigma"
     assert d.mean_c == 24.2
     assert d.sigma_c == 1.5
     assert d.source_values_c == [24.2]
@@ -24,7 +27,8 @@ def test_build_distribution_single_value_uses_default_sigma() -> None:
 
 def test_build_distribution_multiple_values_mean_and_sigma() -> None:
     values = [23.8, 24.1, 24.3, 24.7, 25.0]
-    d = build_distribution(values, default_sigma_c=1.0)
+    d, info = build_distribution(values, default_sigma_c=1.0)
+    assert info.method == "legacy_multi_ensemble_stdev"
     assert d.mean_c == pytest.approx(sum(values) / len(values))
     assert d.sigma_c == pytest.approx(statistics.stdev(values))
     assert d.sigma_c > 0
@@ -44,7 +48,7 @@ def test_build_distribution_invalid_default_sigma_raises() -> None:
 
 
 def test_probability_for_bucket_finite_interval_in_unit_interval() -> None:
-    d = build_distribution([24.0], default_sigma_c=1.0)
+    d, _ = build_distribution([24.0], default_sigma_c=1.0)
     bucket = parse_temperature_bucket("23°C")
     p = probability_for_bucket(d, bucket)
     assert 0.0 <= p <= 1.0
@@ -65,7 +69,7 @@ def test_probability_open_above_positive_and_below_one() -> None:
 
 
 def test_probabilities_for_buckets_normalized_sum_to_one() -> None:
-    d = build_distribution([24.0], default_sigma_c=1.0)
+    d, _ = build_distribution([24.0], default_sigma_c=1.0)
     buckets = [
         parse_temperature_bucket("23°C"),
         parse_temperature_bucket("24°C"),
@@ -77,7 +81,7 @@ def test_probabilities_for_buckets_normalized_sum_to_one() -> None:
 
 
 def test_probabilities_for_buckets_preserves_order() -> None:
-    d = build_distribution([24.0], default_sigma_c=5.0)
+    d, _ = build_distribution([24.0], default_sigma_c=5.0)
     buckets = [
         parse_temperature_bucket("22°C"),
         parse_temperature_bucket("25°C"),
@@ -88,7 +92,8 @@ def test_probabilities_for_buckets_preserves_order() -> None:
 
 
 def test_zero_spread_uses_default_sigma() -> None:
-    d = build_distribution([24.0, 24.0, 24.0], default_sigma_c=2.5)
+    d, info = build_distribution([24.0, 24.0, 24.0], default_sigma_c=2.5)
+    assert info.method == "legacy_multi_zero_stdev_uses_default_sigma"
     assert d.mean_c == 24.0
     assert d.sigma_c == 2.5
 
@@ -118,14 +123,16 @@ def test_lead_time_sigma_floor_negative_raises() -> None:
 
 
 def test_build_distribution_single_value_with_lead_hours_uses_floor() -> None:
-    d = build_distribution([24.0], lead_hours=24.0)
+    d, info = build_distribution([24.0], lead_hours=24.0)
+    assert info.method == "lead_time_single_floor"
     assert d.mean_c == 24.0
     assert d.sigma_c == pytest.approx(1.2)
 
 
 def test_build_distribution_multiple_close_at_72h_sigma_at_least_floor() -> None:
     values = [24.0, 24.1, 24.0]
-    d = build_distribution(values, lead_hours=72.0)
+    d, info = build_distribution(values, lead_hours=72.0)
+    assert info.method == "lead_time_multi_quadrature"
     base = 2.0
     disagreement = statistics.stdev(values)
     assert d.sigma_c >= base
@@ -137,16 +144,68 @@ def test_build_distribution_multiple_uses_quadrature() -> None:
     lead_hours = 50.0
     base = lead_time_sigma_floor(lead_hours)
     disagreement = statistics.stdev(values)
-    d = build_distribution(values, lead_hours=lead_hours)
+    d, info = build_distribution(values, lead_hours=lead_hours)
+    assert info.lead_hours_sigma_floor_c == pytest.approx(base)
+    assert info.ensemble_stdev_c == pytest.approx(disagreement)
     assert d.sigma_c == pytest.approx(math.sqrt(base**2 + disagreement**2))
 
 
 def test_build_distribution_without_lead_hours_unchanged() -> None:
-    d = build_distribution([24.2], default_sigma_c=1.5)
+    d, _ = build_distribution([24.2], default_sigma_c=1.5)
     assert d.sigma_c == 1.5
     values = [23.8, 24.1, 24.3]
-    d_multi = build_distribution(values, default_sigma_c=1.0)
+    d_multi, _ = build_distribution(values, default_sigma_c=1.0)
     assert d_multi.sigma_c == pytest.approx(statistics.stdev(values))
+
+
+def test_format_distribution_build_markdown_includes_inputs_and_final() -> None:
+    _, info = build_distribution([24.0, 25.0], lead_hours=48.0)
+    md = format_distribution_build_markdown(info)
+    assert "values_used_c" in md
+    assert "lead_hours" in md
+    assert "mean_c" in md
+    assert "sigma_c" in md
+    assert info.method in md
+
+
+def test_build_calibrated_distribution_passes_mu_and_sigma_through() -> None:
+    d, info = build_calibrated_distribution(mu=17.5, sigma=1.4, source_values_c=[16.0, 18.0])
+
+    assert d.mean_c == pytest.approx(17.5)
+    assert d.sigma_c == pytest.approx(1.4)
+    assert info.method == "calibrated_single_model"
+    assert info.mean_c == pytest.approx(17.5)
+    assert info.sigma_c == pytest.approx(1.4)
+    assert info.lead_hours is None
+    assert info.lead_hours_sigma_floor_c is None
+    assert info.ensemble_stdev_c is None
+    assert info.values_used_c == [16.0, 18.0]
+    assert d.source_values_c == [16.0, 18.0]
+
+
+def test_build_calibrated_distribution_defaults_source_values_to_mu() -> None:
+    d, info = build_calibrated_distribution(mu=20.0, sigma=0.7)
+
+    assert d.source_values_c == [20.0]
+    assert info.values_used_c == [20.0]
+
+
+@pytest.mark.parametrize("bad_sigma", [0.0, -0.1, float("nan"), float("inf")])
+def test_build_calibrated_distribution_rejects_bad_sigma(bad_sigma: float) -> None:
+    with pytest.raises(ValueError, match="sigma"):
+        build_calibrated_distribution(mu=20.0, sigma=bad_sigma)
+
+
+def test_build_calibrated_distribution_rejects_non_finite_mu() -> None:
+    with pytest.raises(ValueError, match="mu"):
+        build_calibrated_distribution(mu=float("nan"), sigma=1.0)
+
+
+def test_format_distribution_build_markdown_describes_calibrated_method() -> None:
+    _, info = build_calibrated_distribution(mu=20.0, sigma=1.1, source_values_c=[19.0, 21.0])
+    md = format_distribution_build_markdown(info)
+    assert "calibrated_single_model" in md
+    assert "Best historical model" in md
 
 
 def test_normalize_raises_when_total_probability_is_zero() -> None:

@@ -12,6 +12,14 @@ def test_live_command_help_exits_zero() -> None:
     assert "--city" in result.stdout
 
 
+def test_live_command_help_documents_model_strategy_flag() -> None:
+    result = CliRunner().invoke(app, ["live", "--help"])
+    assert result.exit_code == 0
+    assert "--model-strategy" in result.stdout
+    assert "ensemble_spread" in result.stdout
+    assert "best_historical" in result.stdout
+
+
 def test_demo_command_exits_zero() -> None:
     result = CliRunner().invoke(app, ["demo"])
     assert result.exit_code == 0

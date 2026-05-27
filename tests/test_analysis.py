@@ -1,10 +1,17 @@
 """Tests for the local analysis use case."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
-from polytempo.analysis import AnalysisInput, analyze, analyze_event
+from polytempo.analysis import (
+    MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    AnalysisInput,
+    analyze,
+    analyze_event,
+)
 from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.model.calibration import CalibrationRule
 from polytempo.strategy.decision import DecisionConfig
@@ -347,13 +354,206 @@ def test_ledger_path_for_rejects_path_separators() -> None:
         ledger_path_for("../evil")
 
 
-def _forecast(values_c: list[float]) -> ForecastValues:
+_CALIBRATION_HEADER = (
+    "station_id,model,lead_hours,n_samples,bias_c,mae_c,rmse_c,error_std_c"
+)
+
+
+def _write_calibration_csv(path: Path, rows: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join([_CALIBRATION_HEADER, *rows]) + "\n", encoding="utf-8")
+
+
+def test_analyze_event_default_strategy_is_ensemble_spread() -> None:
+    result = analyze_event(_forecast([24.0, 25.0]), _event(["24°C"]))
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.selected_model is None
+    assert result.calibration_row is None
+    assert result.fallback_reason is None
+
+
+def test_analyze_event_best_historical_selects_lowest_error_std_model(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            # alpha: high sigma; beta: low sigma + nonzero bias → mean = 25 - 0.5 = 24.5
+            "EGLC,alpha,24,40,0.0,1.5,1.8,1.5",
+            "EGLC,beta,24,40,0.5,0.9,1.0,0.8",
+        ],
+    )
+    forecast = _forecast([23.0, 25.0], models=["alpha", "beta"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_BEST_HISTORICAL
+    assert result.selected_model == "beta"
+    assert result.calibration_sigma_source == "error_std_c"
+    assert result.fallback_reason is None
+    assert result.distribution_mean_c == pytest.approx(24.5)
+    assert result.distribution_sigma_c == pytest.approx(0.8)
+    assert result.calibration_row is not None
+    assert result.calibration_row.model == "beta"
+    assert result.calibration_row.lead_hours == 24.0
+
+
+def test_analyze_event_best_historical_falls_back_to_rmse_when_std_zero(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,24,40,0.0,0.9,1.5,0.0",
+            "EGLC,beta,24,40,0.2,0.6,0.7,0.0",
+        ],
+    )
+    forecast = _forecast([23.0, 25.0], models=["alpha", "beta"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.selected_model == "beta"
+    assert result.calibration_sigma_source == "rmse_c"
+    assert result.distribution_sigma_c == pytest.approx(0.7)
+    assert result.distribution_mean_c == pytest.approx(25.0 - 0.2)
+
+
+def test_analyze_event_best_historical_missing_csv_falls_back(tmp_path: Path) -> None:
+    forecast = _forecast([24.0, 25.0], models=["alpha", "beta"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=tmp_path / "does_not_exist.csv",
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "no_calibration_csv"
+    assert result.selected_model is None
+
+
+def test_analyze_event_best_historical_no_ceiling_row_falls_back(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,6,40,0.0,1.0,1.0,1.0",
+            "EGLC,beta,12,40,0.0,1.0,1.0,1.0",
+        ],
+    )
+    forecast = _forecast([24.0, 25.0], models=["alpha", "beta"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=48.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "no_ceiling_row_for_any_live_model"
+
+
+def test_analyze_event_best_historical_missing_models_falls_back(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        ["EGLC,alpha,24,40,0.0,1.0,1.0,1.0"],
+    )
+    forecast = _forecast([24.0, 25.0])  # models=None
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "forecast_missing_model_identity"
+
+
+def test_analyze_event_best_historical_requires_station_id(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        ["EGLC,alpha,24,40,0.0,1.0,1.0,1.0"],
+    )
+    forecast = _forecast([24.0], models=["alpha"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id=None,
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "missing_station_id"
+
+
+def test_analyze_event_best_historical_requires_lead_hours(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        ["EGLC,alpha,24,40,0.0,1.0,1.0,1.0"],
+    )
+    forecast = _forecast([24.0], models=["alpha"])
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=None,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "missing_lead_hours"
+
+
+def test_analyze_event_rejects_unknown_model_strategy() -> None:
+    with pytest.raises(ValueError, match="model_strategy"):
+        analyze_event(
+            _forecast([24.0]),
+            _event(["24°C"]),
+            model_strategy="some_other_strategy",
+            station_id="EGLC",
+            lead_hours=12.0,
+        )
+
+
+def _forecast(values_c: list[float], models: list[str] | None = None) -> ForecastValues:
     return ForecastValues(
         source="open_meteo",
         latitude=40.4168,
         longitude=-3.7038,
         target_date=date(2026, 5, 14),
         values_c=values_c,
+        models=models,
     )
 
 
