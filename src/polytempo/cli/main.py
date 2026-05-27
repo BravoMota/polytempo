@@ -8,11 +8,15 @@ Exposes the `polytempo` command:
 * `paper settle`    - settle open paper trades for an event against a winning bucket.
 * `paper status`    - print the paper account balance and open positions.
 * `paper list-london` - list active London weather events from Polymarket.
+* `fetch-historical-forecasts` - offline Single-Runs fetch for calibration JSONL.
+* `compute-calibration-stats` - join forecasts + observations into stats JSON.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
+from enum import Enum
+from pathlib import Path
 
 import typer
 
@@ -24,11 +28,14 @@ except ImportError:
     pass
 
 from polytempo.analysis import (
+    MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_ENSEMBLE_SPREAD,
     AnalysisInput,
     AnalysisResult,
     analyze,
     analyze_event,
 )
+from polytempo.model.distribution import format_distribution_build_markdown
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
@@ -47,6 +54,24 @@ from polytempo.paper.ledger import (
 from polytempo.paper.run import RunSummary, run_pipeline
 from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
 from polytempo.strategy.edge import MarketPrice
+from polytempo.weather.calibration_dataset import (
+    DEFAULT_CALIBRATION_STATS_PATH,
+    compute_calibration_stats,
+    join_forecasts_with_observations,
+    write_calibration_stats_json,
+)
+from polytempo.weather.historical_forecasts import (
+    DEFAULT_FORECAST_DAYS,
+    DEFAULT_HISTORICAL_FORECASTS_PATH,
+    DEFAULT_RAW_FORECASTS_DIR,
+    DEFAULT_SINGLE_RUNS_BASE_URL,
+    fetch_historical_forecast_batch,
+    fetch_raw_forecast_runs,
+    plan_historical_forecast_requests,
+    read_historical_forecasts_jsonl,
+    resolve_raw_fetch_run_times,
+)
+from polytempo.weather.observations import DEFAULT_OBSERVATIONS_PATH, read_observations_jsonl
 from polytempo.weather.open_meteo import DailyMaxForecast, fetch_for_station
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import STATIONS, Station, get_station
@@ -54,6 +79,18 @@ from polytempo.weather.stations import STATIONS, Station, get_station
 app = typer.Typer()
 paper_app = typer.Typer(help="Paper trading ledger (demo account, no live orders).")
 app.add_typer(paper_app, name="paper")
+
+
+class ModelStrategy(str, Enum):
+    """How the live command builds the forecast distribution.
+
+    - ``ensemble_spread``: mean + spread across all live models (legacy).
+    - ``best_historical``: pick the calibrated model with the lowest empirical
+      sigma at the current lead time; bias-correct its prediction.
+    """
+
+    ENSEMBLE_SPREAD = MODEL_STRATEGY_ENSEMBLE_SPREAD
+    BEST_HISTORICAL = MODEL_STRATEGY_BEST_HISTORICAL
 
 
 @app.callback()
@@ -86,6 +123,14 @@ def _format_optional(value: float | None, fmt: str) -> str:
 
 def _render(result: AnalysisResult) -> str:
     lines: list[str] = []
+    strategy_bits = [f"strategy={result.model_strategy}"]
+    if result.selected_model is not None:
+        strategy_bits.append(f"selected_model={result.selected_model}")
+    if result.calibration_sigma_source is not None:
+        strategy_bits.append(f"sigma_source={result.calibration_sigma_source}")
+    if result.fallback_reason is not None:
+        strategy_bits.append(f"fallback={result.fallback_reason}")
+    lines.append(" ".join(strategy_bits))
     lines.append(
         f"distribution: mean={result.distribution_mean_c:.2f}°C "
         f"sigma={result.distribution_sigma_c:.2f}°C"
@@ -144,6 +189,18 @@ def live(
         min=0,
         help="Target calendar day = today + N (Open-Meteo max temp + Gamma end-date filter). Default 1 = tomorrow.",
     ),
+    model_strategy: ModelStrategy = typer.Option(
+        ModelStrategy.ENSEMBLE_SPREAD,
+        "--model-strategy",
+        case_sensitive=False,
+        help=(
+            "How to build the forecast distribution. "
+            "'ensemble_spread' (default) averages live models with spread sigma. "
+            "'best_historical' picks the calibrated model with lowest sigma at the "
+            "current lead time and falls back to ensemble_spread when calibration "
+            "stats are missing."
+        ),
+    ),
 ) -> None:
     """Fetch Polymarket + Open-Meteo data, print analysis, and write a markdown report."""
     try:
@@ -167,6 +224,7 @@ def live(
                         f"- city: `{city}` (station {station.icao})",
                         f"- target_date: `{target_date.isoformat()}` (days_ahead={days_ahead})",
                         f"- event mode: {'explicit (--event-id)' if event_id else f'scan (limit={limit})'}",
+                        f"- model_strategy: `{model_strategy.value}`",
                     ]
                 ),
             )
@@ -203,7 +261,18 @@ def live(
                 _md_forecast(station, target_date, daily, forecast),
             )
 
-            result = analyze_event(forecast, event)
+            lead_hours = _lead_hours_until_target_day(target_date)
+            result = analyze_event(
+                forecast,
+                event,
+                lead_hours=lead_hours,
+                model_strategy=model_strategy.value,
+                station_id=station.icao,
+            )
+            reporter.section(
+                "Distribution",
+                format_distribution_build_markdown(result.distribution_build),
+            )
             reporter.section("Analysis result", _md_result(result))
 
             typer.echo(f"event: {event.title} ({event.event_id})")
@@ -227,6 +296,13 @@ def live(
     finally:
         path = reporter.write()
         typer.echo(f"report written: {path}")
+
+
+def _lead_hours_until_target_day(target: date) -> float:
+    """Hours from now (UTC) until the start of the target calendar day (UTC)."""
+    target_start = datetime.combine(target, time.min, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return max(0.0, (target_start - now).total_seconds() / 3600.0)
 
 
 def _md_event(event: PolymarketEvent) -> str:
@@ -271,13 +347,29 @@ def _md_forecast(
 
 
 def _md_result(result: AnalysisResult) -> str:
-    lines = [
+    lines: list[str] = []
+    lines.append(f"- model_strategy: `{result.model_strategy}`")
+    if result.selected_model is not None:
+        lines.append(f"- selected_model: `{result.selected_model}`")
+    if result.calibration_sigma_source is not None:
+        lines.append(f"- sigma_source: `{result.calibration_sigma_source}`")
+    if result.fallback_reason is not None:
+        lines.append(f"- fallback_reason: `{result.fallback_reason}`")
+    if result.calibration_row is not None:
+        row = result.calibration_row
+        lines.append(
+            "- calibration_row: "
+            f"lead_hours={row.lead_hours:g} n_samples={row.n_samples} "
+            f"bias_c={row.bias_c:.4f} mae_c={row.mae_c:.4f} "
+            f"rmse_c={row.rmse_c:.4f} error_std_c={row.error_std_c:.4f}"
+        )
+    lines.append(
         f"- distribution: mean={result.distribution_mean_c:.2f}°C "
-        f"sigma={result.distribution_sigma_c:.2f}°C",
-        "",
-        "| bucket | prob | ask | edge_pp | action | confidence | reason | warnings |",
-        "| --- | ---: | ---: | ---: | --- | --- | --- | --- |",
-    ]
+        f"sigma={result.distribution_sigma_c:.2f}°C"
+    )
+    lines.append("")
+    lines.append("| bucket | prob | ask | edge_pp | action | confidence | reason | warnings |")
+    lines.append("| --- | ---: | ---: | ---: | --- | --- | --- | --- |")
     for row in result.rows:
         warns = ", ".join(row.warnings) if row.warnings else ""
         lines.append(
@@ -291,6 +383,216 @@ def _md_result(result: AnalysisResult) -> str:
             f"{warns} |"
         )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# offline calibration
+# ---------------------------------------------------------------------------
+
+
+@app.command("fetch-historical-forecasts")
+def fetch_historical_forecasts(
+    station_id: str = typer.Option(..., "--station-id", help="Contract station id, e.g. EGLC."),
+    latitude: float = typer.Option(..., "--latitude", help="Station latitude."),
+    longitude: float = typer.Option(..., "--longitude", help="Station longitude."),
+    model: str = typer.Option(..., "--model", help="Open-Meteo model id."),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="First target day YYYY-MM-DD (required without --run-time).",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Last target day YYYY-MM-DD (required without --run-time).",
+    ),
+    run_time: list[str] = typer.Option(
+        [],
+        "--run-time",
+        help="UTC model init (repeatable). Raw JSON only; omit start/end dates.",
+    ),
+    run_time_start: str | None = typer.Option(
+        None,
+        "--run-time-start",
+        help="First UTC init for a run range (with --run-time-end and --run-interval-hours).",
+    ),
+    run_time_end: str | None = typer.Option(
+        None,
+        "--run-time-end",
+        help="Last UTC init for a run range (defaults to --run-time-start).",
+    ),
+    run_interval_hours: float | None = typer.Option(
+        None,
+        "--run-interval-hours",
+        min=0.0,
+        help="Hours between run inits when using --run-time-start (e.g. 6 for synoptic).",
+    ),
+    forecast_days: int = typer.Option(
+        DEFAULT_FORECAST_DAYS,
+        "--forecast-days",
+        min=1,
+        help="Single-Runs forward horizon length (forecast_days query param).",
+    ),
+    max_lead_hours: float = typer.Option(
+        72.0,
+        "--max-lead-hours",
+        min=0.0,
+        help="Maximum lead time before target day.",
+    ),
+    lead_step_hours: float = typer.Option(
+        6.0,
+        "--lead-step-hours",
+        min=0.0,
+        help="Lead-time step in hours.",
+    ),
+    timezone: str = typer.Option(
+        "UTC",
+        "--timezone",
+        help="IANA timezone for target-day midnight anchor.",
+    ),
+    out: Path = typer.Option(
+        DEFAULT_HISTORICAL_FORECASTS_PATH,
+        "--out",
+        help="Output JSONL path for parsed forecast records.",
+    ),
+    raw_dir: Path = typer.Option(
+        DEFAULT_RAW_FORECASTS_DIR,
+        "--raw-dir",
+        help="Directory for full Single-Runs JSON responses.",
+    ),
+    base_url: str = typer.Option(
+        DEFAULT_SINGLE_RUNS_BASE_URL,
+        "--base-url",
+        help="Open-Meteo Single Runs API base URL.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print planned request count without calling the API.",
+    ),
+) -> None:
+    """Fetch Single Runs forecasts; save raw JSON and optionally append parsed JSONL."""
+    station = station_id.strip()
+    model_id = model.strip()
+    tz = timezone.strip()
+
+    raw_run_mode = bool(run_time or run_time_start)
+    if raw_run_mode:
+        if start_date or end_date:
+            typer.echo(
+                "note: --start-date/--end-date ignored in raw run mode",
+                err=True,
+            )
+        try:
+            parsed_runs = resolve_raw_fetch_run_times(
+                run_time,
+                run_time_start=run_time_start,
+                run_time_end=run_time_end,
+                run_interval_hours=run_interval_hours,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+
+        if not parsed_runs:
+            raise typer.BadParameter(
+                "set --run-time and/or --run-time-start with --run-interval-hours"
+            )
+
+        typer.echo(
+            f"planned_raw_requests={len(parsed_runs)} forecast_days={forecast_days}"
+        )
+        if dry_run:
+            return
+
+        fetched, skipped, failed = fetch_raw_forecast_runs(
+            station,
+            latitude,
+            longitude,
+            model_id,
+            parsed_runs,
+            timezone=tz,
+            raw_dir=raw_dir,
+            forecast_days=forecast_days,
+            base_url=base_url,
+        )
+        typer.echo(
+            f"raw_fetched={fetched} raw_skipped={skipped} raw_failed={failed} "
+            f"raw_dir={raw_dir} forecast_days={forecast_days}"
+        )
+        return
+
+    if not start_date or not end_date:
+        raise typer.BadParameter(
+            "--start-date and --end-date are required unless raw run mode is used "
+            "(--run-time and/or --run-time-start)"
+        )
+
+    parsed_start = date.fromisoformat(start_date)
+    parsed_end = date.fromisoformat(end_date)
+
+    jobs = plan_historical_forecast_requests(
+        station_id=station,
+        latitude=latitude,
+        longitude=longitude,
+        model=model_id,
+        start_date=parsed_start,
+        end_date=parsed_end,
+        max_lead_hours=max_lead_hours,
+        lead_step_hours=lead_step_hours,
+        timezone=tz,
+    )
+
+    target_days = (parsed_end - parsed_start).days + 1
+    typer.echo(
+        f"planned_requests={len(jobs)} "
+        f"(target_days={target_days}, leads_per_day={len(jobs) // target_days if target_days else 0})"
+    )
+
+    if dry_run:
+        return
+
+    fetched, skipped, failed = fetch_historical_forecast_batch(
+        jobs,
+        out_path=out,
+        base_url=base_url,
+        raw_dir=raw_dir,
+        forecast_days=forecast_days,
+    )
+    typer.echo(
+        f"fetched={fetched} skipped={skipped} failed={failed} out={out} "
+        f"raw_dir={raw_dir} forecast_days={forecast_days}"
+    )
+
+
+@app.command("compute-calibration-stats")
+def compute_calibration_stats_cmd(
+    forecasts: Path = typer.Option(
+        DEFAULT_HISTORICAL_FORECASTS_PATH,
+        "--forecasts",
+        help="Historical forecast JSONL input.",
+    ),
+    observations: Path = typer.Option(
+        DEFAULT_OBSERVATIONS_PATH,
+        "--observations",
+        help="Observed Tmax JSONL input.",
+    ),
+    out: Path = typer.Option(
+        DEFAULT_CALIBRATION_STATS_PATH,
+        "--out",
+        help="Output calibration stats JSON path.",
+    ),
+) -> None:
+    """Join forecasts with observations and write RMSE/MAE/bias stats."""
+    forecast_rows = read_historical_forecasts_jsonl(forecasts)
+    observation_rows = read_observations_jsonl(observations)
+
+    errors = join_forecasts_with_observations(forecast_rows, observation_rows)
+    stats = compute_calibration_stats(errors)
+    write_calibration_stats_json(stats, out)
+
+    typer.echo(
+        f"joined_samples={len(errors)} stat_groups={len(stats)} out={out}"
+    )
 
 
 # ---------------------------------------------------------------------------
