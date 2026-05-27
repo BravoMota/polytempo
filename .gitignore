@@ -21,8 +21,13 @@ env/
 .env
 .env.*
 
-# Local generated data
-data/
+# Local generated data (track calibration stats used by `polytempo live --model-strategy best_historical`)
+data/*
+!data/weather/
+data/weather/*
+!data/weather/statistical/
+data/weather/statistical/*
+!data/weather/statistical/calibration_stats.csv
 reports/
 
 # Local Claude Code state
