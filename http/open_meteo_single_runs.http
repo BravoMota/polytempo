@@ -1,0 +1,15 @@
+# Single Runs — archived model forecast for predicted daily Tmax (NOT observations).
+# Host: single-runs-api.open-meteo.com (offline calibration only; see fetch-historical-forecasts).
+#
+# @run_time     UTC model init sent as run= (when the forecast was issued).
+# @target_date  NOT in the URL — after response, read daily.time[i]==target_date → temperature_2m_max[i].
+# Do not send start_date/end_date with run. Archive calls can take 30–120s.
+
+@latitude = 51.5053
+@longitude = 0.0553
+@model = ukmo_seamless
+@run_time = 2026-03-29T00:00
+@target_date = 2026-04-01
+@timezone = Europe/London
+
+GET https://single-runs-api.open-meteo.com/v1/forecast?latitude={{latitude}}&longitude={{longitude}}&daily=temperature_2m_max&temperature_unit=celsius&models={{model}}&timezone={{timezone}}&run={{run_time}}

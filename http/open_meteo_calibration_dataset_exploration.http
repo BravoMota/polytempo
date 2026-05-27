@@ -1,0 +1,181 @@
+# Open-Meteo calibration dataset — API exploration scratch file
+#
+# Based on: docs/research/single-run-api_study.md
+# Purpose: manual probes before building the offline calibration dataset script.
+# NOT used by polytempo live or fetch-historical-forecasts today.
+#
+# EGLC / London contract station (Polymarket weather markets)
+# Settlement timezone must match contract day boundaries → Europe/London
+#
+# Models:
+#   @model1 / @model2 — single-model calls
+#   @models — comma-separated multi-model calls
+#   @model_blend — anti-pattern only (seamless; not for per-model RMSE)
+#
+# Decision guide:
+#   PRIMARY   → Single Runs (run= UTC init → full forward horizon; no target_date in URL)
+#   FALLBACK  → Previous Runs (fixed 24/48/72h buckets; deeper archive)
+#   AVOID     → Historical Forecast (stitched), seamless blends, best_match
+#
+# Archive calls can be slow (30–120s). Use REST Client or: curl --max-time 120
+#
+# ---------------------------------------------------------------------------
+# Top models (A→Z) — copy-paste ids; max lead = forecast horizon per run
+#
+# ecmwf_ifs                      ECMWF IFS HRES 9 km; 6h inits; max lead ~15 days
+# ecmwf_ifs025                   ECMWF IFS 0.25° open-data; max lead ~15 days
+# gem_global                     Canadian GEM global; max lead ~10 days
+# gfs_seamless                   NCEP GFS seamless; max lead ~16 days
+# icon_d2                        DWD ICON D2 2 km; max lead ~5 days
+# icon_eu                        DWD ICON Europe 7 km; max lead ~7 days
+# icon_global                    DWD ICON global; max lead ~7 days
+# meteofrance_arpege_europe      Météo-France ARPEGE Europe; max lead ~4 days
+# ukmo_global_deterministic_10km UKMO Global 10 km; max lead ~7 days
+# ukmo_uk_deterministic_2km      UKMO UKV 2 km; max lead ~2 days; UK/Ireland only
+# icon_d2", "ukmo_uk_deterministic_2km", "meteoswiss_icon_ch2
+# ---------------------------------------------------------------------------
+
+@latitude = 51.5053
+@longitude = 0.0553
+@latitude1 = 51.5
+@longitude1 = 0.059999943
+@timezone = Europe/London
+@target_date = 2026-04-01
+@model1 = ukmo_uk_deterministic_2km
+@model2 = gem_global
+@models = icon_d2,ukmo_uk_deterministic_2km
+@model_blend = ukmo_seamless
+@run_00z = 2026-03-29T18:00
+@run_off_cycle = 2026-03-29T05:00
+@window_start = 2026-04-01
+@window_end = 2026-04-07
+
+
+###############################################################################
+# A. Single Runs API — PRIMARY
+# Host: single-runs-api.open-meteo.com
+# Pick run= (UTC model init); response daily.time[] is forward horizon.
+# Do NOT send start_date/end_date with run. Pick target_date from daily.time[i] client-side.
+###############################################################################
+
+### A1 — multi-model daily Tmax (one run → temperature_2m_max_<model> per @models id)
+GET https://single-runs-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{model2}}
+    &run={{run_00z}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &forecast_days=7
+
+### A2 — single-model {{model1}} @ synoptic 00Z (baseline single-model shape)
+GET https://single-runs-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{model1}}
+    &run={{run_00z}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &forecast_days=7
+
+
+# Model specs (km, native cadence, forecast length): NO list/specs endpoint on Single Runs.
+# Open-Meteo docs table only → https://open-meteo.com/en/docs (Weather models section)
+# Per-model run-timing JSON exists (meta.json) but does not publish spatial km yet.
+
+###############################################################################
+# B. Previous Runs API — FALLBACK (fixed 24/48/72h lead buckets)
+# Host: previous-runs-api.open-meteo.com
+# Use hourly temperature_2m_previous_dayN (daily *_previous_dayN often invalid)
+###############################################################################
+
+### B1 — {{model1}} hourly offsets day1–day3 (24h / 48h / 72h before valid time)
+GET https://previous-runs-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{model1}}
+    &hourly=temperature_2m_previous_day1,temperature_2m_previous_day2,temperature_2m_previous_day3
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &start_date={{window_start}}
+    &end_date={{window_end}}
+
+### B2 — multi-model @models daily Tmax (check stitching vs offset behaviour)
+GET https://previous-runs-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{models}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &start_date={{window_start}}
+    &end_date={{window_end}}
+
+
+###############################################################################
+# C. Historical Forecast API — COMPARISON ONLY (stitched; no run identity)
+# Host: historical-forecast-api.open-meteo.com
+###############################################################################
+
+### C1 — {{model1}} stitched historical daily Tmax
+GET https://historical-forecast-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{model1}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &start_date={{window_start}}
+    &end_date={{window_end}}
+
+### C2 — {{model2}} stitched historical daily Tmax
+GET https://historical-forecast-api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &models={{model2}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &timezone={{timezone}}
+    &start_date={{window_start}}
+    &end_date={{window_end}}
+
+
+###############################################################################
+# E. Live Forecast API — CONTRAST ONLY (current stitched product)
+# Host: api.open-meteo.com
+###############################################################################
+
+### E1 — live multi-model daily Tmax (@models)
+GET https://api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &models={{models}}
+    &timezone={{timezone}}
+    &start_date={{target_date}}
+    &end_date={{target_date}}
+
+### E2 — anti-pattern {{model_blend}} (blended; not for per-model RMSE)
+GET https://api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &models={{model_blend}}
+    &timezone={{timezone}}
+    &start_date={{target_date}}
+    &end_date={{target_date}}
+
+
+###############################################################################
+# Checklist
+#
+# [ ] A1: multi-model keys temperature_2m_max_<model> + daily.time covers @target_date?
+# [ ] A2: single-model non-null Tmax at daily.time index for @target_date?
+# [ ] B1: previous_day1/2/3 hourly usable for 24/48/72h buckets?
+# [ ] C* vs A*: stitched Historical ≠ run-identified Single Runs?
+# [ ] E2: avoid seamless for per-model calibration stats?
+###############################################################################

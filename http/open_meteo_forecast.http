@@ -1,0 +1,29 @@
+# Open-Meteo forecast API — current/live forecast smoke test
+#
+# For inspecting live multi-model daily Tmax payloads. Not used in offline calibration fetch.
+# EGLC coordinates; timezone=auto picks local zone from coordinates.
+
+@latitude = 51.5053
+@longitude = 0.0553
+@target_date = 2026-05-27
+
+GET https://api.open-meteo.com/v1/forecast
+    ?latitude={{latitude}}
+    &longitude={{longitude}}
+    &daily=temperature_2m_max
+    &temperature_unit=celsius
+    &models=ukmo_uk_deterministic_2km
+    &timezone=auto
+    &start_date={{target_date}}
+    &end_date={{target_date}}
+
+### Fetch 
+GET https://api.open-meteo.com/v1/forecast
+    ?latitude=51.5053
+    &longitude=0.0553
+    &daily=temperature_2m_max
+    &timezone=auto
+
+### Simple test API
+GET https://httpbin.org/get
+

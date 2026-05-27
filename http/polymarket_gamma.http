@@ -1,0 +1,16 @@
+# Polymarket Gamma API — manual payload inspection
+#
+# No secrets required. Use to inspect event/market JSON before coding parsers.
+# Not part of live calibration tooling.
+
+@gamma_base = https://gamma-api.polymarket.com
+@event_id = REPLACE_WITH_EVENT_ID
+
+### List weather-related events (adjust limit / filters as needed)
+GET {{gamma_base}}/events
+    ?limit=20
+    &active=true
+    &closed=false
+
+### Fetch one event by id
+GET {{gamma_base}}/events/{{event_id}}
