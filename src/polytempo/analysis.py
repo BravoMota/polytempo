@@ -234,12 +234,20 @@ def analyze_event_multi(
     event: PolymarketEvent,
     strategies: list[Strategy],
     calibration_rule: CalibrationRule | None = None,
+    lead_hours: float | None = None,
+    model_strategy: str = MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    station_id: str | None = None,
+    default_sigma_c: float = 1.0,
+    calibration_stats_path: Path = DEFAULT_CALIBRATION_STATS_CSV_PATH,
 ) -> dict[str, AnalysisResult]:
     """Run several strategies against the same model+market output.
 
-    Builds the distribution and edges once, then dispatches to each strategy.
-    Returns a mapping from ``strategy.name`` to its AnalysisResult. Phase B
-    paper trading uses this so the three strategies share one model fit.
+    Builds the distribution once (via the same ``_resolve_strategy`` +
+    ``build_calibrated_distribution`` / ``build_distribution`` paths as
+    ``analyze_event``) and dispatches to each strategy. Returns a mapping
+    from ``strategy.name`` to its ``AnalysisResult``. Strategy-level metadata
+    (``model_strategy``, ``selected_model``, ``fallback_reason`` …) is the
+    same across all strategies because they share the fit.
     """
     if not strategies:
         raise ValueError("strategies must not be empty")
@@ -251,7 +259,30 @@ def analyze_event_multi(
     bucket_labels = [bucket.label for bucket in event.buckets]
     calibrated = calibrate_forecast(forecast, calibration_rule)
     buckets = [parse_temperature_bucket(label) for label in bucket_labels]
-    distribution, distribution_build = build_distribution(calibrated.values_c)
+
+    resolution = _resolve_strategy(
+        forecast=calibrated,
+        requested_strategy=model_strategy,
+        station_id=station_id,
+        current_lead_hours=lead_hours,
+        calibration_stats_path=calibration_stats_path,
+    )
+
+    if resolution.strategy == MODEL_STRATEGY_BEST_HISTORICAL:
+        assert resolution.calibrated_mu is not None
+        assert resolution.calibrated_sigma is not None
+        distribution, distribution_build = build_calibrated_distribution(
+            mu=resolution.calibrated_mu,
+            sigma=resolution.calibrated_sigma,
+            source_values_c=list(calibrated.values_c),
+        )
+    else:
+        distribution, distribution_build = build_distribution(
+            calibrated.values_c,
+            default_sigma_c=default_sigma_c,
+            lead_hours=lead_hours,
+        )
+
     probabilities = probabilities_for_buckets(distribution, buckets)
     quotes = [
         ProbabilityQuote(label=p.label, probability=p.probability)
@@ -289,6 +320,11 @@ def analyze_event_multi(
             distribution_sigma_c=distribution.sigma_c,
             distribution_build=distribution_build,
             rows=rows,
+            model_strategy=resolution.strategy,
+            selected_model=resolution.selected_model,
+            calibration_row=resolution.calibration_row,
+            calibration_sigma_source=resolution.sigma_source,
+            fallback_reason=resolution.fallback_reason,
         )
     return results
 

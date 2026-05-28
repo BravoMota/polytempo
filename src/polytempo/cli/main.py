@@ -210,15 +210,14 @@ def live(
         help="Which day(s) to run: `today` (T+0), `tomorrow` (T+1), or `both`. Prompted on TTY when omitted.",
     ),
     model_strategy: ModelStrategy = typer.Option(
-        ModelStrategy.ENSEMBLE_SPREAD,
+        ModelStrategy.BEST_HISTORICAL,
         "--model-strategy",
         case_sensitive=False,
         help=(
             "How to build the forecast distribution. "
-            "'ensemble_spread' (default) averages live models with spread sigma. "
-            "'best_historical' picks the calibrated model with lowest sigma at the "
-            "current lead time and falls back to ensemble_spread when calibration "
-            "stats are missing."
+            "'best_historical' (default) picks the calibrated model with lowest sigma at the "
+            "current lead time and falls back to 'ensemble_spread' when calibration "
+            "stats are missing. 'ensemble_spread' averages live models with spread sigma."
         ),
     ),
 ) -> None:
@@ -355,6 +354,15 @@ def _run_live_one_day(
                 model_strategy=model_strategy.value,
                 station_id=station.icao,
             )
+            if (
+                model_strategy is ModelStrategy.BEST_HISTORICAL
+                and preview_result.fallback_reason is not None
+            ):
+                typer.echo(
+                    f"warning: --model-strategy best_historical fell back to "
+                    f"ensemble_spread ({preview_result.fallback_reason}).",
+                    err=True,
+                )
             reporter.section(
                 "Distribution",
                 format_distribution_build_markdown(preview_result.distribution_build),
@@ -362,9 +370,24 @@ def _run_live_one_day(
 
             strategies = _default_strategies()
             if mode is LiveMode.TRADE:
-                summary = run_pipeline(forecast, event, strategies, dedupe=True)
+                summary = run_pipeline(
+                    forecast,
+                    event,
+                    strategies,
+                    dedupe=True,
+                    lead_hours=lead_hours,
+                    model_strategy=model_strategy.value,
+                    station_id=station.icao,
+                )
             else:
-                summary = preview_pipeline(forecast, event, strategies)
+                summary = preview_pipeline(
+                    forecast,
+                    event,
+                    strategies,
+                    lead_hours=lead_hours,
+                    model_strategy=model_strategy.value,
+                    station_id=station.icao,
+                )
 
             reporter.section(
                 "Run outcome",

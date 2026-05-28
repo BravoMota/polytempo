@@ -36,8 +36,8 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 
       | Strategy | mean | sigma |
       | --- | --- | --- |
-      | `ensemble_spread` (default) | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
-      | `best_historical` | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
+      | `best_historical` (default) | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
+      | `ensemble_spread` | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
 
       `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
    5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
@@ -57,7 +57,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 | `--event-id` | Pin a specific Gamma event id (one day only; not compatible with `--day both`). |
 | `--city` | Contract station registry key (default `london`). |
 | `--limit` | Max events to scan when `--event-id` is not set (default `20`). |
-| `--model-strategy` | `ensemble_spread` (default) or `best_historical`. |
+| `--model-strategy` | `best_historical` (default) or `ensemble_spread`. |
 
 ### Examples
 
@@ -68,8 +68,8 @@ polytempo live
 # Cron / non-interactive — preview both days
 polytempo live --mode preview --day both --city london
 
-# Trade tomorrow with calibrated distribution
-polytempo live --mode trade --day tomorrow --model-strategy best_historical
+# Trade tomorrow with ensemble distribution (override default)
+polytempo live --mode trade --day tomorrow --model-strategy ensemble_spread
 ```
 
 `live` is the canonical entrypoint. `paper open` below remains as a thin per-event wrapper for scripts that already use it.

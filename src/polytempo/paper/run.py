@@ -86,6 +86,9 @@ def run_pipeline(
     base_dir: Path = DEFAULT_LEDGER_DIR,
     calibration_rule: CalibrationRule | None = None,
     dedupe: bool = False,
+    lead_hours: float | None = None,
+    model_strategy: str = "ensemble_spread",
+    station_id: str | None = None,
 ) -> RunSummary:
     """Settle if the event is resolved; otherwise open trades per strategy.
 
@@ -105,7 +108,16 @@ def run_pipeline(
             for s in strategies
         ]
     else:
-        results = _open_all(forecast, event, strategies, base_dir, calibration_rule)
+        results = _open_all(
+            forecast,
+            event,
+            strategies,
+            base_dir,
+            calibration_rule,
+            lead_hours,
+            model_strategy,
+            station_id,
+        )
 
     summary = RunSummary(
         ts=ts,
@@ -126,6 +138,9 @@ def preview_pipeline(
     strategies: list[Strategy],
     base_dir: Path = DEFAULT_LEDGER_DIR,
     calibration_rule: CalibrationRule | None = None,
+    lead_hours: float | None = None,
+    model_strategy: str = "ensemble_spread",
+    station_id: str | None = None,
 ) -> RunSummary:
     """Run all strategies and append a runs.jsonl snapshot; write no OPENs."""
     from polytempo.analysis import analyze_event_multi
@@ -145,6 +160,9 @@ def preview_pipeline(
             event,
             strategies=strategies,
             calibration_rule=calibration_rule,
+            lead_hours=lead_hours,
+            model_strategy=model_strategy,
+            station_id=station_id,
         )
         results = [
             StrategyRunResult(
@@ -198,12 +216,18 @@ def _open_all(
     strategies: list[Strategy],
     base_dir: Path,
     calibration_rule: CalibrationRule | None,
+    lead_hours: float | None = None,
+    model_strategy: str = "ensemble_spread",
+    station_id: str | None = None,
 ) -> list[StrategyRunResult]:
     analyses = analyze_event_multi(
         forecast,
         event,
         strategies=strategies,
         calibration_rule=calibration_rule,
+        lead_hours=lead_hours,
+        model_strategy=model_strategy,
+        station_id=station_id,
     )
     out: list[StrategyRunResult] = []
     for strategy in strategies:
