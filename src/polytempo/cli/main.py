@@ -340,7 +340,7 @@ def _run_live_one_day(
                 _md_forecast(station, target_date, daily, forecast),
             )
 
-            lead_hours = _lead_hours_until_target_day(target_date)
+            lead_hours = _lead_hours_to_end_of_target_day(target_date)
             if lead_hours < 6.0:
                 typer.echo(
                     f"warning: lead_hours={lead_hours:.1f} < 6 — near settle, forecast value drops and edges sharpen.",
@@ -448,11 +448,22 @@ def _md_run_summary(summary: RunSummary) -> str:
     return "\n".join(lines)
 
 
-def _lead_hours_until_target_day(target: date) -> float:
-    """Hours from now (UTC) until the start of the target calendar day (UTC)."""
-    target_start = datetime.combine(target, time.min, tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
-    return max(0.0, (target_start - now).total_seconds() / 3600.0)
+def _lead_hours_to_end_of_target_day(
+    target: date, now: datetime | None = None
+) -> float:
+    """Hours from ``now`` (UTC) until UTC midnight at the END of ``target``.
+
+    End-of-target is UTC midnight of the day after ``target`` — the same
+    anchor used by the offline calibration pipeline in
+    ``scripts/4_build_forecast_records_csv.py::compute_lead_hours``. Matching
+    anchors is what makes ``best_historical`` lead-hours lookups line up with
+    ``data/weather/statistical/calibration_stats.csv`` row by row.
+    """
+    end_of_target = datetime.combine(
+        target + timedelta(days=1), time.min, tzinfo=timezone.utc
+    )
+    now = now if now is not None else datetime.now(timezone.utc)
+    return max(0.0, (end_of_target - now).total_seconds() / 3600.0)
 
 
 def _md_event(event: PolymarketEvent) -> str:

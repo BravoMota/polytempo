@@ -24,6 +24,16 @@ All weather calibration artifacts live under **`data/weather/`** at the reposito
 - Re-running fetch commands skips duplicates when output already exists. Partial failures may leave gaps; inspect stderr and re-run.
 - Run times are snapped to synoptic model inits (00/06/12/18 UTC) in CLI date-range mode.
 
+## Lead-hours convention
+
+Canonical for `processed/forecast_records.csv`, `statistical/forecast_errors.csv`, `statistical/calibration_stats.csv`, and the live `polytempo live` lookup:
+
+- `lead_hours = (UTC midnight at the END of target_date) - run_time_utc` in hours. End-of-target is UTC midnight of `target_date + 1 day`. Example: run `2026-04-01T12:00Z`, target `2026-04-02` → `36`.
+- Live `polytempo live` uses the **same** anchor with `run_time_utc = now`, so a live `lead_hours` value indexes the calibration table row-for-row.
+- Tmax itself is aggregated over the **station-local** calendar day (e.g. Europe/London for EGLC) by Open-Meteo. The lead anchor is UTC midnight, not local midnight; that's intentional and applied identically on both sides, so the up-to-1-2h gap (DST / non-UTC stations) only shifts the absolute lead label and never breaks calibration matching.
+
+The legacy JSONL pipeline ([src/polytempo/weather/historical_forecasts.py](../src/polytempo/weather/historical_forecasts.py) `_actual_lead_hours`) anchors at the **start of the local target day** instead. That convention feeds `calibration_stats.json` (the `compute-calibration-stats` JSON / lead-bucket path) and is **not** consumed by `best_historical`. Do not mix the two.
+
 ## Example observation record (`observed_tmax.jsonl`)
 
 One JSON object per line:

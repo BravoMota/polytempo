@@ -31,7 +31,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 4. **For each target day** (loop runs once or twice):
    1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches.
    2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
-   3. **Lead-hours check.** `lead_hours = hours until UTC midnight of target day`. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
+   3. **Lead-hours check.** `lead_hours = hours from now to UTC midnight at the END of the target day` (i.e. UTC midnight of the day after `target_date`). This matches the offline anchor in step 6 / `compute_lead_hours`, so live lead values index `calibration_stats.csv` row-for-row. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
    4. **Distribution build** per `--model-strategy`:
 
       | Strategy | mean | sigma |
@@ -39,7 +39,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
       | `best_historical` (default) | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
       | `ensemble_spread` | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
 
-      `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
+      `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. Live and calibration `lead_hours` share the same end-of-target-date UTC anchor, so the ceiling lookup is exact. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
    5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
    6. **Per-strategy decisions** — `analyze_event_multi` produces three `AnalysisResult`s (one each for `argmax_yes`, `dist_arb`, `mid_band`) sharing the same distribution + edges.
    7. **Mode branch:**
