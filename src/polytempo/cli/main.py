@@ -243,7 +243,7 @@ def live(
             mode = LiveMode.PREVIEW
 
     if day is None:
-        if is_tty and mode is LiveMode.TRADE:
+        if is_tty:
             day_idx = typer.prompt(
                 "Day? 1=today (T+0)  2=tomorrow (T+1)  3=both",
                 default=2,
@@ -779,6 +779,154 @@ def paper_status() -> None:
             typer.echo(
                 f"  {trade.trade_id:<14} {trade.event_id:<14} {trade.bucket_label:<18} "
                 f"{trade.side:<4} {entry:>6.2f} ${trade.stake_usd:>7.2f} {trade.shares:>8.2f}"
+            )
+
+
+@paper_app.command("scenarios")
+def paper_scenarios(
+    event_id: str | None = typer.Option(
+        None,
+        "--event-id",
+        help="Restrict to one event. Defaults to every event with open trades.",
+    ),
+    min_prob: float = typer.Option(
+        0.05,
+        "--min-prob",
+        min=0.0,
+        max=1.0,
+        help="Buckets with current yes_ask below this are rolled into tail rows.",
+    ),
+) -> None:
+    """Per-event scenario PnL: net outcome per possible winning bucket.
+
+    Pulls open trades from every per-strategy ledger, groups by event, then
+    fetches each event from Polymarket for current yes_ask (used to label
+    likely vs unlikely buckets). Low-prob tails are folded into one row each
+    ("X°C or lower" / "Y°C or higher"); the row's PnL is the worst-case net
+    across the rolled-up buckets.
+    """
+    open_by_event: dict[str, dict[str, list]] = {}
+    for strat in _default_strategies():
+        state = read_state(ledger_path_for(strat.name))
+        for trade in state.open_trades:
+            if event_id and trade.event_id != event_id:
+                continue
+            open_by_event.setdefault(trade.event_id, {}).setdefault(
+                strat.name, []
+            ).append(trade)
+
+    if not open_by_event:
+        typer.echo("no open positions on any event")
+        return
+
+    strategy_names = [s.name for s in _default_strategies()]
+
+    for evt_id, by_strat in open_by_event.items():
+        try:
+            event = fetch_event(evt_id)
+        except Exception as exc:
+            typer.echo(f"\nevent {evt_id}: fetch failed ({exc})", err=True)
+            continue
+
+        bucket_labels = [b.label for b in event.buckets]
+        parsed = {b.label: parse_temperature_bucket(b.label) for b in event.buckets}
+        ordered = sorted(
+            bucket_labels,
+            key=lambda lbl: (
+                parsed[lbl].lower_c if parsed[lbl].lower_c is not None else float("-inf")
+            ),
+        )
+        ask_by_label = {b.label: b.yes_ask for b in event.buckets}
+
+        def _scenario_pnl(winner: str) -> dict[str, float]:
+            out: dict[str, float] = {}
+            for strat_name in strategy_names:
+                trades = by_strat.get(strat_name, [])
+                pnl = 0.0
+                for t in trades:
+                    payout = t.shares if (
+                        (t.side == "YES" and t.bucket_label == winner)
+                        or (t.side == "NO" and t.bucket_label != winner)
+                    ) else 0.0
+                    pnl += payout - t.stake_usd
+                out[strat_name] = pnl
+            return out
+
+        yes_bet_labels = {
+            t.bucket_label
+            for trades in by_strat.values()
+            for t in trades
+            if t.side == "YES"
+        }
+
+        def _rollable(lbl: str) -> bool:
+            return (
+                (ask_by_label.get(lbl) or 0.0) < min_prob
+                and lbl not in yes_bet_labels
+            )
+
+        low_tail: list[str] = []
+        keep: list[str] = []
+        high_tail: list[str] = []
+        i = 0
+        while i < len(ordered) and _rollable(ordered[i]):
+            low_tail.append(ordered[i])
+            i += 1
+        j = len(ordered) - 1
+        while j >= i and _rollable(ordered[j]):
+            high_tail.insert(0, ordered[j])
+            j -= 1
+        keep = ordered[i : j + 1]
+
+        rows: list[tuple[str, dict[str, float], float | None]] = []
+        if low_tail:
+            pnls = [_scenario_pnl(w) for w in low_tail]
+            worst = {
+                name: min(p[name] for p in pnls) for name in strategy_names
+            }
+            edge_lbl = low_tail[-1]
+            edge_upper = parsed[edge_lbl].upper_c
+            if parsed[edge_lbl].kind == "or_below":
+                rollup = edge_lbl
+            elif edge_upper is not None:
+                rollup = f"{int(edge_upper - 0.5)}°C or lower"
+            else:
+                rollup = f"{edge_lbl} or lower"
+            rows.append((rollup, worst, None))
+        for label in keep:
+            rows.append((label, _scenario_pnl(label), ask_by_label.get(label)))
+        if high_tail:
+            pnls = [_scenario_pnl(w) for w in high_tail]
+            worst = {
+                name: min(p[name] for p in pnls) for name in strategy_names
+            }
+            edge_lbl = high_tail[0]
+            edge_lower = parsed[edge_lbl].lower_c
+            if parsed[edge_lbl].kind == "or_higher":
+                rollup = edge_lbl
+            elif edge_lower is not None:
+                rollup = f"{int(edge_lower + 0.5)}°C or higher"
+            else:
+                rollup = f"{edge_lbl} or higher"
+            rows.append((rollup, worst, None))
+
+        typer.echo("")
+        typer.echo(f"event {evt_id}: {event.title}")
+        end_iso = event.settlement_date.isoformat() if event.settlement_date else "unknown"
+        typer.echo(f"  settlement_date={end_iso}  rollup_threshold yes_ask<{min_prob}")
+        header = (
+            f"  {'winner':<18} {'mkt':>6} "
+            + " ".join(f"{n:>11}" for n in strategy_names)
+            + f" {'total':>11}"
+        )
+        typer.echo(header)
+        typer.echo("  " + "-" * (len(header) - 2))
+        for label, pnls, ask in rows:
+            mkt = f"{ask:.3f}" if ask is not None else "  -  "
+            cells = " ".join(f"{pnls[n]:>+11.2f}" for n in strategy_names)
+            total = sum(pnls[n] for n in strategy_names)
+            typer.echo(
+                f"  {label:<18} {mkt:>6} {cells} {total:>+11.2f}"
             )
 
 
