@@ -104,6 +104,22 @@ Side-by-side balances for all three strategies plus open positions per strategy.
 polytempo paper status
 ```
 
+### paper scenarios
+
+Per-event scenario PnL table for every event with open trades. For each possible winning bucket, prints net PnL per strategy plus total. Fetches the live event from Polymarket to read current `yes_ask` (market prob).
+
+Unlikely tails are rolled into one row each (`X°C or lower` / `Y°C or higher`); the rolled row's PnL is the **worst case** across the collapsed buckets. Any bucket with a YES position is always kept individual so jackpot/conviction scenarios stay visible.
+
+| Flag | Meaning |
+| --- | --- |
+| `--event-id` | Restrict to one event id. Default: every event with open trades. |
+| `--min-prob` | Rollup threshold on current `yes_ask` (default `0.05`). Buckets below this and with no YES position fold into the tail. |
+
+```bash
+polytempo paper scenarios
+polytempo paper scenarios --event-id 529428 --min-prob 0.10
+```
+
 ### paper settle
 
 Settle every open trade on an event against the winning bucket. Use when you want to force-resolve before Polymarket's own resolution flows through.
