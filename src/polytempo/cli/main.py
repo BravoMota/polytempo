@@ -14,6 +14,7 @@ Exposes the `polytempo` command:
 
 from __future__ import annotations
 
+import sys
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -36,12 +37,14 @@ from polytempo.analysis import (
     analyze_event,
 )
 from polytempo.model.distribution import format_distribution_build_markdown
+from polytempo.markets.buckets import bucket_label_for_value, parse_temperature_bucket
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
     fetch_weather_events,
     first_parseable_weather_event,
 )
+from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
 from polytempo.reports.writer import RunReporter
 from polytempo.paper.ledger import (
     DEFAULT_LEDGER_DIR,
@@ -51,7 +54,7 @@ from polytempo.paper.ledger import (
     read_state,
     settle_event,
 )
-from polytempo.paper.run import RunSummary, run_pipeline
+from polytempo.paper.run import RunSummary, preview_pipeline, run_pipeline
 from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
 from polytempo.strategy.edge import MarketPrice
 from polytempo.weather.calibration_dataset import (
@@ -91,6 +94,17 @@ class ModelStrategy(str, Enum):
 
     ENSEMBLE_SPREAD = MODEL_STRATEGY_ENSEMBLE_SPREAD
     BEST_HISTORICAL = MODEL_STRATEGY_BEST_HISTORICAL
+
+
+class LiveMode(str, Enum):
+    PREVIEW = "preview"
+    TRADE = "trade"
+
+
+class DayChoice(str, Enum):
+    TODAY = "today"
+    TOMORROW = "tomorrow"
+    BOTH = "both"
 
 
 @app.callback()
@@ -183,11 +197,17 @@ def live(
         min=1,
         help="How many weather events to scan when --event-id is not set.",
     ),
-    days_ahead: int = typer.Option(
-        1,
-        "--days-ahead",
-        min=0,
-        help="Target calendar day = today + N (Open-Meteo max temp + Gamma end-date filter). Default 1 = tomorrow.",
+    mode: LiveMode | None = typer.Option(
+        None,
+        "--mode",
+        case_sensitive=False,
+        help="`preview` runs the model only; `trade` also opens paper trades. Prompted on TTY when omitted.",
+    ),
+    day: DayChoice | None = typer.Option(
+        None,
+        "--day",
+        case_sensitive=False,
+        help="Which day(s) to run: `today` (T+0), `tomorrow` (T+1), or `both`. Prompted on TTY when omitted.",
     ),
     model_strategy: ModelStrategy = typer.Option(
         ModelStrategy.ENSEMBLE_SPREAD,
@@ -202,7 +222,11 @@ def live(
         ),
     ),
 ) -> None:
-    """Fetch Polymarket + Open-Meteo data, print analysis, and write a markdown report."""
+    """Fetch Polymarket + Open-Meteo data, run all strategies, optionally open paper trades.
+
+    Interactive on a TTY: prompts for mode (preview/trade) and day (today/tomorrow/both)
+    when those flags are omitted. Non-TTY defaults: ``--mode preview --day tomorrow``.
+    """
     try:
         station = get_station(city)
     except KeyError:
@@ -212,9 +236,65 @@ def live(
         )
         raise typer.Exit(code=1) from None
 
-    target_date = date.today() + timedelta(days=days_ahead)
-    reporter = RunReporter()
+    is_tty = sys.stdin.isatty()
+    if mode is None:
+        if is_tty:
+            mode = LiveMode.TRADE if typer.confirm("Open paper trades?", default=False) else LiveMode.PREVIEW
+        else:
+            mode = LiveMode.PREVIEW
 
+    if day is None:
+        if is_tty and mode is LiveMode.TRADE:
+            day_idx = typer.prompt(
+                "Day? 1=today (T+0)  2=tomorrow (T+1)  3=both",
+                default=2,
+                type=int,
+            )
+            day = {1: DayChoice.TODAY, 2: DayChoice.TOMORROW, 3: DayChoice.BOTH}.get(
+                day_idx, DayChoice.TOMORROW
+            )
+        else:
+            day = DayChoice.TOMORROW
+
+    today = date.today()
+    if day is DayChoice.TODAY:
+        target_dates = [today]
+    elif day is DayChoice.BOTH:
+        target_dates = [today, today + timedelta(days=1)]
+    else:
+        target_dates = [today + timedelta(days=1)]
+
+    if event_id and len(target_dates) > 1:
+        typer.echo(
+            "--event-id with --day both is ambiguous; pick a single day.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    for target_date in target_dates:
+        _run_live_one_day(
+            target_date=target_date,
+            city=city,
+            station=station,
+            limit=limit,
+            event_id=event_id,
+            mode=mode,
+            model_strategy=model_strategy,
+        )
+
+
+def _run_live_one_day(
+    *,
+    target_date: date,
+    city: str,
+    station: Station,
+    limit: int,
+    event_id: str | None,
+    mode: LiveMode,
+    model_strategy: ModelStrategy,
+) -> None:
+    reporter = RunReporter()
+    days_ahead = (target_date - date.today()).days
     try:
         with reporter:
             reporter.section(
@@ -223,6 +303,7 @@ def live(
                     [
                         f"- city: `{city}` (station {station.icao})",
                         f"- target_date: `{target_date.isoformat()}` (days_ahead={days_ahead})",
+                        f"- mode: `{mode.value}`",
                         f"- event mode: {'explicit (--event-id)' if event_id else f'scan (limit={limit})'}",
                         f"- model_strategy: `{model_strategy.value}`",
                     ]
@@ -233,8 +314,7 @@ def live(
                 event = fetch_event(event_id.strip())
                 if event.settlement_date is not None and event.settlement_date != target_date:
                     typer.echo(
-                        f"Warning: event end date {event.settlement_date} != target day {target_date} "
-                        f"(from --days-ahead). Forecast still uses {target_date}.",
+                        f"Warning: event end date {event.settlement_date} != target day {target_date}.",
                         err=True,
                     )
             else:
@@ -250,7 +330,7 @@ def live(
                         "and parseable Celsius buckets. Try a larger --limit or pass --event-id.",
                         err=True,
                     )
-                    raise typer.Exit(code=1)
+                    return
 
             reporter.section("Event", _md_event(event))
 
@@ -262,7 +342,13 @@ def live(
             )
 
             lead_hours = _lead_hours_until_target_day(target_date)
-            result = analyze_event(
+            if lead_hours < 6.0:
+                typer.echo(
+                    f"warning: lead_hours={lead_hours:.1f} < 6 — near settle, forecast value drops and edges sharpen.",
+                    err=True,
+                )
+
+            preview_result = analyze_event(
                 forecast,
                 event,
                 lead_hours=lead_hours,
@@ -271,31 +357,72 @@ def live(
             )
             reporter.section(
                 "Distribution",
-                format_distribution_build_markdown(result.distribution_build),
+                format_distribution_build_markdown(preview_result.distribution_build),
             )
-            reporter.section("Analysis result", _md_result(result))
+
+            strategies = _default_strategies()
+            if mode is LiveMode.TRADE:
+                summary = run_pipeline(forecast, event, strategies, dedupe=True)
+            else:
+                summary = preview_pipeline(forecast, event, strategies)
+
+            reporter.section(
+                "Run outcome",
+                _md_run_summary(summary),
+            )
 
             typer.echo(f"event: {event.title} ({event.event_id})")
             end_s = event.settlement_date.isoformat() if event.settlement_date else "unknown"
             typer.echo(f"event Gamma end date (UTC day): {end_s}")
             typer.echo(
-                f"forecast: {station.city} ({station.icao}) lat={station.latitude} lon={station.longitude} "
-                f"tz={station.timezone} date={target_date.isoformat()} -> {forecast.values_c}"
+                f"forecast: {station.city} ({station.icao}) "
+                f"date={target_date.isoformat()} lead_hours={lead_hours:.1f} -> {forecast.values_c}"
             )
-            if event_id is None:
-                typer.echo(
-                    f"(Event: Gamma list filtered by --city, end date {target_date.isoformat()}, "
-                    "parseable buckets; Open-Meteo uses the contract station for that same day.)\n"
-                )
-            else:
-                typer.echo(
-                    f"(Forecast uses contract station for --city on {target_date.isoformat()}; "
-                    "verify --event-id matches that settlement day.)\n"
-                )
-            typer.echo(_render(result))
+            typer.echo("")
+            typer.echo(_render_run_summary(summary))
+            if mode is LiveMode.TRADE:
+                typer.echo("")
+                for s in summary.strategies:
+                    state = read_state(ledger_path_for(s.name))
+                    typer.echo(
+                        f"  {s.name:<12} balance=${state.balance_usd:>8.2f} "
+                        f"open={len(state.open_trades):>2} settled={state.settled_count:>3} "
+                        f"realized=${state.realized_pnl_usd:>+8.2f}"
+                    )
     finally:
         path = reporter.write()
         typer.echo(f"report written: {path}")
+
+
+def _md_run_summary(summary: RunSummary) -> str:
+    lines = [
+        f"- mode: `{summary.mode}`",
+        f"- resolved: `{summary.resolved}`",
+        f"- winning_label: `{summary.winning_label}`" if summary.winning_label else "- winning_label: `-`",
+        "",
+    ]
+    for s in summary.strategies:
+        lines.append(f"### {s.name} — {s.action}")
+        if s.analysis is not None:
+            lines.append("")
+            lines.append(_md_result(s.analysis))
+        if s.opened:
+            lines.append("")
+            lines.append("opened:")
+            for t in s.opened:
+                lines.append(
+                    f"- {t.bucket_label} side={t.side} entry={t.entry_price:.2f} "
+                    f"stake=${t.stake_usd:.2f} shares={t.shares:.2f} edge={t.edge_pp:.2f}pp"
+                )
+        if s.settled:
+            lines.append("")
+            lines.append("settled:")
+            for t in s.settled:
+                lines.append(
+                    f"- {t.bucket_label} side={t.side} stake=${t.stake_usd:.2f} shares={t.shares:.2f}"
+                )
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _lead_hours_until_target_day(target: date) -> float:
@@ -687,7 +814,7 @@ def paper_open(
     station = get_station(city)
     forecast = fetch_for_station(station, parsed_date).to_forecast_values()
 
-    summary = run_pipeline(forecast, event, _default_strategies())
+    summary = run_pipeline(forecast, event, _default_strategies(), dedupe=True)
     typer.echo(_render_run_summary(summary))
     typer.echo("")
     for s in summary.strategies:
@@ -702,17 +829,92 @@ def paper_open(
 @paper_app.command("settle")
 def paper_settle(
     event_id: str = typer.Option(..., "--event-id", help="Polymarket event id."),
-    winner: str = typer.Option(..., "--winner", help="Winning bucket label, e.g. \"23°C\"."),
+    winner: str | None = typer.Option(
+        None,
+        "--winner",
+        help='Manual override: winning bucket label, e.g. "29°C". Skips Wunderground.',
+    ),
+    observed_tmax: float | None = typer.Option(
+        None,
+        "--observed-tmax",
+        help="Manual override: observed Tmax in °C. Mapped to a bucket via event labels.",
+    ),
+    city: str = typer.Option(
+        "london",
+        "--city",
+        help="Contract station for Wunderground lookup (default london/EGLC).",
+    ),
 ) -> None:
-    """Settle every open trade on this event against the winning bucket."""
-    settled = settle_event(event_id, winner)
-    if not settled:
-        typer.echo("no open trades for this event")
-        return
-    typer.echo(f"settled {len(settled)} trade(s) against winner={winner!r}")
-    for trade in settled:
-        outcome = "YES" if trade.bucket_label == winner else "NO"
-        typer.echo(f"  {trade.trade_id} {trade.bucket_label}  -> {outcome}")
-    state = read_state(DEFAULT_LEDGER_PATH)
-    typer.echo(f"balance:  ${state.balance_usd:.2f}")
-    typer.echo(f"realized: ${state.realized_pnl_usd:.2f}")
+    """Settle every open trade on this event across all per-strategy ledgers.
+
+    Winner resolution order: --winner > --observed-tmax > Wunderground fetch
+    (station from --city, date from the event's settlement_date).
+    """
+    event = fetch_event(event_id.strip())
+
+    if winner is not None:
+        winning_label = winner
+        source = "manual --winner"
+    else:
+        if observed_tmax is None:
+            try:
+                station = get_station(city)
+            except KeyError:
+                typer.echo(
+                    f"Unknown --city {city!r}. Registry keys: {', '.join(sorted(STATIONS))}",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from None
+            if event.settlement_date is None:
+                typer.echo(
+                    "event has no settlement_date; pass --observed-tmax or --winner",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            try:
+                obs = fetch_wunderground_observed_tmax(station.icao, event.settlement_date)
+            except Exception as exc:
+                typer.echo(f"wunderground fetch failed: {exc}", err=True)
+                raise typer.Exit(code=1) from None
+            observed_tmax = obs.observed_tmax_c
+            source = f"wunderground {station.icao}@{event.settlement_date.isoformat()}"
+        else:
+            source = "manual --observed-tmax"
+
+        parsed_buckets = [parse_temperature_bucket(b.label) for b in event.buckets]
+        try:
+            winning_label = bucket_label_for_value(observed_tmax, parsed_buckets)
+        except ValueError as exc:
+            typer.echo(f"bucket mapping failed: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+
+    obs_note = f" observed={observed_tmax:.2f}°C" if observed_tmax is not None else ""
+    typer.echo(f"winner={winning_label!r} source={source}{obs_note}")
+
+    strategies = _default_strategies()
+    total_settled = 0
+    for strat in strategies:
+        strategy = strat.name
+        path = ledger_path_for(strategy)
+        if not path.exists():
+            continue
+        settled = settle_event(event_id, winning_label, path=path)
+        state = read_state(path)
+        total_settled += len(settled)
+        typer.echo("")
+        if not settled:
+            typer.echo(f"[{strategy}] no open trades for this event")
+        else:
+            typer.echo(f"[{strategy}] settled {len(settled)} trade(s):")
+            for trade in settled:
+                outcome = "YES" if trade.bucket_label == winning_label else "NO"
+                typer.echo(f"  {trade.trade_id} {trade.bucket_label}  -> {outcome}")
+        typer.echo(
+            f"  balance=${state.balance_usd:.2f} "
+            f"open={len(state.open_trades)} "
+            f"settled={state.settled_count} "
+            f"realized=${state.realized_pnl_usd:+.2f}"
+        )
+
+    if total_settled == 0:
+        typer.echo("\nno open trades matched this event across any strategy")

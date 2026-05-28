@@ -12,7 +12,12 @@ from polytempo.paper.ledger import (
     ledger_path_for,
     read_state,
 )
-from polytempo.paper.run import RUNS_FILENAME, run_pipeline
+from polytempo.paper.run import (
+    RUNS_FILENAME,
+    has_open_trades_on_event,
+    preview_pipeline,
+    run_pipeline,
+)
 from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
 from polytempo.weather.schema import ForecastValues
 
@@ -160,6 +165,59 @@ def test_resolved_with_no_winner_records_action(tmp_path: Path) -> None:
     assert summary.winning_label is None
     for s in summary.strategies:
         assert s.action == "RESOLVED_NO_WINNER"
+
+
+def test_has_open_trades_on_event_false_when_empty(tmp_path: Path) -> None:
+    assert has_open_trades_on_event("evt-1", base_dir=tmp_path) is False
+
+
+def test_has_open_trades_on_event_true_after_open(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+    assert has_open_trades_on_event("evt-1", base_dir=tmp_path) is True
+    assert has_open_trades_on_event("evt-other", base_dir=tmp_path) is False
+
+
+def test_dedupe_blocks_second_open(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+
+    first = run_pipeline(forecast, event, _strategies(), base_dir=tmp_path, dedupe=True)
+    assert any(s.action == "OPENED" for s in first.strategies)
+
+    second = run_pipeline(forecast, event, _strategies(), base_dir=tmp_path, dedupe=True)
+    for s in second.strategies:
+        assert s.action == "DEDUPED_OPEN_TRADES_EXIST"
+        assert s.opened == []
+
+
+def test_preview_pipeline_writes_runs_log_no_opens(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+
+    summary = preview_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+
+    assert summary.mode == "preview"
+    for s in summary.strategies:
+        assert s.action == "PREVIEW"
+        assert s.opened == []
+        path = ledger_path_for(s.name, base_dir=tmp_path)
+        assert not path.exists()
+
+    runs_path = tmp_path / RUNS_FILENAME
+    rows = [json.loads(line) for line in runs_path.read_text().splitlines() if line]
+    assert len(rows) == 1
+    assert rows[0]["mode"] == "preview"
+
+
+def test_run_summary_mode_trade_in_runs_log(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+    runs_path = tmp_path / RUNS_FILENAME
+    row = json.loads(runs_path.read_text().splitlines()[0])
+    assert row["mode"] == "trade"
 
 
 def test_skip_when_strategy_opens_nothing(tmp_path: Path) -> None:

@@ -251,7 +251,7 @@ def analyze_event_multi(
     bucket_labels = [bucket.label for bucket in event.buckets]
     calibrated = calibrate_forecast(forecast, calibration_rule)
     buckets = [parse_temperature_bucket(label) for label in bucket_labels]
-    distribution = build_distribution(calibrated.values_c)
+    distribution, distribution_build = build_distribution(calibrated.values_c)
     probabilities = probabilities_for_buckets(distribution, buckets)
     quotes = [
         ProbabilityQuote(label=p.label, probability=p.probability)
@@ -287,6 +287,7 @@ def analyze_event_multi(
         results[strategy.name] = AnalysisResult(
             distribution_mean_c=distribution.mean_c,
             distribution_sigma_c=distribution.sigma_c,
+            distribution_build=distribution_build,
             rows=rows,
         )
     return results

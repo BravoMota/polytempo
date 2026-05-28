@@ -72,3 +72,30 @@ def parse_temperature_bucket(label: str) -> TemperatureBucket:
         )
 
     raise ValueError(f"unknown temperature bucket label: {label!r}")
+
+
+def bucket_label_for_value(
+    value_c: float,
+    buckets: list[TemperatureBucket],
+) -> str:
+    """Return the label of the bucket whose half-open interval contains ``value_c``.
+
+    Open-ended kinds: ``or_below`` matches ``value_c < upper_c``; ``or_higher``
+    and ``above`` match ``value_c >= lower_c``. Raises ``ValueError`` if no
+    bucket matches (event labels do not cover this value).
+    """
+    for bucket in buckets:
+        if bucket.kind in ("or_higher", "above"):
+            if bucket.lower_c is not None and value_c >= bucket.lower_c:
+                return bucket.label
+        elif bucket.kind == "or_below":
+            if bucket.upper_c is not None and value_c < bucket.upper_c:
+                return bucket.label
+        else:
+            if (
+                bucket.lower_c is not None
+                and bucket.upper_c is not None
+                and bucket.lower_c <= value_c < bucket.upper_c
+            ):
+                return bucket.label
+    raise ValueError(f"no bucket covers value {value_c}")

@@ -30,6 +30,7 @@ from polytempo.paper.ledger import (
     OpenTrade,
     ledger_path_for,
     open_trades_from_analysis,
+    read_state,
     settle_event,
 )
 from polytempo.strategy.base import Strategy
@@ -59,6 +60,23 @@ class RunSummary:
     resolved: bool
     winning_label: str | None
     strategies: list[StrategyRunResult]
+    mode: str = "trade"
+
+
+def has_open_trades_on_event(
+    event_id: str,
+    base_dir: Path = DEFAULT_LEDGER_DIR,
+) -> bool:
+    """True if any per-strategy ledger has an unsettled trade on this event."""
+    if not base_dir.exists():
+        return False
+    for path in base_dir.glob("*.jsonl"):
+        if path.name == RUNS_FILENAME:
+            continue
+        state = read_state(path)
+        if any(t.event_id == event_id for t in state.open_trades):
+            return True
+    return False
 
 
 def run_pipeline(
@@ -67,14 +85,25 @@ def run_pipeline(
     strategies: list[Strategy],
     base_dir: Path = DEFAULT_LEDGER_DIR,
     calibration_rule: CalibrationRule | None = None,
+    dedupe: bool = False,
 ) -> RunSummary:
-    """Settle if the event is resolved; otherwise open trades per strategy."""
+    """Settle if the event is resolved; otherwise open trades per strategy.
+
+    When ``dedupe=True`` and any open trade already exists for ``event.event_id``
+    across any per-strategy ledger, no new OPENs are written; each strategy
+    reports ``DEDUPED_OPEN_TRADES_EXIST``.
+    """
     ts = datetime.now(timezone.utc).isoformat()
     resolved = is_event_resolved(event)
     winning_label = winning_label_from_event(event) if resolved else None
 
     if resolved:
         results = _settle_all(event, strategies, winning_label, base_dir)
+    elif dedupe and has_open_trades_on_event(event.event_id, base_dir):
+        results = [
+            StrategyRunResult(name=s.name, action="DEDUPED_OPEN_TRADES_EXIST")
+            for s in strategies
+        ]
     else:
         results = _open_all(forecast, event, strategies, base_dir, calibration_rule)
 
@@ -85,6 +114,55 @@ def run_pipeline(
         resolved=resolved,
         winning_label=winning_label,
         strategies=results,
+        mode="trade",
+    )
+    _append_runs_log(summary, base_dir)
+    return summary
+
+
+def preview_pipeline(
+    forecast: ForecastValues,
+    event: PolymarketEvent,
+    strategies: list[Strategy],
+    base_dir: Path = DEFAULT_LEDGER_DIR,
+    calibration_rule: CalibrationRule | None = None,
+) -> RunSummary:
+    """Run all strategies and append a runs.jsonl snapshot; write no OPENs."""
+    from polytempo.analysis import analyze_event_multi
+
+    ts = datetime.now(timezone.utc).isoformat()
+    resolved = is_event_resolved(event)
+    winning_label = winning_label_from_event(event) if resolved else None
+
+    if resolved:
+        results = [
+            StrategyRunResult(name=s.name, action="RESOLVED")
+            for s in strategies
+        ]
+    else:
+        analyses = analyze_event_multi(
+            forecast,
+            event,
+            strategies=strategies,
+            calibration_rule=calibration_rule,
+        )
+        results = [
+            StrategyRunResult(
+                name=s.name,
+                action="PREVIEW",
+                analysis=analyses[s.name],
+            )
+            for s in strategies
+        ]
+
+    summary = RunSummary(
+        ts=ts,
+        event_id=event.event_id,
+        event_title=event.title,
+        resolved=resolved,
+        winning_label=winning_label,
+        strategies=results,
+        mode="preview",
     )
     _append_runs_log(summary, base_dir)
     return summary
@@ -146,6 +224,7 @@ def _append_runs_log(summary: RunSummary, base_dir: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "ts": summary.ts,
+        "mode": summary.mode,
         "event_id": summary.event_id,
         "event_title": summary.event_title,
         "resolved": summary.resolved,

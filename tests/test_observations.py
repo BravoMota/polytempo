@@ -1,25 +1,16 @@
 """Tests for observed Tmax JSONL helpers and Wunderground script parsing."""
 
 from datetime import date
-import importlib.util
-from pathlib import Path
 
 import pytest
 
+from polytempo.weather import wunderground as _WU_MODULE
 from polytempo.weather.observations import (
     ObservedTmax,
     parse_observation_records,
     read_observations_jsonl,
     write_observations_jsonl,
 )
-
-_WU_SCRIPT_PATH = (
-    Path(__file__).resolve().parent.parent / "scripts" / "3_fetch_wunderground_observations.py"
-)
-_WU_SPEC = importlib.util.spec_from_file_location("fetch_wunderground_observations", _WU_SCRIPT_PATH)
-assert _WU_SPEC is not None and _WU_SPEC.loader is not None
-_WU_MODULE = importlib.util.module_from_spec(_WU_SPEC)
-_WU_SPEC.loader.exec_module(_WU_MODULE)
 
 
 def test_parse_observation_records_validates_required_keys() -> None:

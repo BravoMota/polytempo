@@ -11,19 +11,118 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## live
+## demo
 
-Fetch a Polymarket event + Open-Meteo forecast for the contract station, run the analysis, and write a markdown report. The forecast distribution is built per `--model-strategy`:
-
-| Strategy | mean | sigma |
-| --- | --- | --- |
-| `ensemble_spread` (default) | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
-| `best_historical` | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
-
-`best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` in the report and CLI output (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason`).
+Run the analysis against hardcoded fake inputs (no APIs, no files). Prints the per-bucket table to stdout. Good for smoke-testing the analysis layer in isolation.
 
 ```bash
-polytempo live --city london --days-ahead 1 --model-strategy best_historical
+polytempo demo
+```
+
+## live
+
+Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all three Phase B strategies, optionally open paper trades, and write one Markdown report per target day.
+
+### Step-by-step (what happens on `polytempo live`)
+
+1. **Resolve station** from `--city` (default `london`) → `Station` (EGLC for London) via `weather/stations.py`.
+2. **Resolve `--mode`** — `preview` (model only) or `trade` (also open paper trades). If TTY and flag omitted, prompts `Open paper trades? [y/N]`. Non-TTY default: `preview`.
+3. **Resolve `--day`** — `today` (T+0), `tomorrow` (T+1), or `both`. If TTY and trade mode chosen, prompts `1=today  2=tomorrow  3=both`. Non-TTY default: `tomorrow`.
+4. **For each target day** (loop runs once or twice):
+   1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches.
+   2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
+   3. **Lead-hours check.** `lead_hours = hours until UTC midnight of target day`. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
+   4. **Distribution build** per `--model-strategy`:
+
+      | Strategy | mean | sigma |
+      | --- | --- | --- |
+      | `ensemble_spread` (default) | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
+      | `best_historical` | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
+
+      `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
+   5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
+   6. **Per-strategy decisions** — `analyze_event_multi` produces three `AnalysisResult`s (one each for `argmax_yes`, `dist_arb`, `mid_band`) sharing the same distribution + edges.
+   7. **Mode branch:**
+      - **`preview`**: `preview_pipeline` — no ledger writes. One row appended to `paper_ledger/runs.jsonl` with `mode="preview"` (audit trail).
+      - **`trade`**: `run_pipeline(..., dedupe=True)`. **Dedupe**: if any open trade already exists for `event_id` across any per-strategy ledger, every strategy returns `DEDUPED_OPEN_TRADES_EXIST` and no OPEN is written. Otherwise each strategy appends OPEN records to its own ledger (`paper_ledger/<strategy>.jsonl`). One row appended to `runs.jsonl` with `mode="trade"`.
+   8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-strategy result tables + opened/settled trades).
+   9. **Stdout summary** — side-by-side strategy actions; in trade mode, per-strategy balances after writes.
+
+### Flags
+
+| Flag | Meaning |
+| --- | --- |
+| `--mode {preview,trade}` | Preview = model only. Trade = also opens paper trades. Prompted on TTY when omitted. |
+| `--day {today,tomorrow,both}` | Target day(s). Prompted on TTY when `--mode trade`. Default `tomorrow`. |
+| `--event-id` | Pin a specific Gamma event id (one day only; not compatible with `--day both`). |
+| `--city` | Contract station registry key (default `london`). |
+| `--limit` | Max events to scan when `--event-id` is not set (default `20`). |
+| `--model-strategy` | `ensemble_spread` (default) or `best_historical`. |
+
+### Examples
+
+```bash
+# Interactive — prompts mode and day
+polytempo live
+
+# Cron / non-interactive — preview both days
+polytempo live --mode preview --day both --city london
+
+# Trade tomorrow with calibrated distribution
+polytempo live --mode trade --day tomorrow --model-strategy best_historical
+```
+
+`live` is the canonical entrypoint. `paper open` below remains as a thin per-event wrapper for scripts that already use it.
+
+## paper (Phase B)
+
+Paper-trading ledger across **three strategies in parallel** — `argmax_yes`, `dist_arb`, `mid_band`. Each strategy gets its own JSONL ledger under `paper_ledger/` (e.g. `paper_ledger/argmax_yes.jsonl`). Ledgers are committed to git (shared state across machines); avoid concurrent runs.
+
+No live orders. No active-sell / profit-taking yet (deferred to Phase D — trades only settle at event resolution).
+
+### paper open
+
+Fetch event + forecast, run all three strategies through the pipeline, open trades. Auto-settles if the event already resolved.
+
+| Flag | Meaning |
+| --- | --- |
+| `--event-id` | Polymarket Gamma event id |
+| `--date` | Settlement date `YYYY-MM-DD` (Open-Meteo target day) |
+| `--city` | Contract station for Open-Meteo (default `london`) |
+
+```bash
+polytempo paper open --event-id 509200 --date 2026-05-23 --city london
+```
+
+Prints a side-by-side run summary (per-strategy `OPEN`/`SETTLE` actions) and updated balances per ledger.
+
+### paper status
+
+Side-by-side balances for all three strategies plus open positions per strategy.
+
+```bash
+polytempo paper status
+```
+
+### paper settle
+
+Settle every open trade on an event against the winning bucket. Use when you want to force-resolve before Polymarket's own resolution flows through.
+
+| Flag | Meaning |
+| --- | --- |
+| `--event-id` | Polymarket event id |
+| `--winner` | Winning bucket label, e.g. `"23°C"` |
+
+```bash
+polytempo paper settle --event-id 509200 --winner "29°C"
+```
+
+### paper list-london
+
+List active London weather events from Polymarket Gamma.
+
+```bash
+polytempo paper list-london --limit 20
 ```
 
 ## fetch-historical-forecasts
