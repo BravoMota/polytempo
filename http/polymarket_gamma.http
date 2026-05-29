@@ -14,3 +14,13 @@ GET {{gamma_base}}/events
 
 ### Fetch one event by id
 GET {{gamma_base}}/events/{{event_id}}
+
+# Live order books (CLOB) — source for executable prices, not Gamma's cached fields.
+@clob_base = https://clob.polymarket.com
+@token_id = REPLACE_WITH_CLOB_TOKEN_ID
+
+### Batch order books by clob token id (one request per event's buckets)
+POST {{clob_base}}/books
+Content-Type: application/json
+
+[{ "token_id": "{{token_id}}" }]

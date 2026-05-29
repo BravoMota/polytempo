@@ -29,7 +29,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 2. **Resolve `--mode`** — `preview` (model only) or `trade` (also open paper trades). If TTY and flag omitted, prompts `Open paper trades? [y/N]`. Non-TTY default: `preview`.
 3. **Resolve `--day`** — `today` (T+0), `tomorrow` (T+1), or `both`. If TTY and trade mode chosen, prompts `1=today  2=tomorrow  3=both`. Non-TTY default: `tomorrow`. `--days-ahead N` overrides this: it targets a single day = `today + N` and skips the prompt.
 4. **For each target day** (loop runs once or twice):
-   1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches.
+   1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches. The event is then run through `hydrate_prices`, which replaces each bucket's `yes_bid`/`yes_ask`/`spread`/`liquidity_usd` with the live **CLOB** order book (`POST /books`); Gamma's cached price fields are discovery-only and are never used for edge.
    2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
    3. **Lead-hours check.** `lead_hours = hours from now to UTC midnight at the END of the target day` (i.e. UTC midnight of the day after `target_date`). This matches the offline anchor in step 6 / `compute_lead_hours`, so live lead values index `calibration_stats.csv` row-for-row. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
    4. **Distribution build** per `--model-strategy`:
@@ -345,6 +345,6 @@ Manual [REST Client `.http` requests](http/) under `http/`:
 - `http/open_meteo_single_runs.http` — minimal Single Runs example (current fetch CLI shape)
 - `http/open_meteo_calibration_dataset_exploration.http` — **API capability probes** from `docs/research/single-run-api_study.md` (Single Runs, Previous Runs, metadata, anti-patterns)
 - `http/open_meteo_forecast.http` — current/live forecast smoke test (`api.open-meteo.com`)
-- `http/polymarket_gamma.http` — Gamma event payload inspection
+- `http/polymarket_gamma.http` — Gamma event payload inspection + CLOB `POST /books` live order-book inspection
 
 These files are **not** part of the Python package. Use them to inspect API payload shapes before coding parsers. Do **not** use them in live analysis.

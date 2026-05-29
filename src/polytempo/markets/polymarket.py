@@ -6,7 +6,7 @@ and rules. Should not make trading decisions.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 
 import httpx
@@ -32,6 +32,7 @@ class PolymarketBucket:
     rules: str | None
     resolved: bool = False
     outcome: str | None = None
+    yes_token_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ def parse_event_payload(payload: dict) -> PolymarketEvent:
                 rules=market.get("description"),
                 resolved=resolved,
                 outcome=outcome,
+                yes_token_id=_parse_yes_token_id(market.get("clobTokenIds")),
             )
         )
 
@@ -143,6 +145,123 @@ def _parse_resolution(market: dict) -> tuple[bool, str | None]:
     if yes_value == 0.0:
         return True, "NO"
     return closed, None
+
+
+@dataclass(frozen=True)
+class ClobQuote:
+    """Live best bid/ask, spread, and executable liquidity from the CLOB book."""
+
+    yes_bid: float | None
+    yes_ask: float | None
+    spread: float | None
+    liquidity_usd: float | None
+
+
+def fetch_clob_book(
+    token_ids: list[str],
+    base_url: str = "https://clob.polymarket.com",
+) -> dict[str, ClobQuote]:
+    """Fetch live order books for ``token_ids`` via the CLOB ``POST /books`` endpoint.
+
+    Returns a map from token id to its ``ClobQuote``. Best bid is the highest resting
+    bid price, best ask the lowest resting ask price; an empty side stays ``None``
+    (never synthesized to 0/1). ``liquidity_usd`` is the total notional resting on
+    both sides (sum of ``size * price``).
+    """
+    if not token_ids:
+        return {}
+
+    url = f"{base_url.rstrip('/')}/books"
+    response = httpx.post(url, json=[{"token_id": token_id} for token_id in token_ids])
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("books response must be a list")
+
+    quotes: dict[str, ClobQuote] = {}
+    for book in payload:
+        if not isinstance(book, dict):
+            continue
+        asset_id = book.get("asset_id")
+        if asset_id is None:
+            continue
+        quotes[str(asset_id)] = _quote_from_book(book)
+    return quotes
+
+
+def hydrate_prices(
+    event: PolymarketEvent,
+    base_url: str = "https://clob.polymarket.com",
+) -> PolymarketEvent:
+    """Return ``event`` with bucket prices/liquidity replaced by live CLOB book data.
+
+    Gamma's ``bestBid``/``bestAsk``/``liquidityNum`` are cached snapshots that lag the
+    live book and can quote phantom prices on an empty side. This overwrites
+    ``yes_bid``/``yes_ask``/``spread``/``liquidity_usd`` from the live CLOB book for
+    every bucket that carries a YES token id. Buckets without a token id (or with an
+    empty book) are left as-is. Call only on decision paths (strategy/edge); discovery
+    and listing paths can keep raw Gamma data.
+    """
+    token_ids = [b.yes_token_id for b in event.buckets if b.yes_token_id]
+    if not token_ids:
+        return event
+
+    quotes = fetch_clob_book(token_ids, base_url=base_url)
+
+    hydrated: list[PolymarketBucket] = []
+    for bucket in event.buckets:
+        quote = quotes.get(bucket.yes_token_id) if bucket.yes_token_id else None
+        if quote is None:
+            hydrated.append(bucket)
+            continue
+        hydrated.append(
+            replace(
+                bucket,
+                yes_bid=quote.yes_bid,
+                yes_ask=quote.yes_ask,
+                spread=quote.spread,
+                liquidity_usd=quote.liquidity_usd,
+            )
+        )
+    return replace(event, buckets=hydrated)
+
+
+def _quote_from_book(book: dict) -> ClobQuote:
+    """Reduce one CLOB ``/books`` order book into best bid/ask, spread, liquidity."""
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    best_bid = max((float(b["price"]) for b in bids), default=None)
+    best_ask = min((float(a["price"]) for a in asks), default=None)
+    spread = best_ask - best_bid if best_bid is not None and best_ask is not None else None
+    notional = sum(float(o["size"]) * float(o["price"]) for o in (*bids, *asks))
+    liquidity_usd = notional if notional > 0 else None
+    return ClobQuote(
+        yes_bid=best_bid,
+        yes_ask=best_ask,
+        spread=spread,
+        liquidity_usd=liquidity_usd,
+    )
+
+
+def _parse_yes_token_id(value: object) -> str | None:
+    """Extract the YES clob token id (element ``[0]``) from Gamma ``clobTokenIds``.
+
+    Like ``outcomePrices``, the field is sometimes a JSON-encoded string and
+    sometimes a list. The first element is the YES outcome token.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            import json
+
+            try:
+                value = json.loads(text)
+            except ValueError:
+                return None
+    if not isinstance(value, list) or not value:
+        return None
+    token = value[0]
+    return str(token) if token not in (None, "") else None
 
 
 def to_market_prices(event: PolymarketEvent) -> list[MarketPrice]:

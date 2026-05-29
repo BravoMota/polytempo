@@ -43,7 +43,14 @@ station, never a city centroid.
 
 ### markets/
 
-Fetch Polymarket market data and parse temperature bucket labels.
+Fetch Polymarket data and parse temperature bucket labels. **Gamma**
+(`gamma-api.polymarket.com`) is used for *discovery* — event/bucket metadata,
+settlement date, clob token ids, and resolution. Executable prices
+(`yes_bid`/`yes_ask`/`spread`/`liquidity_usd`) come from the live **CLOB** order
+book (`clob.polymarket.com` `POST /books`) via `hydrate_prices`, not Gamma's cached
+snapshot fields, which lag the book and can quote a phantom price on an empty side.
+Hydration is applied on decision paths only (`live`, `paper open`); pure
+discovery/listing paths keep raw Gamma data.
 
 ### model/
 

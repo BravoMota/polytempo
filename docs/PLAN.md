@@ -32,7 +32,7 @@ Phase 9 complete: paper trading ledger (paper/ledger.py) + `polytempo paper {ope
 Current scope:
 
 ```text
-Polymarket/Gamma ingestion: implemented (HTTP client + payload parsing).
+Polymarket ingestion: implemented. Gamma for discovery/resolution (HTTP client + payload parsing); executable prices (bid/ask/spread/liquidity) hydrated from the live CLOB `/books` order book on decision paths.
 Open-Meteo ingestion: implemented (multi-model daily max temperature).
 weather/schema.py: ForecastValues (calibration + analyze_event). DailyMaxForecast.to_forecast_values() bridges fetch → schema.
 analyze_event: Polymarket event + ForecastValues + optional CalibrationRule → AnalysisResult.
@@ -198,7 +198,7 @@ otherwise SKIP
 ```
 
 Spread is a warning only, not a hard blocker, because the product currently assumes BUY_YES and hold until settlement.
-Liquidity is a crude temporary proxy; later prefer ask-side depth for the intended stake size.
+Liquidity is now the live CLOB book depth (total notional resting on both sides), not Gamma's cached `liquidityNum`; later prefer ask-side depth sized for the intended stake.
 
 Tests:
 
@@ -273,15 +273,19 @@ markets/polymarket.py
 Fetch:
 
 ```text
-event title
-bucket labels
-YES ask/bid
-spread
-liquidity
-rules
+event title          (Gamma)
+bucket labels        (Gamma)
+clob token ids       (Gamma)
+resolution           (Gamma)
+rules                (Gamma)
+YES ask/bid          (CLOB /books live order book)
+spread               (CLOB /books live order book)
+liquidity            (CLOB /books live order book)
 ```
 
-**Status:** complete (`markets/polymarket.py`). Forecast and calibration layers build on this (Phases 7–8).
+**Status:** complete (`markets/polymarket.py`). Gamma drives discovery; `hydrate_prices`
+overwrites prices/liquidity from the live CLOB order book on decision paths (`live`,
+`paper open`). Forecast and calibration layers build on this (Phases 7–8).
 
 ---
 

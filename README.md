@@ -22,7 +22,7 @@ Run the local end-to-end demo on hardcoded fake inputs:
 polytempo demo
 ```
 
-Run against **live** Polymarket (Gamma) + Open-Meteo. By default **`--city london`** and **`--days-ahead 1`** (tomorrow): Gamma is queried for weather events whose **end date** falls on that UTC day (`end_date_min` / `end_date_max`), then the first **London** title/slug match with **parseable** Celsius buckets is used. Open-Meteo requests the **same calendar day** max temperature at the **London contract station** (EGLC) from `weather/stations.py`.
+Run against **live** Polymarket + Open-Meteo. By default **`--city london`** and **`--days-ahead 1`** (tomorrow): Gamma is queried for weather events whose **end date** falls on that UTC day (`end_date_min` / `end_date_max`), then the first **London** title/slug match with **parseable** Celsius buckets is used. Executable prices (bid/ask/spread/liquidity) are then pulled from the live **CLOB** order book (`POST /books`) — Gamma supplies discovery and resolution only, never the prices that drive edge. Open-Meteo requests the **same calendar day** max temperature at the **London contract station** (EGLC) from `weather/stations.py`.
 
 ```bash
 polytempo live

@@ -42,6 +42,7 @@ from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
     fetch_weather_events,
+    hydrate_prices,
     first_parseable_weather_event,
 )
 from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
@@ -346,6 +347,7 @@ def _run_live_one_day(
                     )
                     return
 
+            event = hydrate_prices(event)
             reporter.section("Event", _md_event(event))
 
             daily = fetch_for_station(station, target_date)
@@ -1007,7 +1009,7 @@ def paper_open(
 ) -> None:
     """Run all strategies against one event. Settles automatically if resolved."""
     parsed_date = date.fromisoformat(target_date)
-    event = fetch_event(event_id)
+    event = hydrate_prices(fetch_event(event_id))
     station = get_station(city)
     forecast = fetch_for_station(station, parsed_date).to_forecast_values()
 

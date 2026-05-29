@@ -8,7 +8,7 @@ The system should answer:
 
 > Given weather forecasts and market prices, is any bucket mispriced enough to justify a trade?
 
-Current progress: Phases 0-6 are complete (through Polymarket/Gamma market ingestion). The next phase is Phase 7: Open-Meteo (or other) forecast ingestion and normalization.
+Current progress: Phases 0-9 are complete — Polymarket ingestion (Gamma discovery + live CLOB order-book prices), Open-Meteo forecast ingestion, calibration, edge/decision, and the paper-trading ledger. The next phase is Phase 10: reports.
 
 ## Non-goals
 

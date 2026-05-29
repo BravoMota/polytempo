@@ -8,9 +8,11 @@ import pytest
 
 from polytempo.markets.polymarket import (
     PolymarketEvent,
+    fetch_clob_book,
     fetch_event,
     fetch_weather_events,
     first_parseable_weather_event,
+    hydrate_prices,
     parse_event_payload,
     to_market_prices,
 )
@@ -357,6 +359,127 @@ def test_outcome_prices_accepts_json_string() -> None:
     event = parse_event_payload(payload)
     assert event.buckets[0].resolved is True
     assert event.buckets[0].outcome == "YES"
+
+
+def test_parse_event_payload_reads_clob_token_id_from_list() -> None:
+    payload = _payload()
+    payload["markets"][0]["clobTokenIds"] = ["yes-token-1", "no-token-1"]
+    event = parse_event_payload(payload)
+
+    assert event.buckets[0].yes_token_id == "yes-token-1"
+
+
+def test_parse_event_payload_reads_clob_token_id_from_json_string() -> None:
+    payload = _payload()
+    payload["markets"][0]["clobTokenIds"] = '["yes-token-1", "no-token-1"]'
+    event = parse_event_payload(payload)
+
+    assert event.buckets[0].yes_token_id == "yes-token-1"
+
+
+def test_parse_event_payload_missing_clob_token_id_is_none() -> None:
+    event = parse_event_payload(_payload())
+
+    assert event.buckets[0].yes_token_id is None
+
+
+def _books_response() -> list[dict]:
+    return [
+        {
+            "asset_id": "tok-bid-ask",
+            "bids": [{"price": "0.40", "size": "100"}, {"price": "0.42", "size": "50"}],
+            "asks": [{"price": "0.48", "size": "30"}, {"price": "0.45", "size": "20"}],
+        },
+        {
+            "asset_id": "tok-empty-ask",
+            "bids": [{"price": "0.99", "size": "10"}],
+            "asks": [],
+        },
+    ]
+
+
+def _patch_books(monkeypatch: pytest.MonkeyPatch, response: list[dict]) -> list[dict]:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return response
+
+    def fake_post(url: str, json: list[dict]) -> FakeResponse:
+        calls.append({"url": url, "body": json})
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    return calls
+
+
+def test_fetch_clob_book_reduces_book_to_best_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _patch_books(monkeypatch, _books_response())
+
+    quotes = fetch_clob_book(["tok-bid-ask", "tok-empty-ask"], base_url="https://clob.test/")
+
+    assert calls[0]["url"] == "https://clob.test/books"
+    assert calls[0]["body"] == [{"token_id": "tok-bid-ask"}, {"token_id": "tok-empty-ask"}]
+
+    q = quotes["tok-bid-ask"]
+    assert q.yes_bid == pytest.approx(0.42)  # highest bid
+    assert q.yes_ask == pytest.approx(0.45)  # lowest ask
+    assert q.spread == pytest.approx(0.03)
+    # notional = 100*0.40 + 50*0.42 + 30*0.48 + 20*0.45 = 84.4
+    assert q.liquidity_usd == pytest.approx(84.4)
+
+
+def test_fetch_clob_book_empty_side_stays_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_books(monkeypatch, _books_response())
+
+    q = fetch_clob_book(["tok-empty-ask"])["tok-empty-ask"]
+
+    assert q.yes_bid == pytest.approx(0.99)
+    assert q.yes_ask is None
+    assert q.spread is None
+
+
+def test_fetch_clob_book_empty_token_list_skips_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_post(*args: object, **kwargs: object) -> None:
+        raise AssertionError("should not call /books with no tokens")
+
+    monkeypatch.setattr(httpx, "post", fail_post)
+
+    assert fetch_clob_book([]) == {}
+
+
+def test_hydrate_prices_overwrites_gamma_with_live_book(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _payload()
+    payload["markets"][0]["clobTokenIds"] = ["tok-bid-ask", "no"]
+    # phantom Gamma ask with an empty live ask side -> becomes None after hydration
+    payload["markets"][1]["bestAsk"] = 1.0
+    payload["markets"][1]["clobTokenIds"] = ["tok-empty-ask", "no"]
+    event = parse_event_payload(payload)
+    _patch_books(monkeypatch, _books_response())
+
+    hydrated = hydrate_prices(event, base_url="https://clob.test/")
+
+    live = hydrated.buckets[0]
+    assert live.yes_bid == pytest.approx(0.42)
+    assert live.yes_ask == pytest.approx(0.45)
+    assert live.spread == pytest.approx(0.03)
+    assert live.liquidity_usd == pytest.approx(84.4)
+
+    phantom = hydrated.buckets[1]
+    assert phantom.yes_ask is None  # Gamma's bestAsk=1.0 replaced by empty live book
+
+
+def test_hydrate_prices_no_token_ids_returns_same_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_post(*args: object, **kwargs: object) -> None:
+        raise AssertionError("should not call /books when no buckets have token ids")
+
+    monkeypatch.setattr(httpx, "post", fail_post)
+    event = parse_event_payload(_payload())
+
+    assert hydrate_prices(event) is event
 
 
 def test_unresolved_event_has_no_winner() -> None:
