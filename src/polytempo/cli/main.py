@@ -209,6 +209,12 @@ def live(
         case_sensitive=False,
         help="Which day(s) to run: `today` (T+0), `tomorrow` (T+1), or `both`. Prompted on TTY when omitted.",
     ),
+    days_ahead: int | None = typer.Option(
+        None,
+        "--days-ahead",
+        min=0,
+        help="Target a single day = today + N (e.g. 0=today, 3=T+3). Overrides --day and its prompt when set.",
+    ),
     model_strategy: ModelStrategy = typer.Option(
         ModelStrategy.BEST_HISTORICAL,
         "--model-strategy",
@@ -242,26 +248,35 @@ def live(
         else:
             mode = LiveMode.PREVIEW
 
-    if day is None:
-        if is_tty:
-            day_idx = typer.prompt(
-                "Day? 1=today (T+0)  2=tomorrow (T+1)  3=both",
-                default=2,
-                type=int,
-            )
-            day = {1: DayChoice.TODAY, 2: DayChoice.TOMORROW, 3: DayChoice.BOTH}.get(
-                day_idx, DayChoice.TOMORROW
-            )
-        else:
-            day = DayChoice.TOMORROW
-
     today = date.today()
-    if day is DayChoice.TODAY:
-        target_dates = [today]
-    elif day is DayChoice.BOTH:
-        target_dates = [today, today + timedelta(days=1)]
+
+    if days_ahead is not None:
+        if day is not None:
+            typer.echo(
+                "note: --days-ahead overrides --day.",
+                err=True,
+            )
+        target_dates = [today + timedelta(days=days_ahead)]
     else:
-        target_dates = [today + timedelta(days=1)]
+        if day is None:
+            if is_tty:
+                day_idx = typer.prompt(
+                    "Day? 1=today (T+0)  2=tomorrow (T+1)  3=both",
+                    default=2,
+                    type=int,
+                )
+                day = {1: DayChoice.TODAY, 2: DayChoice.TOMORROW, 3: DayChoice.BOTH}.get(
+                    day_idx, DayChoice.TOMORROW
+                )
+            else:
+                day = DayChoice.TOMORROW
+
+        if day is DayChoice.TODAY:
+            target_dates = [today]
+        elif day is DayChoice.BOTH:
+            target_dates = [today, today + timedelta(days=1)]
+        else:
+            target_dates = [today + timedelta(days=1)]
 
     if event_id and len(target_dates) > 1:
         typer.echo(

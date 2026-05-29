@@ -20,6 +20,10 @@ from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
 
 DEFAULT_MODELS: tuple[str, ...] = (
+    "ukmo_global_deterministic_10km",
+    "icon_eu",
+    "gfs_seamless",
+    "ecmwf_ifs025",
     "ukmo_uk_deterministic_2km",  # UK Met Office UK 2 km (UKV)
     "ukmo_seamless",  # UKMO Seamless (Global 10 km + UK 2 km)
     "ecmwf_ifs",  # ECMWF IFS HRES 9 km

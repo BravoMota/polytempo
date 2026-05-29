@@ -27,7 +27,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 
 1. **Resolve station** from `--city` (default `london`) → `Station` (EGLC for London) via `weather/stations.py`.
 2. **Resolve `--mode`** — `preview` (model only) or `trade` (also open paper trades). If TTY and flag omitted, prompts `Open paper trades? [y/N]`. Non-TTY default: `preview`.
-3. **Resolve `--day`** — `today` (T+0), `tomorrow` (T+1), or `both`. If TTY and trade mode chosen, prompts `1=today  2=tomorrow  3=both`. Non-TTY default: `tomorrow`.
+3. **Resolve `--day`** — `today` (T+0), `tomorrow` (T+1), or `both`. If TTY and trade mode chosen, prompts `1=today  2=tomorrow  3=both`. Non-TTY default: `tomorrow`. `--days-ahead N` overrides this: it targets a single day = `today + N` and skips the prompt.
 4. **For each target day** (loop runs once or twice):
    1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches.
    2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
@@ -54,6 +54,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 | --- | --- |
 | `--mode {preview,trade}` | Preview = model only. Trade = also opens paper trades. Prompted on TTY when omitted. |
 | `--day {today,tomorrow,both}` | Target day(s). Prompted on TTY when `--mode trade`. Default `tomorrow`. |
+| `--days-ahead N` | Target a single day = today + N (e.g. `0`=today, `3`=T+3). Overrides `--day` and its prompt. |
 | `--event-id` | Pin a specific Gamma event id (one day only; not compatible with `--day both`). |
 | `--city` | Contract station registry key (default `london`). |
 | `--limit` | Max events to scan when `--event-id` is not set (default `20`). |
@@ -70,6 +71,9 @@ polytempo live --mode preview --day both --city london
 
 # Trade tomorrow with ensemble distribution (override default)
 polytempo live --mode trade --day tomorrow --model-strategy ensemble_spread
+
+# Target a specific horizon (T+3) for a single day
+polytempo live --mode preview --days-ahead 3 --city london
 ```
 
 `live` is the canonical entrypoint. `paper open` below remains as a thin per-event wrapper for scripts that already use it.
