@@ -79,6 +79,22 @@ def has_open_trades_on_event(
     return False
 
 
+def open_event_ids(base_dir: Path = DEFAULT_LEDGER_DIR) -> list[str]:
+    """Distinct event ids that still have an open trade in any ledger.
+
+    First-seen order is preserved so a sweep settles oldest-touched events first.
+    """
+    if not base_dir.exists():
+        return []
+    seen: dict[str, None] = {}
+    for path in sorted(base_dir.glob("*.jsonl")):
+        if path.name == RUNS_FILENAME:
+            continue
+        for trade in read_state(path).open_trades:
+            seen.setdefault(trade.event_id, None)
+    return list(seen)
+
+
 def run_pipeline(
     forecast: ForecastValues,
     event: PolymarketEvent,

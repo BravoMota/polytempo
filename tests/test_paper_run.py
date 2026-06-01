@@ -15,6 +15,7 @@ from polytempo.paper.ledger import (
 from polytempo.paper.run import (
     RUNS_FILENAME,
     has_open_trades_on_event,
+    open_event_ids,
     preview_pipeline,
     run_pipeline,
 )
@@ -177,6 +178,33 @@ def test_has_open_trades_on_event_true_after_open(tmp_path: Path) -> None:
     run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
     assert has_open_trades_on_event("evt-1", base_dir=tmp_path) is True
     assert has_open_trades_on_event("evt-other", base_dir=tmp_path) is False
+
+
+def test_open_event_ids_empty_when_no_ledgers(tmp_path: Path) -> None:
+    assert open_event_ids(base_dir=tmp_path) == []
+
+
+def test_open_event_ids_collects_distinct_open_events(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event_a = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-a")
+    event_b = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-b")
+    run_pipeline(forecast, event_a, _strategies(), base_dir=tmp_path)
+    run_pipeline(forecast, event_b, _strategies(), base_dir=tmp_path)
+
+    assert set(open_event_ids(base_dir=tmp_path)) == {"evt-a", "evt-b"}
+
+
+def test_open_event_ids_drops_settled_events(tmp_path: Path) -> None:
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-a")
+    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+
+    resolved = _event(
+        [_bucket("24°C", resolved=True, outcome="YES")], event_id="evt-a"
+    )
+    run_pipeline(forecast, resolved, _strategies(), base_dir=tmp_path)
+
+    assert open_event_ids(base_dir=tmp_path) == []
 
 
 def test_dedupe_blocks_second_open(tmp_path: Path) -> None:

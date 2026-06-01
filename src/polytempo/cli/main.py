@@ -44,6 +44,8 @@ from polytempo.markets.polymarket import (
     fetch_weather_events,
     hydrate_prices,
     first_parseable_weather_event,
+    is_event_resolved,
+    winning_label_from_event,
 )
 from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
 from polytempo.reports.writer import RunReporter
@@ -55,7 +57,7 @@ from polytempo.paper.ledger import (
     read_state,
     settle_event,
 )
-from polytempo.paper.run import RunSummary, preview_pipeline, run_pipeline
+from polytempo.paper.run import RunSummary, open_event_ids, preview_pipeline, run_pipeline
 from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
 from polytempo.strategy.edge import MarketPrice
 from polytempo.weather.calibration_dataset import (
@@ -1027,7 +1029,14 @@ def paper_open(
 
 @paper_app.command("settle")
 def paper_settle(
-    event_id: str = typer.Option(..., "--event-id", help="Polymarket event id."),
+    event_id: str | None = typer.Option(
+        None, "--event-id", help="Polymarket event id. Omit and pass --all to sweep."
+    ),
+    all_open: bool = typer.Option(
+        False,
+        "--all",
+        help="Settle every open event that Gamma reports resolved. Ignores winner overrides.",
+    ),
     winner: str | None = typer.Option(
         None,
         "--winner",
@@ -1048,7 +1057,21 @@ def paper_settle(
 
     Winner resolution order: --winner > --observed-tmax > Wunderground fetch
     (station from --city, date from the event's settlement_date).
+
+    With --all, sweep every event that still has open trades in any ledger and
+    settle the ones Gamma reports resolved, using the market's own winning bucket.
     """
+    if all_open:
+        if event_id is not None:
+            typer.echo("--all and --event-id are mutually exclusive.", err=True)
+            raise typer.Exit(code=1)
+        _settle_all_open()
+        return
+
+    if event_id is None:
+        typer.echo("pass --event-id or --all.", err=True)
+        raise typer.Exit(code=1)
+
     event = fetch_event(event_id.strip())
 
     if winner is not None:
@@ -1117,3 +1140,35 @@ def paper_settle(
 
     if total_settled == 0:
         typer.echo("\nno open trades matched this event across any strategy")
+
+
+def _settle_all_open() -> None:
+    """Settle every open event Gamma reports resolved, across all ledgers."""
+    event_ids = open_event_ids()
+    if not event_ids:
+        typer.echo("no open trades in any ledger")
+        return
+
+    strategies = _default_strategies()
+    grand_total = 0
+    for eid in event_ids:
+        event = fetch_event(eid)
+        if not is_event_resolved(event):
+            typer.echo(f"[{eid}] {event.title} — not resolved on Gamma yet, skipping")
+            continue
+        winning_label = winning_label_from_event(event)
+        if winning_label is None:
+            typer.echo(f"[{eid}] {event.title} — resolved but no single winner, skipping")
+            continue
+
+        typer.echo(f"[{eid}] {event.title} — winner={winning_label!r}")
+        for strat in strategies:
+            path = ledger_path_for(strat.name)
+            if not path.exists():
+                continue
+            settled = settle_event(eid, winning_label, path=path)
+            grand_total += len(settled)
+            if settled:
+                typer.echo(f"  [{strat.name}] settled {len(settled)} trade(s)")
+
+    typer.echo(f"\ntotal settled across all open events: {grand_total}")
