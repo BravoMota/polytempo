@@ -6,7 +6,7 @@ Reads ``single_runs_model_capabilities.csv`` and, for each model with ``status=o
 - Steps run inits from ``RUN_TIME_START_UTC`` to ``RUN_TIME_END_UTC`` at the model's
   ``run_init_interval_hours``.
 - Uses ``max(daily_non_null_at_12z, daily_non_null_at_18z)`` as ``forecast_days``.
-- Saves each raw response under ``data/weather/raw/`` (same convention
+- Saves each raw response under ``data/weather/raw/single-runs/`` (same convention
   as the polytempo CLI; uses ``load_or_fetch_single_run_payload`` so existing files
   are skipped).
 

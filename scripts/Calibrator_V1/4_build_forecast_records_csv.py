@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a processed CSV of daily Tmax predictions from raw Single Runs JSON.
 
-Reads all cached raw Open-Meteo responses under ``data/weather/raw/`` and writes
+Reads all cached raw Open-Meteo responses under ``data/weather/raw/single-runs/`` and writes
 one row per non-null ``daily.temperature_2m_max`` prediction to
 ``data/weather/processed/forecast_records.csv``. Raw JSON files are
 left untouched. Offline calibration tooling only.
