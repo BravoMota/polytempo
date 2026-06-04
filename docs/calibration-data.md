@@ -6,7 +6,9 @@ All weather calibration artifacts live under **`data/weather/`** at the reposito
 
 | Path | Produced by | Purpose |
 | --- | --- | --- |
-| `raw/` | `scripts/2_fetch_historical_forecasts_by_model.py`, `polytempo fetch-historical-forecasts` | Cached Open-Meteo Single Runs JSON (one file per run init) |
+| `raw/single-runs/` | `scripts/2_fetch_historical_forecasts_by_model.py`, `polytempo fetch-historical-forecasts` | Cached Open-Meteo Single Runs JSON (one file per run init) |
+| `raw/wunderground/` | `scripts/run_collector.py` | Raw Wunderground HTML + meta sidecars from continuous collector |
+| `polytempo_weather.db` | `scripts/init_weather_db.py` | SQLite DB for observation/forecast snapshots and collector state |
 | `raw_capabilities/` | `scripts/1_analyze_single_runs_models.py` | Probe API payloads for model capability analysis |
 | `single_runs_model_capabilities.csv` | `scripts/1_analyze_single_runs_models.py` | Per-model cadence, grid offset, daily Tmax availability |
 | `historical_forecasts.jsonl` | `polytempo fetch-historical-forecasts` | Parsed historical model-run Tmax predictions |

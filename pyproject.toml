@@ -12,6 +12,7 @@ dependencies = [
     "typer",
     "httpx",
     "pydantic",
+    "pyyaml",
     "truststore; python_version >= '3.10'",
 ]
 

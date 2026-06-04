@@ -147,7 +147,7 @@ polytempo paper list-london --limit 20
 
 ## fetch-historical-forecasts
 
-Fetch Open-Meteo Single Runs and cache **full API JSON** under `data/weather/raw/`. In date-range mode, also append parsed Tmax rows to JSONL. Offline only — not used by `polytempo live`.
+Fetch Open-Meteo Single Runs and cache **full API JSON** under `data/weather/raw/single-runs/`. In date-range mode, also append parsed Tmax rows to JSONL. Offline only — not used by `polytempo live`.
 
 **Raw filename convention** (run time is not in the API body):
 
@@ -180,7 +180,7 @@ Example: `EGLC_ukmo_uk_deterministic_2km_2026-05-01T120000Z.json`
 | `--max-lead-hours`     | Maximum lead time before target day (default `72`)                                         |
 | `--lead-step-hours`    | Lead-time step in hours (default `6`)                                                      |
 | `--timezone`           | IANA timezone for target-day midnight anchor (default `UTC`; use `Europe/London` for EGLC) |
-| `--raw-dir`            | Raw Single-Runs JSON directory (default `data/weather/raw/`)                               |
+| `--raw-dir`            | Raw Single-Runs JSON directory (default `data/weather/raw/single-runs/`)                               |
 | `--out`                | Parsed JSONL path (default `data/weather/historical_forecasts.jsonl`)                      |
 | `--base-url`           | Single-Runs API base (default `https://single-runs-api.open-meteo.com/v1/forecast`)        |
 | `--dry-run`            | Print planned request count; do not call API                                               |
@@ -250,6 +250,40 @@ pytest tests/test_historical_forecasts.py tests/test_http_open_meteo.py \
   tests/test_observations.py tests/test_calibration_dataset.py
 ```
 
+## Weather collection (SQLite)
+
+Continuous local scraping of Wunderground HTML pages into SQLite + raw files. Config: [`config/weather_collectors.yaml`](config/weather_collectors.yaml). Database: `data/weather/polytempo_weather.db`. Raw HTML: `data/weather/raw/wunderground/`.
+
+Each poll per station fetches:
+- live observation page (ICAO or PWS dashboard URL)
+- hourly forecast page for **today** and **tomorrow** (station local dates)
+
+Parsing is not implemented yet; only raw HTML + `.meta.json` sidecars are saved. `collector_state` tracks success/error per station.
+
+Initialize (idempotent):
+
+```bash
+python scripts/init_weather_db.py
+```
+
+Run collectors (continuous; reloads config when YAML mtime changes):
+
+```bash
+python scripts/run_collector.py
+```
+
+One-shot cycle (no sleep loop):
+
+```bash
+python scripts/run_collector.py --once
+```
+
+Tests:
+
+```bash
+pytest tests/test_storage_sqlite.py tests/test_collector_config.py tests/test_collectors_wunderground.py
+```
+
 ## Offline calibration pipeline (standalone scripts)
 
 Numbered scripts under `scripts/` run in order. All use global vars at the top (no CLI flags). Data lives under `data/weather/` (see [docs/calibration-data.md](docs/calibration-data.md)).
@@ -257,7 +291,7 @@ Numbered scripts under `scripts/` run in order. All use global vars at the top (
 | Step | Script | Purpose |
 | --- | --- | --- |
 | 1 | `scripts/1_analyze_single_runs_models.py` | Probe model capabilities → `single_runs_model_capabilities.csv` + `raw_capabilities/` |
-| 2 | `scripts/2_fetch_historical_forecasts_by_model.py` | Bulk-fetch raw Single Runs JSON → `raw/` |
+| 2 | `scripts/2_fetch_historical_forecasts_by_model.py` | Bulk-fetch raw Single Runs JSON → `raw/single-runs/` |
 | 3 | `scripts/3_fetch_wunderground_observations.py` | Fetch observed Tmax → `observed_tmax.jsonl` |
 | 4 | `scripts/4_build_forecast_records_csv.py` | Raw JSON → `processed/forecast_records.csv` |
 | 5 | `scripts/5_build_observed_tmax_csv.py` | `observed_tmax.jsonl` → `observed_tmax.csv` |
@@ -283,7 +317,7 @@ Expect a few minutes; archive calls can take 30–120s each. Requires network.
 
 Reads `data/weather/single_runs_model_capabilities.csv` and, for each model with `status=ok`, steps run inits from `RUN_TIME_START_UTC` to `RUN_TIME_END_UTC` using that model's `run_init_interval_hours`. `forecast_days` per request is `max(daily_non_null_at_12z, daily_non_null_at_18z)`.
 
-Raw JSON responses land in `data/weather/raw/` using `{station}_{model}_{run_time_utc}.json`. Existing files are skipped (resumable).
+Raw JSON responses land in `data/weather/raw/single-runs/` using `{station}_{model}_{run_time_utc}.json`. Existing files are skipped (resumable).
 
 ```bash
 python scripts/2_fetch_historical_forecasts_by_model.py
@@ -302,7 +336,7 @@ python scripts/3_fetch_wunderground_observations.py
 
 ### 4 — Processed forecast records CSV
 
-Reads `data/weather/raw/*.json` and writes one CSV row per non-null daily Tmax to `data/weather/processed/forecast_records.csv`.
+Reads `data/weather/raw/single-runs/*.json` and writes one CSV row per non-null daily Tmax to `data/weather/processed/forecast_records.csv`.
 
 - Columns: `station_id`, `model`, `run_time_utc`, `target_date`, `lead_hours`, `predicted_tmax_c`, `forecast_lat`, `forecast_lon`.
 - `lead_hours` = hours from `run_time_utc` to end of `target_date` in UTC. Example: run `2026-04-01T12:00Z`, target `2026-04-02` → `36`.

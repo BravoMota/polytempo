@@ -1,0 +1,28 @@
+weather_db_path: data/weather/polytempo_weather.db
+raw_base_dir: data/weather/raw
+
+collectors:
+  - name: wunderground
+    enabled: true
+    source: wunderground
+    interval_seconds: 300
+    anchor_time_local: null
+    stations:
+      - station_id: EGLC
+        station_type: icao
+        name: London City Airport
+        timezone: Europe/London
+        lat: 51.5053
+        lon: 0.0553
+        country: gb
+        city_slug: london
+        pws_id: null
+      - station_id: ILONDO288
+        station_type: pws
+        name: Hoskins Close
+        timezone: Europe/London
+        lat: 51.5053
+        lon: 0.0553
+        country: gb
+        city_slug: london
+        pws_id: ILONDO288

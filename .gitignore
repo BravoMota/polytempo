@@ -32,3 +32,4 @@ reports/
 
 # Local Claude Code state
 .claude/
+docs/.DS_Store

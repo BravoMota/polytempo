@@ -26,7 +26,7 @@ DEFAULT_FORECAST_DAYS = 7
 DEFAULT_FORECAST_SOURCE = "open_meteo_single_runs"
 DEFAULT_MODEL_RUN_HOURS_UTC: tuple[int, ...] = (0, 6, 12, 18)
 DEFAULT_HISTORICAL_FORECASTS_PATH = WEATHER_DATA_DIR / "historical_forecasts.jsonl"
-DEFAULT_RAW_FORECASTS_DIR = WEATHER_DATA_DIR / "raw"
+DEFAULT_RAW_FORECASTS_DIR = WEATHER_DATA_DIR / "raw" / "single-runs"
 
 
 @dataclass(frozen=True)
