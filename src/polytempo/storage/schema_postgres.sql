@@ -1,36 +1,35 @@
--- PolyTempo weather collection schema (v1).
+-- PolyTempo weather collection schema (PostgreSQL v1).
 -- Timestamps are ISO-8601 TEXT (UTC instants use trailing Z where applicable).
 
 CREATE TABLE IF NOT EXISTS stations (
     station_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     timezone TEXT NOT NULL,
-    lat REAL,
-    lon REAL,
+    lat DOUBLE PRECISION,
+    lon DOUBLE PRECISION,
     country TEXT,
-    active INTEGER NOT NULL DEFAULT 1
+    active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
 CREATE TABLE IF NOT EXISTS observation_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    station_id TEXT NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    station_id TEXT NOT NULL REFERENCES stations(station_id),
     source TEXT NOT NULL,
     scraped_at_utc TEXT NOT NULL,
     observed_at_utc TEXT,
     observed_at_local TEXT,
     target_date_local TEXT NOT NULL,
     station_timezone TEXT NOT NULL,
-    temp_c REAL,
+    temp_c DOUBLE PRECISION,
     raw_temp_text TEXT,
     raw_file_path TEXT,
     content_hash TEXT,
-    created_at_utc TEXT NOT NULL,
-    FOREIGN KEY (station_id) REFERENCES stations(station_id)
+    created_at_utc TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS forecast_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    station_id TEXT NOT NULL,
+    id BIGSERIAL PRIMARY KEY,
+    station_id TEXT NOT NULL REFERENCES stations(station_id),
     source TEXT NOT NULL,
     model TEXT,
     scraped_at_utc TEXT NOT NULL,
@@ -39,20 +38,19 @@ CREATE TABLE IF NOT EXISTS forecast_snapshots (
     target_time_local TEXT,
     target_date_local TEXT NOT NULL,
     station_timezone TEXT NOT NULL,
-    lead_hours_to_day_end REAL,
-    temp_c REAL,
-    requested_lat REAL,
-    requested_lon REAL,
-    returned_lat REAL,
-    returned_lon REAL,
+    lead_hours_to_day_end DOUBLE PRECISION,
+    temp_c DOUBLE PRECISION,
+    requested_lat DOUBLE PRECISION,
+    requested_lon DOUBLE PRECISION,
+    returned_lat DOUBLE PRECISION,
+    returned_lon DOUBLE PRECISION,
     raw_file_path TEXT,
     content_hash TEXT,
-    created_at_utc TEXT NOT NULL,
-    FOREIGN KEY (station_id) REFERENCES stations(station_id)
+    created_at_utc TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS collector_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     collector_name TEXT NOT NULL,
     station_id TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -63,7 +61,7 @@ CREATE TABLE IF NOT EXISTS collector_state (
     success_count INTEGER NOT NULL DEFAULT 0,
     error_count INTEGER NOT NULL DEFAULT 0,
     updated_at_utc TEXT NOT NULL,
-    UNIQUE(collector_name, station_id, source)
+    UNIQUE (collector_name, station_id, source)
 );
 
 CREATE INDEX IF NOT EXISTS idx_observation_snapshots_station_source_observed

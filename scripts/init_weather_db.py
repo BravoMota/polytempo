@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize the PolyTempo weather SQLite database from schema.sql."""
+"""Initialize the PolyTempo weather PostgreSQL schema from schema_postgres.sql."""
 
 from __future__ import annotations
 
@@ -15,11 +15,15 @@ from polytempo.collectors.config import (  # noqa: E402
     load_weather_collectors_config,
     sync_stations_from_config,
 )
-from polytempo.storage.sqlite import get_connection, initialize_database  # noqa: E402
+from polytempo.storage.postgres import (  # noqa: E402
+    get_connection,
+    initialize_database,
+    resolve_database_url,
+)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Create weather SQLite DB from schema.sql")
+    parser = argparse.ArgumentParser(description="Create weather PostgreSQL schema")
     parser.add_argument(
         "--config",
         type=Path,
@@ -27,24 +31,23 @@ def main() -> int:
         help="Path to weather_collectors.yaml",
     )
     parser.add_argument(
-        "--db",
-        type=Path,
+        "--database-url",
         default=None,
-        help="Override database path (default from config)",
+        help="Override POLYTEMPO_DATABASE_URL / DATABASE_URL",
     )
     args = parser.parse_args()
 
+    database_url = resolve_database_url(override=args.database_url)
     config = load_weather_collectors_config(args.config)
-    db_path = args.db or config.weather_db_path
 
-    initialize_database(db_path)
+    initialize_database(database_url)
     (config.raw_base_dir / "wunderground").mkdir(parents=True, exist_ok=True)
 
-    with get_connection(db_path) as conn:
+    with get_connection(database_url) as conn:
         sync_stations_from_config(conn, config)
         conn.commit()
 
-    print(f"initialized db={db_path}")
+    print(f"initialized database={database_url.split('@')[-1]}")
     print(f"raw_dir={config.raw_base_dir / 'wunderground'}")
     return 0
 

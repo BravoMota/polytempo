@@ -11,7 +11,6 @@ import yaml
 from polytempo.weather.data_dir import REPO_ROOT, WEATHER_DATA_DIR
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "weather_collectors.yaml"
-DEFAULT_WEATHER_DB_PATH = WEATHER_DATA_DIR / "polytempo_weather.db"
 DEFAULT_RAW_BASE_DIR = WEATHER_DATA_DIR / "raw"
 
 
@@ -46,7 +45,6 @@ class CollectorConfig:
 class WeatherCollectorsConfig:
     """Top-level weather collector runtime configuration."""
 
-    weather_db_path: Path
     raw_base_dir: Path
     collectors: list[CollectorConfig]
 
@@ -122,9 +120,6 @@ def load_weather_collectors_config(
     if not isinstance(payload, dict):
         raise ValueError("config root must be a mapping")
 
-    db_path = _resolve_path(
-        payload.get("weather_db_path", DEFAULT_WEATHER_DB_PATH),
-    )
     raw_base = _resolve_path(
         payload.get("raw_base_dir", DEFAULT_RAW_BASE_DIR),
     )
@@ -134,7 +129,6 @@ def load_weather_collectors_config(
         raise ValueError("collectors must be a list")
 
     return WeatherCollectorsConfig(
-        weather_db_path=db_path,
         raw_base_dir=raw_base,
         collectors=[_parse_collector(c) for c in collectors_raw],
     )
@@ -145,7 +139,7 @@ def sync_stations_from_config(
     config: WeatherCollectorsConfig,
 ) -> None:
     """Upsert all stations referenced by enabled collectors."""
-    from polytempo.storage.sqlite import insert_station
+    from polytempo.storage.postgres import insert_station
 
     seen: set[str] = set()
     for collector in config.enabled_collectors:

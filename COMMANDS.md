@@ -250,20 +250,42 @@ pytest tests/test_historical_forecasts.py tests/test_http_open_meteo.py \
   tests/test_observations.py tests/test_calibration_dataset.py
 ```
 
-## Weather collection (SQLite)
+## Weather collection (PostgreSQL)
 
-Continuous local scraping of Wunderground HTML pages into SQLite + raw files. Config: [`config/weather_collectors.yaml`](config/weather_collectors.yaml). Database: `data/weather/polytempo_weather.db`. Raw HTML: `data/weather/raw/wunderground/`.
+Continuous local scraping of Wunderground HTML pages into PostgreSQL + raw files. Config: [`config/weather_collectors.yaml`](config/weather_collectors.yaml). Raw HTML: `data/weather/raw/wunderground/`.
+
+Set the database URL before init, migrate, or run:
+
+```bash
+export POLYTEMPO_DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/polytempo_weather'
+```
+
+See [`.env.example`](.env.example) for the expected format.
 
 Each poll per station fetches:
 - live observation page (ICAO or PWS dashboard URL)
 - hourly forecast page for **today** and **tomorrow** (station local dates)
 
-Parsing is not implemented yet; only raw HTML + `.meta.json` sidecars are saved. `collector_state` tracks success/error per station.
+Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station.
 
-Initialize (idempotent):
+Initialize schema (idempotent):
 
 ```bash
 python scripts/init_weather_db.py
+```
+
+Migrate existing SQLite data (optional, one-time):
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py \
+  --sqlite data/weather/polytempo_weather.db \
+  --init-target
+```
+
+Dry-run source counts only:
+
+```bash
+python scripts/migrate_sqlite_to_postgres.py --dry-run
 ```
 
 Run collectors (continuous; reloads config when YAML mtime changes):
@@ -278,10 +300,10 @@ One-shot cycle (no sleep loop):
 python scripts/run_collector.py --once
 ```
 
-Tests:
+Tests (require `POLYTEMPO_DATABASE_URL` or `DATABASE_URL`; storage/collector DB tests skip otherwise):
 
 ```bash
-pytest tests/test_storage_sqlite.py tests/test_collector_config.py tests/test_collectors_wunderground.py
+pytest tests/test_storage_postgres.py tests/test_collector_config.py tests/test_collectors_wunderground.py
 ```
 
 ## Offline calibration pipeline (standalone scripts)

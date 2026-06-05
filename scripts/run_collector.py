@@ -20,7 +20,7 @@ from polytempo.collectors.config import (  # noqa: E402
     load_weather_collectors_config,
     sync_stations_from_config,
 )
-from polytempo.storage.sqlite import get_connection  # noqa: E402
+from polytempo.storage.postgres import get_connection, resolve_database_url  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _config_mtime(path: Path) -> float | None:
 def _reload_config_if_changed(
     config_path: Path,
     last_mtime: float | None,
-    db_path: Path,
+    database_url: str,
 ) -> tuple[WeatherCollectorsConfig, float | None]:
     mtime = _config_mtime(config_path)
     if last_mtime is not None and mtime == last_mtime:
@@ -51,7 +51,7 @@ def _reload_config_if_changed(
 
     logger.info("loading config from %s", config_path)
     config = load_weather_collectors_config(config_path)
-    with get_connection(db_path) as conn:
+    with get_connection(database_url) as conn:
         sync_stations_from_config(conn, config)
         conn.commit()
     return config, mtime
@@ -81,11 +81,12 @@ def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    database_url = resolve_database_url()
     config_path = args.config.resolve()
     config = load_weather_collectors_config(config_path)
     last_mtime = _config_mtime(config_path)
 
-    with get_connection(config.weather_db_path) as conn:
+    with get_connection(database_url) as conn:
         sync_stations_from_config(conn, config)
         conn.commit()
 
@@ -93,7 +94,7 @@ def main() -> int:
         config, last_mtime = _reload_config_if_changed(
             config_path,
             last_mtime,
-            config.weather_db_path,
+            database_url,
         )
 
         enabled = config.enabled_collectors
@@ -114,7 +115,7 @@ def main() -> int:
                 len(collector.stations),
                 collector.interval_seconds,
             )
-            with get_connection(config.weather_db_path) as conn:
+            with get_connection(database_url) as conn:
                 runner(conn, config, collector)
 
         if args.once:
@@ -128,9 +129,8 @@ def main() -> int:
             if mtime != last_mtime:
                 logger.info("config changed, reloading before next sleep completes")
                 break
-            time.sleep(min(1.0, deadline - time.monotonic()))
+            time.sleep(0.5)
 
-    logger.info("collector stopped")
     return 0
 
 

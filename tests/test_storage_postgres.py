@@ -1,13 +1,10 @@
-"""Tests for weather SQLite storage helpers."""
+"""Tests for weather PostgreSQL storage helpers."""
 
 from __future__ import annotations
 
-from datetime import date
-from pathlib import Path
-
 import pytest
 
-from polytempo.storage.sqlite import (
+from polytempo.storage.postgres import (
     get_connection,
     initialize_database,
     insert_forecast_snapshot,
@@ -18,29 +15,27 @@ from polytempo.storage.sqlite import (
 )
 
 
-def test_initialize_database_is_idempotent(tmp_path: Path) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
-    initialize_database(db_path)
+def test_initialize_database_is_idempotent(weather_db_url: str) -> None:
+    initialize_database(weather_db_url)
+    initialize_database(weather_db_url)
 
-    with get_connection(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
+    with get_connection(weather_db_url) as conn:
+        rows = conn.execute(
+            """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public'
+            """
+        ).fetchall()
+        tables = {row["table_name"] for row in rows}
+
     assert "stations" in tables
     assert "observation_snapshots" in tables
     assert "forecast_snapshots" in tables
     assert "collector_state" in tables
 
 
-def test_insert_station_and_observation_snapshot(tmp_path: Path) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
-
-    with get_connection(db_path) as conn:
+def test_insert_station_and_observation_snapshot(weather_db_url: str) -> None:
+    with get_connection(weather_db_url) as conn:
         insert_station(
             conn,
             station_id="EGLC",
@@ -65,19 +60,17 @@ def test_insert_station_and_observation_snapshot(tmp_path: Path) -> None:
 
     assert row_id == 1
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         row = conn.execute(
             "SELECT temp_c, content_hash FROM observation_snapshots WHERE id = 1"
         ).fetchone()
+    assert row is not None
     assert row["temp_c"] == pytest.approx(18.5)
     assert row["content_hash"] == "abc123"
 
 
-def test_insert_forecast_snapshot(tmp_path: Path) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
-
-    with get_connection(db_path) as conn:
+def test_insert_forecast_snapshot(weather_db_url: str) -> None:
+    with get_connection(weather_db_url) as conn:
         insert_station(
             conn,
             station_id="EGLC",
@@ -100,11 +93,8 @@ def test_insert_forecast_snapshot(tmp_path: Path) -> None:
     assert row_id == 1
 
 
-def test_collector_state_success_and_error(tmp_path: Path) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
-
-    with get_connection(db_path) as conn:
+def test_collector_state_success_and_error(weather_db_url: str) -> None:
+    with get_connection(weather_db_url) as conn:
         insert_station(conn, station_id="EGLC", name="EGLC", timezone="Europe/London")
         upsert_collector_state_success(
             conn, "wunderground", "EGLC", "wunderground", now_utc="2026-06-03T12:00:00Z"
@@ -130,17 +120,17 @@ def test_collector_state_success_and_error(tmp_path: Path) -> None:
             """
         ).fetchone()
 
+    assert row is not None
     assert row["success_count"] == 2
     assert row["error_count"] == 1
     assert row["last_error_message"] == "timeout"
 
 
-def test_observation_snapshot_requires_station_fk(tmp_path: Path) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
+def test_observation_snapshot_requires_station_fk(weather_db_url: str) -> None:
+    import psycopg
 
-    with get_connection(db_path) as conn:
-        with pytest.raises(Exception):
+    with get_connection(weather_db_url) as conn:
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
             insert_observation_snapshot(
                 conn,
                 station_id="MISSING",

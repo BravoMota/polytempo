@@ -7,10 +7,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 import pytest
 
-from polytempo.collectors.config import CollectorConfig, StationConfig
+from polytempo.collectors.config import CollectorConfig, StationConfig, WeatherCollectorsConfig
 from polytempo.collectors.util import forecast_dates_for_station, lead_hours_to_day_end
 from polytempo.collectors import wunderground as wu
-from polytempo.storage.sqlite import get_connection, initialize_database, insert_station
+from polytempo.storage.postgres import get_connection, insert_station
 
 
 def _icao_station() -> StationConfig:
@@ -188,13 +188,11 @@ def test_parse_observation_page_missing_state_raises() -> None:
 
 
 def test_run_station_cycle_saves_files_and_inserts_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    weather_db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
     raw_base = tmp_path / "raw"
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         insert_station(
             conn,
             station_id="EGLC",
@@ -219,7 +217,7 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
         stations=[_icao_station()],
     )
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         wu.run_station_cycle(
             conn,
             collector,
@@ -233,7 +231,7 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
     assert len(html_files) == 3
     assert len(meta_files) == 3
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         state = conn.execute(
             "SELECT success_count FROM collector_state WHERE station_id = 'EGLC'"
         ).fetchone()
@@ -250,11 +248,10 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
 
 
 def test_run_station_cycle_one_failure_still_saves_others(
+    weather_db_url: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
     raw_base = tmp_path / "raw"
 
     def fake_fetch(url: str, *, client: object = None) -> bytes:
@@ -273,7 +270,7 @@ def test_run_station_cycle_one_failure_still_saves_others(
         stations=[_icao_station()],
     )
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         wu.run_station_cycle(
             conn,
             collector,
@@ -285,7 +282,7 @@ def test_run_station_cycle_one_failure_still_saves_others(
     html_files = list((raw_base / "wunderground").glob("*.html"))
     assert len(html_files) == 2
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         row = conn.execute(
             "SELECT error_count, last_error_message FROM collector_state WHERE station_id = 'EGLC'"
         ).fetchone()
@@ -294,11 +291,10 @@ def test_run_station_cycle_one_failure_still_saves_others(
 
 
 def test_run_cycle_isolates_station_failures(
+    weather_db_url: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db_path = tmp_path / "test.db"
-    initialize_database(db_path)
     raw_base = tmp_path / "raw"
 
     calls: list[str] = []
@@ -319,7 +315,6 @@ def test_run_cycle_isolates_station_failures(
     from polytempo.collectors.config import WeatherCollectorsConfig
 
     config = WeatherCollectorsConfig(
-        weather_db_path=db_path,
         raw_base_dir=raw_base,
         collectors=[],
     )
@@ -332,12 +327,12 @@ def test_run_cycle_isolates_station_failures(
         stations=[_icao_station(), _pws_station()],
     )
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         wu.run_cycle(conn, config, collector)
 
     assert calls == ["EGLC", "ILONDO288"]
 
-    with get_connection(db_path) as conn:
+    with get_connection(weather_db_url) as conn:
         err_row = conn.execute(
             "SELECT error_count FROM collector_state WHERE station_id = 'EGLC'"
         ).fetchone()

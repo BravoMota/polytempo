@@ -16,7 +16,6 @@ def test_load_default_config_shape() -> None:
         pytest.skip("default config not present")
 
     config = load_weather_collectors_config(DEFAULT_CONFIG_PATH)
-    assert config.weather_db_path.name == "polytempo_weather.db"
     assert config.raw_base_dir.name == "raw"
     assert len(config.collectors) >= 1
     wu = config.collectors[0]
@@ -28,7 +27,6 @@ def test_load_config_resolves_relative_paths(tmp_path: Path) -> None:
     cfg = tmp_path / "weather_collectors.yaml"
     cfg.write_text(
         """
-weather_db_path: data/weather/polytempo_weather.db
 raw_base_dir: data/weather/raw
 collectors:
   - name: wunderground
@@ -47,8 +45,8 @@ collectors:
     )
 
     config = load_weather_collectors_config(cfg)
-    assert config.weather_db_path.is_absolute()
-    assert "polytempo_weather.db" in str(config.weather_db_path)
+    assert config.raw_base_dir.is_absolute()
+    assert config.raw_base_dir.name == "raw"
     assert config.enabled_collectors[0].interval_seconds == 120
 
 
@@ -56,7 +54,6 @@ def test_load_config_rejects_invalid_station_type(tmp_path: Path) -> None:
     cfg = tmp_path / "bad.yaml"
     cfg.write_text(
         """
-weather_db_path: db.sqlite
 raw_base_dir: raw
 collectors:
   - name: wunderground
@@ -81,7 +78,6 @@ def test_reload_picks_up_changed_interval(tmp_path: Path) -> None:
     cfg = tmp_path / "weather_collectors.yaml"
     cfg.write_text(
         """
-weather_db_path: db.sqlite
 raw_base_dir: raw
 collectors:
   - name: wunderground

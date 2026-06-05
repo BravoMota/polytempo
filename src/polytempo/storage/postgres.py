@@ -1,12 +1,18 @@
-"""SQLite helpers for weather observation and forecast collection."""
+"""PostgreSQL helpers for weather observation and forecast collection."""
 
 from __future__ import annotations
 
-import sqlite3
+import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Generator
 
-DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+import psycopg
+from psycopg import Connection
+from psycopg.rows import dict_row
+
+DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent / "schema_postgres.sql"
 
 
 def utc_now_iso() -> str:
@@ -14,30 +20,56 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def get_connection(db_path: Path) -> sqlite3.Connection:
-    """Open a SQLite connection with foreign keys enabled."""
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def resolve_database_url(*, override: str | None = None) -> str:
+    """Resolve Postgres URL from override, POLYTEMPO_DATABASE_URL, or DATABASE_URL."""
+    if override:
+        return override
+    url = os.environ.get("POLYTEMPO_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("Set POLYTEMPO_DATABASE_URL or DATABASE_URL")
+    return url
+
+
+@contextmanager
+def get_connection(database_url: str) -> Generator[Connection, None, None]:
+    """Open a PostgreSQL connection with dict rows."""
+    conn = psycopg.connect(database_url, row_factory=dict_row, autocommit=False)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _execute_sql_script(conn: Connection, sql: str) -> None:
+    """Execute a SQL script containing multiple statements."""
+    statement = ""
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        statement += line + "\n"
+        if stripped.endswith(";"):
+            conn.execute(statement.strip())
+            statement = ""
+    if statement.strip():
+        conn.execute(statement.strip())
 
 
 def initialize_database(
-    db_path: Path,
+    database_url: str,
     schema_path: Path = DEFAULT_SCHEMA_PATH,
 ) -> None:
-    """Create or upgrade the database from schema.sql. Safe to run multiple times."""
+    """Create or upgrade the database from schema_postgres.sql. Safe to run multiple times."""
     if not schema_path.is_file():
         raise FileNotFoundError(f"schema not found: {schema_path}")
     sql = schema_path.read_text(encoding="utf-8")
-    with get_connection(db_path) as conn:
-        conn.executescript(sql)
+    with get_connection(database_url) as conn:
+        _execute_sql_script(conn, sql)
         conn.commit()
 
 
 def insert_station(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     station_id: str,
     name: str,
@@ -45,21 +77,29 @@ def insert_station(
     lat: float | None = None,
     lon: float | None = None,
     country: str | None = None,
-    active: int = 1,
+    active: bool | int = True,
 ) -> None:
-    """Insert or replace a station row."""
+    """Insert or update a station row."""
+    active_bool = bool(active)
     conn.execute(
         """
-        INSERT OR REPLACE INTO stations (
+        INSERT INTO stations (
             station_id, name, timezone, lat, lon, country, active
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (station_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            timezone = EXCLUDED.timezone,
+            lat = EXCLUDED.lat,
+            lon = EXCLUDED.lon,
+            country = EXCLUDED.country,
+            active = EXCLUDED.active
         """,
-        (station_id, name, timezone, lat, lon, country, active),
+        (station_id, name, timezone, lat, lon, country, active_bool),
     )
 
 
 def insert_observation_snapshot(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     station_id: str,
     source: str,
@@ -76,13 +116,14 @@ def insert_observation_snapshot(
 ) -> int:
     """Insert one observation snapshot row and return its id."""
     created = created_at_utc or utc_now_iso()
-    cursor = conn.execute(
+    row = conn.execute(
         """
         INSERT INTO observation_snapshots (
             station_id, source, scraped_at_utc, observed_at_utc, observed_at_local,
             target_date_local, station_timezone, temp_c, raw_temp_text,
             raw_file_path, content_hash, created_at_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             station_id,
@@ -98,12 +139,13 @@ def insert_observation_snapshot(
             content_hash,
             created,
         ),
-    )
-    return int(cursor.lastrowid)
+    ).fetchone()
+    assert row is not None
+    return int(row["id"])
 
 
 def insert_forecast_snapshot(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     station_id: str,
     source: str,
@@ -126,14 +168,15 @@ def insert_forecast_snapshot(
 ) -> int:
     """Insert one forecast snapshot row and return its id."""
     created = created_at_utc or utc_now_iso()
-    cursor = conn.execute(
+    row = conn.execute(
         """
         INSERT INTO forecast_snapshots (
             station_id, source, model, scraped_at_utc, forecast_generated_at_utc,
             target_time_utc, target_time_local, target_date_local, station_timezone,
             lead_hours_to_day_end, temp_c, requested_lat, requested_lon,
             returned_lat, returned_lon, raw_file_path, content_hash, created_at_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             station_id,
@@ -155,27 +198,28 @@ def insert_forecast_snapshot(
             content_hash,
             created,
         ),
-    )
-    return int(cursor.lastrowid)
+    ).fetchone()
+    assert row is not None
+    return int(row["id"])
 
 
 def _fetch_collector_state_row(
-    conn: sqlite3.Connection,
+    conn: Connection,
     collector_name: str,
     station_id: str,
     source: str,
-) -> sqlite3.Row | None:
+) -> dict[str, object] | None:
     return conn.execute(
         """
         SELECT success_count, error_count FROM collector_state
-        WHERE collector_name = ? AND station_id = ? AND source = ?
+        WHERE collector_name = %s AND station_id = %s AND source = %s
         """,
         (collector_name, station_id, source),
     ).fetchone()
 
 
 def upsert_collector_state_success(
-    conn: sqlite3.Connection,
+    conn: Connection,
     collector_name: str,
     station_id: str,
     source: str,
@@ -191,7 +235,7 @@ def upsert_collector_state_success(
             INSERT INTO collector_state (
                 collector_name, station_id, source,
                 last_success_at_utc, success_count, error_count, updated_at_utc
-            ) VALUES (?, ?, ?, ?, 1, 0, ?)
+            ) VALUES (%s, %s, %s, %s, 1, 0, %s)
             """,
             (collector_name, station_id, source, now, now),
         )
@@ -200,17 +244,17 @@ def upsert_collector_state_success(
     conn.execute(
         """
         UPDATE collector_state SET
-            last_success_at_utc = ?,
+            last_success_at_utc = %s,
             success_count = success_count + 1,
-            updated_at_utc = ?
-        WHERE collector_name = ? AND station_id = ? AND source = ?
+            updated_at_utc = %s
+        WHERE collector_name = %s AND station_id = %s AND source = %s
         """,
         (now, now, collector_name, station_id, source),
     )
 
 
 def upsert_collector_state_error(
-    conn: sqlite3.Connection,
+    conn: Connection,
     collector_name: str,
     station_id: str,
     source: str,
@@ -228,7 +272,7 @@ def upsert_collector_state_error(
                 collector_name, station_id, source,
                 last_error_at_utc, last_error_message,
                 success_count, error_count, updated_at_utc
-            ) VALUES (?, ?, ?, ?, ?, 0, 1, ?)
+            ) VALUES (%s, %s, %s, %s, %s, 0, 1, %s)
             """,
             (collector_name, station_id, source, now, error_message, now),
         )
@@ -237,18 +281,18 @@ def upsert_collector_state_error(
     conn.execute(
         """
         UPDATE collector_state SET
-            last_error_at_utc = ?,
-            last_error_message = ?,
+            last_error_at_utc = %s,
+            last_error_message = %s,
             error_count = error_count + 1,
-            updated_at_utc = ?
-        WHERE collector_name = ? AND station_id = ? AND source = ?
+            updated_at_utc = %s
+        WHERE collector_name = %s AND station_id = %s AND source = %s
         """,
         (now, error_message, now, collector_name, station_id, source),
     )
 
 
 def mark_collector_started(
-    conn: sqlite3.Connection,
+    conn: Connection,
     collector_name: str,
     station_id: str,
     source: str,
@@ -262,10 +306,10 @@ def mark_collector_started(
         INSERT INTO collector_state (
             collector_name, station_id, source,
             last_started_at_utc, success_count, error_count, updated_at_utc
-        ) VALUES (?, ?, ?, ?, 0, 0, ?)
-        ON CONFLICT(collector_name, station_id, source) DO UPDATE SET
-            last_started_at_utc = excluded.last_started_at_utc,
-            updated_at_utc = excluded.updated_at_utc
+        ) VALUES (%s, %s, %s, %s, 0, 0, %s)
+        ON CONFLICT (collector_name, station_id, source) DO UPDATE SET
+            last_started_at_utc = EXCLUDED.last_started_at_utc,
+            updated_at_utc = EXCLUDED.updated_at_utc
         """,
         (collector_name, station_id, source, now, now),
     )

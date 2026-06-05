@@ -24,7 +24,7 @@ from polytempo.collectors.util import (
     lead_hours_to_day_end,
     local_today,
 )
-from polytempo.storage.sqlite import (
+from polytempo.storage.postgres import (
     insert_forecast_snapshot,
     insert_observation_snapshot,
     mark_collector_started,

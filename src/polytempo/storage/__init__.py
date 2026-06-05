@@ -1,1 +1,1 @@
-"""SQLite storage for weather collection snapshots."""
+"""PostgreSQL storage for weather collection snapshots."""
