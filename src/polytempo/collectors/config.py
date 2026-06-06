@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from polytempo.collectors.schedule import DEFAULT_ANCHOR_TIME_UTC, parse_anchor_time_utc
 from polytempo.weather.data_dir import REPO_ROOT, WEATHER_DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "weather_collectors.yaml"
 DEFAULT_RAW_BASE_DIR = WEATHER_DATA_DIR / "raw"
@@ -36,8 +40,10 @@ class CollectorConfig:
     name: str
     enabled: bool
     source: str
-    interval_seconds: int
-    anchor_time_local: str | None
+    observations_interval_seconds: int
+    observations_anchor_time_utc: str
+    forecast_interval_seconds: int
+    forecast_anchor_time_utc: str
     stations: list[StationConfig]
 
 
@@ -58,6 +64,25 @@ def _resolve_path(value: str | Path, *, base: Path = REPO_ROOT) -> Path:
     if path.is_absolute():
         return path
     return (base / path).resolve()
+
+
+def _normalize_anchor(value: str | None) -> str:
+    if value in (None, ""):
+        return DEFAULT_ANCHOR_TIME_UTC
+    parse_anchor_time_utc(str(value))
+    return str(value).strip()
+
+
+def _parse_interval(raw: dict[str, Any], key: str, *, legacy: int | None) -> int:
+    if key in raw:
+        interval = int(raw[key])
+    elif legacy is not None:
+        interval = legacy
+    else:
+        interval = 300
+    if interval <= 0:
+        raise ValueError(f"{key} must be positive")
+    return interval
 
 
 def _parse_station(raw: dict[str, Any]) -> StationConfig:
@@ -88,12 +113,36 @@ def _parse_station(raw: dict[str, Any]) -> StationConfig:
 
 
 def _parse_collector(raw: dict[str, Any]) -> CollectorConfig:
-    interval = int(raw.get("interval_seconds", 300))
-    if interval <= 0:
-        raise ValueError("interval_seconds must be positive")
+    legacy_interval: int | None = None
+    if "interval_seconds" in raw:
+        legacy_interval = int(raw["interval_seconds"])
+        if legacy_interval <= 0:
+            raise ValueError("interval_seconds must be positive")
+        logger.warning(
+            "interval_seconds is deprecated; use observations_interval_seconds "
+            "and forecast_interval_seconds"
+        )
 
-    anchor = raw.get("anchor_time_local")
-    anchor_s = str(anchor).strip() if anchor not in (None, "") else None
+    legacy_anchor = raw.get("anchor_time_local")
+    if legacy_anchor not in (None, ""):
+        logger.warning(
+            "anchor_time_local is deprecated; use observations_anchor_time_utc "
+            "and forecast_anchor_time_utc"
+        )
+
+    obs_interval = _parse_interval(
+        raw,
+        "observations_interval_seconds",
+        legacy=legacy_interval,
+    )
+    fc_interval = _parse_interval(
+        raw,
+        "forecast_interval_seconds",
+        legacy=legacy_interval,
+    )
+
+    obs_anchor_raw = raw.get("observations_anchor_time_utc", legacy_anchor)
+    fc_anchor_raw = raw.get("forecast_anchor_time_utc", legacy_anchor)
 
     stations_raw = raw.get("stations") or []
     if not isinstance(stations_raw, list):
@@ -103,8 +152,14 @@ def _parse_collector(raw: dict[str, Any]) -> CollectorConfig:
         name=str(raw["name"]).strip(),
         enabled=bool(raw.get("enabled", True)),
         source=str(raw.get("source", raw["name"])).strip(),
-        interval_seconds=interval,
-        anchor_time_local=anchor_s,
+        observations_interval_seconds=obs_interval,
+        observations_anchor_time_utc=_normalize_anchor(
+            str(obs_anchor_raw) if obs_anchor_raw not in (None, "") else None
+        ),
+        forecast_interval_seconds=fc_interval,
+        forecast_anchor_time_utc=_normalize_anchor(
+            str(fc_anchor_raw) if fc_anchor_raw not in (None, "") else None
+        ),
         stations=[_parse_station(s) for s in stations_raw],
     )
 
@@ -128,9 +183,11 @@ def load_weather_collectors_config(
     if not isinstance(collectors_raw, list):
         raise ValueError("collectors must be a list")
 
+    collectors = [_parse_collector(c) for c in collectors_raw]
+
     return WeatherCollectorsConfig(
         raw_base_dir=raw_base,
-        collectors=[_parse_collector(c) for c in collectors_raw],
+        collectors=collectors,
     )
 
 

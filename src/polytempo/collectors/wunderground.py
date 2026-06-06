@@ -302,16 +302,81 @@ def _fetch_and_save(
     return body, path, content_hash
 
 
-def run_station_cycle(
+def run_station_observations(
     conn: Any,
     collector: CollectorConfig,
     station: StationConfig,
     raw_base_dir: Path,
     *,
-    client: httpx.Client | None = None,
+    client: httpx.Client,
     now_utc: datetime | None = None,
 ) -> None:
-    """Fetch observation + today/tomorrow hourly pages for one station."""
+    """Fetch and store the live observation page for one station."""
+    now = now_utc or datetime.now(timezone.utc)
+    scraped_at = now.astimezone(timezone.utc)
+    scraped_iso = scraped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    source = collector.source
+    raw_dir = raw_base_dir / source
+
+    mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
+
+    try:
+        obs_url = build_observation_url(station)
+        body, path, content_hash = _fetch_and_save(
+            raw_dir=raw_dir,
+            station=station,
+            page_kind="observation",
+            url=obs_url,
+            scraped_at=scraped_at,
+            client=client,
+        )
+        obs = parse_observation_page(body, station, scraped_at)
+        insert_observation_snapshot(
+            conn,
+            station_id=station.station_id,
+            source=source,
+            scraped_at_utc=scraped_iso,
+            target_date_local=obs.target_date_local.isoformat(),
+            station_timezone=station.timezone,
+            observed_at_utc=obs.observed_at_utc,
+            observed_at_local=obs.observed_at_local,
+            temp_c=obs.temp_c,
+            raw_temp_text=obs.raw_temp_text,
+            raw_file_path=str(path),
+            content_hash=content_hash,
+        )
+    except Exception as exc:
+        logger.error("observation failed station=%s: %s", station.station_id, exc)
+        conn.rollback()
+        upsert_collector_state_error(
+            conn,
+            COLLECTOR_NAME,
+            station.station_id,
+            source,
+            f"observation: {exc}",
+        )
+        conn.commit()
+        return
+
+    upsert_collector_state_success(
+        conn,
+        COLLECTOR_NAME,
+        station.station_id,
+        source,
+    )
+    conn.commit()
+
+
+def run_station_forecasts(
+    conn: Any,
+    collector: CollectorConfig,
+    station: StationConfig,
+    raw_base_dir: Path,
+    *,
+    client: httpx.Client,
+    now_utc: datetime | None = None,
+) -> None:
+    """Fetch and store today/tomorrow hourly forecast pages for one station."""
     now = now_utc or datetime.now(timezone.utc)
     scraped_at = now.astimezone(timezone.utc)
     scraped_iso = scraped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -321,82 +386,48 @@ def run_station_cycle(
     mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
 
     errors: list[str] = []
-    own_client = client is None
-    http = client or httpx.Client()
-
-    try:
+    today_local, tomorrow_local = forecast_dates_for_station(station.timezone, now)
+    for target_day in (today_local, tomorrow_local):
         try:
-            obs_url = build_observation_url(station)
+            fc_url = build_hourly_forecast_url(station, target_day)
             body, path, content_hash = _fetch_and_save(
                 raw_dir=raw_dir,
                 station=station,
-                page_kind="observation",
-                url=obs_url,
+                page_kind="hourly_forecast",
+                url=fc_url,
                 scraped_at=scraped_at,
-                client=http,
+                client=client,
+                target_date_local=target_day,
             )
-            obs = parse_observation_page(body, station, scraped_at)
-            insert_observation_snapshot(
-                conn,
-                station_id=station.station_id,
-                source=source,
-                scraped_at_utc=scraped_iso,
-                target_date_local=obs.target_date_local.isoformat(),
-                station_timezone=station.timezone,
-                observed_at_utc=obs.observed_at_utc,
-                observed_at_local=obs.observed_at_local,
-                temp_c=obs.temp_c,
-                raw_temp_text=obs.raw_temp_text,
-                raw_file_path=str(path),
-                content_hash=content_hash,
-            )
+            for hour in parse_hourly_forecast_page(body, station, target_day, scraped_at):
+                insert_forecast_snapshot(
+                    conn,
+                    station_id=station.station_id,
+                    source=source,
+                    scraped_at_utc=scraped_iso,
+                    target_date_local=target_day.isoformat(),
+                    station_timezone=station.timezone,
+                    target_time_utc=hour.target_time_utc,
+                    target_time_local=hour.target_time_local,
+                    lead_hours_to_day_end=lead_hours_to_day_end(
+                        scraped_at, target_day, station.timezone
+                    ),
+                    temp_c=hour.temp_c,
+                    raw_temp_text=hour.raw_temp_text,
+                    requested_lat=station.lat,
+                    requested_lon=station.lon,
+                    raw_file_path=str(path),
+                    content_hash=content_hash,
+                )
         except Exception as exc:
-            errors.append(f"observation: {exc}")
-            logger.error("observation failed station=%s: %s", station.station_id, exc)
-
-        today_local, tomorrow_local = forecast_dates_for_station(station.timezone, now)
-        for target_day in (today_local, tomorrow_local):
-            try:
-                fc_url = build_hourly_forecast_url(station, target_day)
-                body, path, content_hash = _fetch_and_save(
-                    raw_dir=raw_dir,
-                    station=station,
-                    page_kind="hourly_forecast",
-                    url=fc_url,
-                    scraped_at=scraped_at,
-                    client=http,
-                    target_date_local=target_day,
-                )
-                for hour in parse_hourly_forecast_page(body, station, target_day, scraped_at):
-                    insert_forecast_snapshot(
-                        conn,
-                        station_id=station.station_id,
-                        source=source,
-                        scraped_at_utc=scraped_iso,
-                        target_date_local=target_day.isoformat(),
-                        station_timezone=station.timezone,
-                        target_time_utc=hour.target_time_utc,
-                        target_time_local=hour.target_time_local,
-                        lead_hours_to_day_end=lead_hours_to_day_end(
-                            scraped_at, target_day, station.timezone
-                        ),
-                        temp_c=hour.temp_c,
-                        requested_lat=station.lat,
-                        requested_lon=station.lon,
-                        raw_file_path=str(path),
-                        content_hash=content_hash,
-                    )
-            except Exception as exc:
-                errors.append(f"hourly_forecast {target_day}: {exc}")
-                logger.error(
-                    "hourly forecast failed station=%s date=%s: %s",
-                    station.station_id,
-                    target_day,
-                    exc,
-                )
-    finally:
-        if own_client:
-            http.close()
+            conn.rollback()
+            errors.append(f"hourly_forecast {target_day}: {exc}")
+            logger.error(
+                "hourly forecast failed station=%s date=%s: %s",
+                station.station_id,
+                target_day,
+                exc,
+            )
 
     if errors:
         upsert_collector_state_error(
@@ -418,13 +449,56 @@ def run_station_cycle(
     conn.commit()
 
 
+def run_station_cycle(
+    conn: Any,
+    collector: CollectorConfig,
+    station: StationConfig,
+    raw_base_dir: Path,
+    *,
+    client: httpx.Client | None = None,
+    now_utc: datetime | None = None,
+    fetch_observations: bool = True,
+    fetch_forecasts: bool = True,
+) -> None:
+    """Fetch observation and/or forecast pages for one station."""
+    own_client = client is None
+    http = client or httpx.Client()
+    try:
+        if fetch_observations:
+            run_station_observations(
+                conn,
+                collector,
+                station,
+                raw_base_dir,
+                client=http,
+                now_utc=now_utc,
+            )
+        if fetch_forecasts:
+            run_station_forecasts(
+                conn,
+                collector,
+                station,
+                raw_base_dir,
+                client=http,
+                now_utc=now_utc,
+            )
+    finally:
+        if own_client:
+            http.close()
+
+
 def run_cycle(
     conn: Any,
     config: WeatherCollectorsConfig,
     collector: CollectorConfig,
+    *,
+    fetch_observations: bool = True,
+    fetch_forecasts: bool = True,
 ) -> None:
     """Run one collector cycle for all configured stations."""
     if not collector.enabled:
+        return
+    if not fetch_observations and not fetch_forecasts:
         return
 
     with httpx.Client() as client:
@@ -436,6 +510,8 @@ def run_cycle(
                     station,
                     config.raw_base_dir,
                     client=client,
+                    fetch_observations=fetch_observations,
+                    fetch_forecasts=fetch_forecasts,
                 )
             except Exception as exc:
                 logger.exception(

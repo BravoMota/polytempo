@@ -1,0 +1,27 @@
+---
+description: Never run destructive Postgres tests against production polytempo
+alwaysApply: true
+---
+
+# PostgreSQL / pytest safety
+
+Production weather DB: `polytempo` on the shared Postgres host. Snapshot data is irreplaceable.
+
+## Hard rules for agents
+
+- NEVER run `pytest` (any args) while `POLYTEMPO_DATABASE_URL` or `DATABASE_URL` targets database name `polytempo`.
+- Tests that use `weather_db_url` TRUNCATE all snapshot tables. Treat that as data destruction.
+- Before any pytest involving `tests/test_storage_postgres.py`, `tests/test_collectors_wunderground.py`, or `tests/conftest.py`:
+  - Require `POLYTEMPO_TEST_DATABASE_URL` pointing at `polytempo_test` (or skip tests).
+  - Do NOT use `POLYTEMPO_DATABASE_URL` for tests.
+- NEVER run `migrate_sqlite_to_postgres.py --init-target` against production without explicit user confirmation (it also TRUNCATEs).
+
+## Safe commands
+
+- Production schema only (non-destructive): `python scripts/init_weather_db.py`
+- Production collector: `python scripts/run_collector.py`
+- Tests: `POLYTEMPO_TEST_DATABASE_URL='postgresql://…/polytempo_test' pytest tests/…`
+
+## If unsure which DB URL is set
+
+Stop and ask the user. Do not run pytest.

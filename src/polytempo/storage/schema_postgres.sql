@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS forecast_snapshots (
     station_timezone TEXT NOT NULL,
     lead_hours_to_day_end DOUBLE PRECISION,
     temp_c DOUBLE PRECISION,
+    raw_temp_text TEXT,
     requested_lat DOUBLE PRECISION,
     requested_lon DOUBLE PRECISION,
     returned_lat DOUBLE PRECISION,

@@ -65,6 +65,9 @@ def initialize_database(
     sql = schema_path.read_text(encoding="utf-8")
     with get_connection(database_url) as conn:
         _execute_sql_script(conn, sql)
+        conn.execute(
+            "ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS raw_temp_text TEXT"
+        )
         conn.commit()
 
 
@@ -159,6 +162,7 @@ def insert_forecast_snapshot(
     target_time_local: str | None = None,
     lead_hours_to_day_end: float | None = None,
     temp_c: float | None = None,
+    raw_temp_text: str | None = None,
     requested_lat: float | None = None,
     requested_lon: float | None = None,
     returned_lat: float | None = None,
@@ -173,9 +177,9 @@ def insert_forecast_snapshot(
         INSERT INTO forecast_snapshots (
             station_id, source, model, scraped_at_utc, forecast_generated_at_utc,
             target_time_utc, target_time_local, target_date_local, station_timezone,
-            lead_hours_to_day_end, temp_c, requested_lat, requested_lon,
+            lead_hours_to_day_end, temp_c, raw_temp_text, requested_lat, requested_lon,
             returned_lat, returned_lon, raw_file_path, content_hash, created_at_utc
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -190,6 +194,7 @@ def insert_forecast_snapshot(
             station_timezone,
             lead_hours_to_day_end,
             temp_c,
+            raw_temp_text,
             requested_lat,
             requested_lon,
             returned_lat,

@@ -4,8 +4,16 @@ collectors:
   - name: wunderground
     enabled: true
     source: wunderground
-    interval_seconds: 300
-    anchor_time_local: null
+    # Observations: poll every 5 min on UTC wall-clock slots from anchor.
+    # observations_interval_seconds: 300
+    # observations_anchor_time_utc: "00:00"   # slots at …:00, …:05, …:10 UTC
+    observations_interval_seconds: 300
+    observations_anchor_time_utc: "00:00"
+    # Forecasts: poll every hour on UTC wall-clock slots from anchor.
+    # forecast_interval_seconds: 3600
+    # forecast_anchor_time_utc: "00:00"       # slots at 00:00, 01:00, 02:00 UTC
+    forecast_interval_seconds: 600
+    forecast_anchor_time_utc: "00:00"
     stations:
       - station_id: EGLC
         station_type: icao

@@ -41,6 +41,21 @@ def _pws_station() -> StationConfig:
     )
 
 
+def _collector(**kwargs: object) -> CollectorConfig:
+    defaults: dict[str, object] = {
+        "name": "wunderground",
+        "enabled": True,
+        "source": "wunderground",
+        "observations_interval_seconds": 300,
+        "observations_anchor_time_utc": "00:00",
+        "forecast_interval_seconds": 3600,
+        "forecast_anchor_time_utc": "00:00",
+        "stations": [_icao_station()],
+    }
+    defaults.update(kwargs)
+    return CollectorConfig(**defaults)  # type: ignore[arg-type]
+
+
 def _state_html(state: dict) -> bytes:
     """Wrap an app-root-state dict in minimal Wunderground page HTML."""
     blob = json.dumps(state)
@@ -179,6 +194,7 @@ def test_parse_hourly_forecast_page_filters_to_target_date() -> None:
     assert hours[0].target_time_local == "2026-06-04T00:00:00+0100"
     assert hours[0].target_time_utc == "2026-06-03T23:00:00Z"
     assert hours[0].temp_c == pytest.approx(15.0)
+    assert hours[0].raw_temp_text == "59"
 
 
 def test_parse_observation_page_missing_state_raises() -> None:
@@ -208,14 +224,7 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
 
     monkeypatch.setattr(wu, "fetch_raw_page", fake_fetch)
 
-    collector = CollectorConfig(
-        name="wunderground",
-        enabled=True,
-        source="wunderground",
-        interval_seconds=300,
-        anchor_time_local=None,
-        stations=[_icao_station()],
-    )
+    collector = _collector()
 
     with get_connection(weather_db_url) as conn:
         wu.run_station_cycle(
@@ -241,10 +250,52 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
         fc_count = conn.execute(
             "SELECT COUNT(*) AS n FROM forecast_snapshots WHERE station_id = 'EGLC'"
         ).fetchone()
-    assert state["success_count"] == 1
+        fc_row = conn.execute(
+            "SELECT raw_temp_text FROM forecast_snapshots WHERE station_id = 'EGLC' LIMIT 1"
+        ).fetchone()
+    assert state["success_count"] == 2
     assert obs_count["n"] == 1
     # Two hourly pages (today + tomorrow), each yielding two rows for its own date.
     assert fc_count["n"] == 4
+    assert fc_row["raw_temp_text"] == "59"
+
+
+def test_run_station_observations_only(
+    weather_db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw_base = tmp_path / "raw"
+
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="EGLC",
+            name="London City Airport",
+            timezone="Europe/London",
+        )
+        conn.commit()
+
+    monkeypatch.setattr(wu, "fetch_raw_page", lambda url, *, client=None: _icao_obs_html())
+
+    with get_connection(weather_db_url) as conn:
+        wu.run_station_cycle(
+            conn,
+            _collector(),
+            _icao_station(),
+            raw_base,
+            now_utc=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+            fetch_observations=True,
+            fetch_forecasts=False,
+        )
+
+    with get_connection(weather_db_url) as conn:
+        obs_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM observation_snapshots WHERE station_id = 'EGLC'"
+        ).fetchone()
+        fc_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM forecast_snapshots WHERE station_id = 'EGLC'"
+        ).fetchone()
+    assert obs_count["n"] == 1
+    assert fc_count["n"] == 0
 
 
 def test_run_station_cycle_one_failure_still_saves_others(
@@ -254,21 +305,25 @@ def test_run_station_cycle_one_failure_still_saves_others(
 ) -> None:
     raw_base = tmp_path / "raw"
 
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="EGLC",
+            name="London City Airport",
+            timezone="Europe/London",
+        )
+        conn.commit()
+
     def fake_fetch(url: str, *, client: object = None) -> bytes:
         if "dashboard" in url or "/weather/" in url:
             raise RuntimeError("observation down")
-        return b"forecast ok"
+        if "/hourly/" in url:
+            return _hourly_html(date.fromisoformat(url.rsplit("/", 1)[-1]))
+        return _icao_obs_html()
 
     monkeypatch.setattr(wu, "fetch_raw_page", fake_fetch)
 
-    collector = CollectorConfig(
-        name="wunderground",
-        enabled=True,
-        source="wunderground",
-        interval_seconds=300,
-        anchor_time_local=None,
-        stations=[_icao_station()],
-    )
+    collector = _collector()
 
     with get_connection(weather_db_url) as conn:
         wu.run_station_cycle(
@@ -284,9 +339,10 @@ def test_run_station_cycle_one_failure_still_saves_others(
 
     with get_connection(weather_db_url) as conn:
         row = conn.execute(
-            "SELECT error_count, last_error_message FROM collector_state WHERE station_id = 'EGLC'"
+            "SELECT error_count, success_count, last_error_message FROM collector_state WHERE station_id = 'EGLC'"
         ).fetchone()
     assert row["error_count"] == 1
+    assert row["success_count"] == 1
     assert "observation" in row["last_error_message"]
 
 
@@ -318,14 +374,7 @@ def test_run_cycle_isolates_station_failures(
         raw_base_dir=raw_base,
         collectors=[],
     )
-    collector = CollectorConfig(
-        name="wunderground",
-        enabled=True,
-        source="wunderground",
-        interval_seconds=300,
-        anchor_time_local=None,
-        stations=[_icao_station(), _pws_station()],
-    )
+    collector = _collector(stations=[_icao_station(), _pws_station()])
 
     with get_connection(weather_db_url) as conn:
         wu.run_cycle(conn, config, collector)

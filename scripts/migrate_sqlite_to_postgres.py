@@ -67,6 +67,7 @@ FORECAST_COLUMNS = (
     "station_timezone",
     "lead_hours_to_day_end",
     "temp_c",
+    "raw_temp_text",
     "requested_lat",
     "requested_lon",
     "returned_lat",
@@ -108,6 +109,53 @@ def _normalize_station_row(row: sqlite3.Row) -> tuple[object, ...]:
     active_idx = STATION_COLUMNS.index("active")
     values[active_idx] = bool(values[active_idx])
     return tuple(values)
+
+
+def _sqlite_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(row[1]) for row in rows}
+
+
+def _copy_forecast_snapshots(
+    sqlite_conn: sqlite3.Connection,
+    pg_conn: object,
+    *,
+    dry_run: bool,
+) -> int:
+    sqlite_cols = _sqlite_table_columns(sqlite_conn, "forecast_snapshots")
+    select_cols = [col for col in FORECAST_COLUMNS if col in sqlite_cols]
+    select_sql = (
+        f"SELECT {', '.join(select_cols)} FROM forecast_snapshots ORDER BY {select_cols[0]}"
+    )
+    rows = sqlite_conn.execute(select_sql).fetchall()
+    if dry_run or not rows:
+        return len(rows)
+
+    placeholders = ", ".join(["%s"] * len(FORECAST_COLUMNS))
+    insert_sql = (
+        f"INSERT INTO forecast_snapshots ({', '.join(FORECAST_COLUMNS)}) "
+        f"VALUES ({placeholders})"
+    )
+
+    for start in range(0, len(rows), BATCH_SIZE):
+        batch = rows[start : start + BATCH_SIZE]
+        with pg_conn.cursor() as cur:  # type: ignore[attr-defined]
+            for row in batch:
+                row_map = dict(zip(select_cols, row))
+                values = tuple(row_map.get(col) for col in FORECAST_COLUMNS)
+                cur.execute(insert_sql, values)
+        pg_conn.commit()  # type: ignore[attr-defined]
+
+    pg_conn.execute(  # type: ignore[attr-defined]
+        """
+        SELECT setval(
+            pg_get_serial_sequence('forecast_snapshots', 'id'),
+            COALESCE((SELECT MAX(id) FROM forecast_snapshots), 1)
+        )
+        """
+    )
+    pg_conn.commit()  # type: ignore[attr-defined]
+    return len(rows)
 
 
 def _copy_table(
@@ -198,11 +246,9 @@ def migrate(
                     columns=OBSERVATION_COLUMNS,
                     dry_run=False,
                 ),
-                "forecast_snapshots": _copy_table(
+                "forecast_snapshots": _copy_forecast_snapshots(
                     sqlite_conn,
                     pg_conn,
-                    table="forecast_snapshots",
-                    columns=FORECAST_COLUMNS,
                     dry_run=False,
                 ),
                 "collector_state": _copy_table(

@@ -266,7 +266,18 @@ Each poll per station fetches:
 - live observation page (ICAO or PWS dashboard URL)
 - hourly forecast page for **today** and **tomorrow** (station local dates)
 
-Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station.
+Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station. Forecast rows include `raw_temp_text` (integer °F string from Wunderground).
+
+Scheduling uses **UTC wall-clock slots** (not sleep-after-work). Per collector in YAML:
+
+```yaml
+observations_interval_seconds: 300
+observations_anchor_time_utc: "00:00"   # obs at …:00, …:05, …:10 UTC
+forecast_interval_seconds: 3600
+forecast_anchor_time_utc: "00:00"       # forecast at 00:00, 01:00, … UTC
+```
+
+Observations and forecasts run on independent schedules. Legacy `interval_seconds` / `anchor_time_local` still load but log a deprecation warning.
 
 Initialize schema (idempotent):
 
@@ -303,7 +314,8 @@ python scripts/run_collector.py --once
 Tests (require `POLYTEMPO_DATABASE_URL` or `DATABASE_URL`; storage/collector DB tests skip otherwise):
 
 ```bash
-pytest tests/test_storage_postgres.py tests/test_collector_config.py tests/test_collectors_wunderground.py
+pytest tests/test_storage_postgres.py tests/test_collector_config.py \
+  tests/test_collector_schedule.py tests/test_collectors_wunderground.py
 ```
 
 ## Offline calibration pipeline (standalone scripts)

@@ -86,11 +86,32 @@ def test_insert_forecast_snapshot(weather_db_url: str) -> None:
             station_timezone="Europe/London",
             lead_hours_to_day_end=36.0,
             temp_c=19.0,
+            raw_temp_text="66",
             created_at_utc="2026-06-03T12:00:01Z",
         )
         conn.commit()
 
     assert row_id == 1
+
+    with get_connection(weather_db_url) as conn:
+        row = conn.execute(
+            "SELECT temp_c, raw_temp_text FROM forecast_snapshots WHERE id = 1"
+        ).fetchone()
+    assert row is not None
+    assert row["temp_c"] == pytest.approx(19.0)
+    assert row["raw_temp_text"] == "66"
+
+
+def test_initialize_database_adds_forecast_raw_temp_text(weather_db_url: str) -> None:
+    initialize_database(weather_db_url)
+    with get_connection(weather_db_url) as conn:
+        row = conn.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'forecast_snapshots' AND column_name = 'raw_temp_text'
+            """
+        ).fetchone()
+    assert row is not None
 
 
 def test_collector_state_success_and_error(weather_db_url: str) -> None:
