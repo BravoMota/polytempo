@@ -1,25 +1,13 @@
-"""Tests for the multi-strategy paper pipeline orchestrator."""
+"""Tests for the profile-based paper pipeline orchestrator."""
 
 from __future__ import annotations
 
-import json
 from datetime import date
-from pathlib import Path
 
 from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
-from polytempo.paper.ledger import (
-    STARTING_BALANCE_USD,
-    ledger_path_for,
-    read_state,
-)
-from polytempo.paper.run import (
-    RUNS_FILENAME,
-    has_open_trades_on_event,
-    open_event_ids,
-    preview_pipeline,
-    run_pipeline,
-)
-from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
+from polytempo.paper.ledger import PostgresLedgerStore, STARTING_BALANCE_USD
+from polytempo.paper.run import open_event_ids, run_profile, run_profiles
+from polytempo.profiles.models import EntryGate, TradingProfile
 from polytempo.weather.schema import ForecastValues
 
 
@@ -65,11 +53,31 @@ def _event(buckets: list[PolymarketBucket], *, event_id: str = "evt-1") -> Polym
     )
 
 
-def _strategies() -> list:
-    return [ArgmaxYesStrategy(), DistArbStrategy(), MidBandStrategy()]
+def _profile(
+    trade: str,
+    *,
+    profile_id: str | None = None,
+    target_lead_hours: float = 0.0,
+    tolerance_seconds: float = 999999.0,
+) -> TradingProfile:
+    pid = profile_id or f"test_{trade}"
+    return TradingProfile(
+        id=pid,
+        model_strategy="ensemble_spread",
+        trade_strategy=trade,
+        entry_gate=EntryGate(
+            target_lead_hours=target_lead_hours,
+            tolerance_seconds=tolerance_seconds,
+        ),
+    )
 
 
-def test_open_run_writes_trades_to_each_strategy_ledger(tmp_path: Path) -> None:
+def _profiles() -> list[TradingProfile]:
+    return [_profile("argmax_yes"), _profile("dist_arb"), _profile("mid_band")]
+
+
+def test_open_run_writes_trades_per_profile(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
     forecast = _forecast([24.0])
     event = _event(
         [
@@ -79,184 +87,103 @@ def test_open_run_writes_trades_to_each_strategy_ledger(tmp_path: Path) -> None:
         ]
     )
 
-    summary = run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+    summary = run_profiles(
+        store,
+        _profiles(),
+        forecast,
+        event,
+        enforce_gate=False,
+    )
 
     assert summary.resolved is False
-    assert summary.winning_label is None
-    names = [s.name for s in summary.strategies]
-    assert names == ["argmax_yes", "dist_arb", "mid_band"]
-
-    for s in summary.strategies:
-        path = ledger_path_for(s.name, base_dir=tmp_path)
-        assert path.exists() or s.action == "SKIP"
+    ids = [p.profile_id for p in summary.profiles]
+    assert ids == ["test_argmax_yes", "test_dist_arb", "test_mid_band"]
 
 
-def test_runs_log_appended_with_one_row_per_run(tmp_path: Path) -> None:
+def test_resolved_event_settles(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
     forecast = _forecast([24.0])
-    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    open_event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    run_profiles(store, [_profile("argmax_yes")], forecast, open_event, enforce_gate=False)
 
-    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
-    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
-
-    runs_path = tmp_path / RUNS_FILENAME
-    lines = [json.loads(line) for line in runs_path.read_text().splitlines() if line]
-    assert len(lines) == 2
-    assert all(row["event_id"] == "evt-1" for row in lines)
-    assert set(lines[0]["strategies"].keys()) == {
-        "argmax_yes",
-        "dist_arb",
-        "mid_band",
-    }
-
-
-def test_resolved_event_only_settles_and_does_not_open(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-
-    open_event = _event(
-        [
-            _bucket("23°C", yes_ask=0.30, yes_bid=0.25),
-            _bucket("24°C", yes_ask=0.40, yes_bid=0.35),
-        ]
+    resolved = _event(
+        [_bucket("24°C", yes_ask=0.30, yes_bid=0.25, resolved=True, outcome="YES")]
     )
-    run_pipeline(forecast, open_event, _strategies(), base_dir=tmp_path)
-
-    starting_balances = {
-        name: read_state(ledger_path_for(name, base_dir=tmp_path)).balance_usd
-        for name in ("argmax_yes", "dist_arb", "mid_band")
-    }
-
-    resolved_event = _event(
-        [
-            _bucket("23°C", yes_ask=0.30, yes_bid=0.25, resolved=True, outcome="NO"),
-            _bucket(
-                "24°C",
-                yes_ask=0.40,
-                yes_bid=0.35,
-                resolved=True,
-                outcome="YES",
-            ),
-        ]
-    )
-    summary = run_pipeline(forecast, resolved_event, _strategies(), base_dir=tmp_path)
+    summary = run_profiles(store, [_profile("argmax_yes")], forecast, resolved, enforce_gate=False)
 
     assert summary.resolved is True
     assert summary.winning_label == "24°C"
-
-    for s in summary.strategies:
-        assert s.action in ("SETTLED", "NOTHING_TO_SETTLE")
-        assert s.opened == []
-        state = read_state(ledger_path_for(s.name, base_dir=tmp_path))
-        assert state.open_trades == []
-        if s.action == "SETTLED":
-            assert state.balance_usd != starting_balances[s.name]
+    assert summary.profiles[0].action in ("SETTLED", "NOTHING_TO_SETTLE")
+    state = store.read_state("test_argmax_yes")
+    assert state.open_trades == []
 
 
-def test_resolved_with_no_winner_records_action(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-    weird_event = _event(
-        [
-            _bucket("23°C", resolved=True, outcome="NO"),
-            _bucket("24°C", resolved=True, outcome="NO"),
-        ]
-    )
-
-    summary = run_pipeline(forecast, weird_event, _strategies(), base_dir=tmp_path)
-
-    assert summary.resolved is True
-    assert summary.winning_label is None
-    for s in summary.strategies:
-        assert s.action == "RESOLVED_NO_WINNER"
-
-
-def test_has_open_trades_on_event_false_when_empty(tmp_path: Path) -> None:
-    assert has_open_trades_on_event("evt-1", base_dir=tmp_path) is False
-
-
-def test_has_open_trades_on_event_true_after_open(tmp_path: Path) -> None:
+def test_gate_skip_outside_target(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
     forecast = _forecast([24.0])
     event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
-    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
-    assert has_open_trades_on_event("evt-1", base_dir=tmp_path) is True
-    assert has_open_trades_on_event("evt-other", base_dir=tmp_path) is False
+    profile = _profile("argmax_yes", target_lead_hours=30.0, tolerance_seconds=90.0)
+
+    result = run_profile(
+        store,
+        profile,
+        forecast,
+        event,
+        lead_hours=20.0,
+        enforce_gate=True,
+    )
+    assert result.action == "GATE_SKIP"
+    assert result.opened == []
 
 
-def test_open_event_ids_empty_when_no_ledgers(tmp_path: Path) -> None:
-    assert open_event_ids(base_dir=tmp_path) == []
-
-
-def test_open_event_ids_collects_distinct_open_events(tmp_path: Path) -> None:
+def test_dedupe_blocks_second_open_same_profile(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
     forecast = _forecast([24.0])
-    event_a = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-a")
-    event_b = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-b")
-    run_pipeline(forecast, event_a, _strategies(), base_dir=tmp_path)
-    run_pipeline(forecast, event_b, _strategies(), base_dir=tmp_path)
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    profile = _profile("argmax_yes")
 
-    assert set(open_event_ids(base_dir=tmp_path)) == {"evt-a", "evt-b"}
+    first = run_profile(store, profile, forecast, event, enforce_gate=False)
+    assert first.action == "OPENED"
+
+    second = run_profile(store, profile, forecast, event, dedupe=True, enforce_gate=False)
+    assert second.action == "DEDUPED_OPEN_TRADES_EXIST"
 
 
-def test_open_event_ids_drops_settled_events(tmp_path: Path) -> None:
+def test_dedupe_is_per_profile_not_global(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+    p1 = _profile("argmax_yes", profile_id="p1")
+    p2 = _profile("dist_arb", profile_id="p2")
+
+    run_profile(store, p1, forecast, event, enforce_gate=False)
+    second = run_profile(store, p2, forecast, event, dedupe=True, enforce_gate=False)
+    assert second.action in ("OPENED", "SKIP")
+
+
+def test_open_event_ids(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
+    assert open_event_ids(store) == []
+
     forecast = _forecast([24.0])
     event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)], event_id="evt-a")
-    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
+    run_profile(store, _profile("argmax_yes"), forecast, event, enforce_gate=False)
+    assert open_event_ids(store) == ["evt-a"]
 
-    resolved = _event(
-        [_bucket("24°C", resolved=True, outcome="YES")], event_id="evt-a"
+
+def test_preview_mode_no_opens(paper_db_url: str) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
+    forecast = _forecast([24.0])
+    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
+
+    summary = run_profiles(
+        store,
+        [_profile("argmax_yes")],
+        forecast,
+        event,
+        mode="preview",
+        enforce_gate=False,
     )
-    run_pipeline(forecast, resolved, _strategies(), base_dir=tmp_path)
-
-    assert open_event_ids(base_dir=tmp_path) == []
-
-
-def test_dedupe_blocks_second_open(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
-
-    first = run_pipeline(forecast, event, _strategies(), base_dir=tmp_path, dedupe=True)
-    assert any(s.action == "OPENED" for s in first.strategies)
-
-    second = run_pipeline(forecast, event, _strategies(), base_dir=tmp_path, dedupe=True)
-    for s in second.strategies:
-        assert s.action == "DEDUPED_OPEN_TRADES_EXIST"
-        assert s.opened == []
-
-
-def test_preview_pipeline_writes_runs_log_no_opens(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
-
-    summary = preview_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
-
-    assert summary.mode == "preview"
-    for s in summary.strategies:
-        assert s.action == "PREVIEW"
-        assert s.opened == []
-        path = ledger_path_for(s.name, base_dir=tmp_path)
-        assert not path.exists()
-
-    runs_path = tmp_path / RUNS_FILENAME
-    rows = [json.loads(line) for line in runs_path.read_text().splitlines() if line]
-    assert len(rows) == 1
-    assert rows[0]["mode"] == "preview"
-
-
-def test_run_summary_mode_trade_in_runs_log(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-    event = _event([_bucket("24°C", yes_ask=0.30, yes_bid=0.25)])
-    run_pipeline(forecast, event, _strategies(), base_dir=tmp_path)
-    runs_path = tmp_path / RUNS_FILENAME
-    row = json.loads(runs_path.read_text().splitlines()[0])
-    assert row["mode"] == "trade"
-
-
-def test_skip_when_strategy_opens_nothing(tmp_path: Path) -> None:
-    forecast = _forecast([24.0])
-    # yes_ask=None → no executable edge → SKIP for every strategy
-    event = _event([_bucket("24°C", yes_ask=None, yes_bid=0.0, liquidity=250.0)])
-
-    summary = run_pipeline(forecast, event, [ArgmaxYesStrategy()], base_dir=tmp_path)
-
-    [result] = summary.strategies
-    assert result.action == "SKIP"
-    assert result.opened == []
-    state = read_state(ledger_path_for("argmax_yes", base_dir=tmp_path))
+    assert summary.profiles[0].action == "PREVIEW"
+    state = store.read_state("test_argmax_yes")
     assert state.balance_usd == STARTING_BALANCE_USD

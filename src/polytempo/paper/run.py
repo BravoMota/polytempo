@@ -1,50 +1,31 @@
-"""Multi-strategy paper trading orchestrator.
-
-One pipeline run = one event + forecast + N strategies. For each run:
-
-- If the Polymarket event has resolved, settle every open position on it
-  per strategy. No new trades are opened on a resolved event.
-- Otherwise, run all strategies against the shared model+market output, and
-  append OPEN records to each strategy's own JSONL ledger.
-
-A compact, side-by-side row is also appended to ``<base_dir>/runs.jsonl`` so
-strategy behavior can be compared across runs without replaying every ledger.
-"""
+"""Paper trading pipeline orchestrator (profile-based, PostgreSQL-backed)."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 
-from polytempo.analysis import AnalysisResult, analyze_event_multi
+from polytempo.analysis import AnalysisResult, analyze_event
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     is_event_resolved,
     winning_label_from_event,
 )
 from polytempo.model.calibration import CalibrationRule
-from polytempo.paper.ledger import (
-    DEFAULT_LEDGER_DIR,
-    OpenTrade,
-    ledger_path_for,
-    open_trades_from_analysis,
-    read_state,
-    settle_event,
-)
-from polytempo.strategy.base import Strategy
+from polytempo.model.lead_time import lead_hours_at_target
+from polytempo.paper.ledger import LedgerStore, OpenTrade, PostgresLedgerStore
+from polytempo.profiles.models import TradingProfile
 from polytempo.weather.schema import ForecastValues
-
-RUNS_FILENAME = "runs.jsonl"
 
 
 @dataclass(frozen=True)
-class StrategyRunResult:
-    """What one strategy did on this run."""
+class ProfileRunResult:
+    """What one profile did on this run."""
 
-    name: str
+    profile_id: str
     action: str
+    lead_hours: float | None = None
+    gate_passed: bool | None = None
     opened: list[OpenTrade] = field(default_factory=list)
     settled: list[OpenTrade] = field(default_factory=list)
     analysis: AnalysisResult | None = None
@@ -52,258 +33,199 @@ class StrategyRunResult:
 
 @dataclass(frozen=True)
 class RunSummary:
-    """Aggregate result of one pipeline run across all strategies."""
+    """Aggregate result of one pipeline tick."""
 
     ts: str
     event_id: str
     event_title: str
+    target_date: str | None
     resolved: bool
     winning_label: str | None
-    strategies: list[StrategyRunResult]
+    profiles: list[ProfileRunResult]
     mode: str = "trade"
 
 
-def has_open_trades_on_event(
-    event_id: str,
-    base_dir: Path = DEFAULT_LEDGER_DIR,
-) -> bool:
-    """True if any per-strategy ledger has an unsettled trade on this event."""
-    if not base_dir.exists():
-        return False
-    for path in base_dir.glob("*.jsonl"):
-        if path.name == RUNS_FILENAME:
-            continue
-        state = read_state(path)
-        if any(t.event_id == event_id for t in state.open_trades):
-            return True
-    return False
+def open_event_ids(store: LedgerStore) -> list[str]:
+    """Distinct event ids with open trades in any profile."""
+    from polytempo.storage.paper_postgres import fetch_open_event_ids, get_paper_connection
+
+    if not isinstance(store, PostgresLedgerStore):
+        raise TypeError("open_event_ids requires PostgresLedgerStore")
+    with get_paper_connection(store.database_url) as conn:
+        return fetch_open_event_ids(conn)
 
 
-def open_event_ids(base_dir: Path = DEFAULT_LEDGER_DIR) -> list[str]:
-    """Distinct event ids that still have an open trade in any ledger.
-
-    First-seen order is preserved so a sweep settles oldest-touched events first.
-    """
-    if not base_dir.exists():
-        return []
-    seen: dict[str, None] = {}
-    for path in sorted(base_dir.glob("*.jsonl")):
-        if path.name == RUNS_FILENAME:
-            continue
-        for trade in read_state(path).open_trades:
-            seen.setdefault(trade.event_id, None)
-    return list(seen)
-
-
-def run_pipeline(
+def run_profile(
+    store: LedgerStore,
+    profile: TradingProfile,
     forecast: ForecastValues,
     event: PolymarketEvent,
-    strategies: list[Strategy],
-    base_dir: Path = DEFAULT_LEDGER_DIR,
-    calibration_rule: CalibrationRule | None = None,
-    dedupe: bool = False,
+    *,
     lead_hours: float | None = None,
-    model_strategy: str = "ensemble_spread",
-    station_id: str | None = None,
-) -> RunSummary:
-    """Settle if the event is resolved; otherwise open trades per strategy.
-
-    When ``dedupe=True`` and any open trade already exists for ``event.event_id``
-    across any per-strategy ledger, no new OPENs are written; each strategy
-    reports ``DEDUPED_OPEN_TRADES_EXIST``.
-    """
-    ts = datetime.now(timezone.utc).isoformat()
+    calibration_rule: CalibrationRule | None = None,
+    dedupe: bool = True,
+    enforce_gate: bool = True,
+) -> ProfileRunResult:
+    """Settle, gate-check, or open trades for a single profile."""
     resolved = is_event_resolved(event)
     winning_label = winning_label_from_event(event) if resolved else None
 
     if resolved:
-        results = _settle_all(event, strategies, winning_label, base_dir)
-    elif dedupe and has_open_trades_on_event(event.event_id, base_dir):
-        results = [
-            StrategyRunResult(name=s.name, action="DEDUPED_OPEN_TRADES_EXIST")
-            for s in strategies
-        ]
-    else:
-        results = _open_all(
-            forecast,
-            event,
-            strategies,
-            base_dir,
-            calibration_rule,
-            lead_hours,
-            model_strategy,
-            station_id,
-        )
-
-    summary = RunSummary(
-        ts=ts,
-        event_id=event.event_id,
-        event_title=event.title,
-        resolved=resolved,
-        winning_label=winning_label,
-        strategies=results,
-        mode="trade",
-    )
-    _append_runs_log(summary, base_dir)
-    return summary
-
-
-def preview_pipeline(
-    forecast: ForecastValues,
-    event: PolymarketEvent,
-    strategies: list[Strategy],
-    base_dir: Path = DEFAULT_LEDGER_DIR,
-    calibration_rule: CalibrationRule | None = None,
-    lead_hours: float | None = None,
-    model_strategy: str = "ensemble_spread",
-    station_id: str | None = None,
-) -> RunSummary:
-    """Run all strategies and append a runs.jsonl snapshot; write no OPENs."""
-    from polytempo.analysis import analyze_event_multi
-
-    ts = datetime.now(timezone.utc).isoformat()
-    resolved = is_event_resolved(event)
-    winning_label = winning_label_from_event(event) if resolved else None
-
-    if resolved:
-        results = [
-            StrategyRunResult(name=s.name, action="RESOLVED")
-            for s in strategies
-        ]
-    else:
-        analyses = analyze_event_multi(
-            forecast,
-            event,
-            strategies=strategies,
-            calibration_rule=calibration_rule,
-            lead_hours=lead_hours,
-            model_strategy=model_strategy,
-            station_id=station_id,
-        )
-        results = [
-            StrategyRunResult(
-                name=s.name,
-                action="PREVIEW",
-                analysis=analyses[s.name],
-            )
-            for s in strategies
-        ]
-
-    summary = RunSummary(
-        ts=ts,
-        event_id=event.event_id,
-        event_title=event.title,
-        resolved=resolved,
-        winning_label=winning_label,
-        strategies=results,
-        mode="preview",
-    )
-    _append_runs_log(summary, base_dir)
-    return summary
-
-
-def _settle_all(
-    event: PolymarketEvent,
-    strategies: list[Strategy],
-    winning_label: str | None,
-    base_dir: Path,
-) -> list[StrategyRunResult]:
-    out: list[StrategyRunResult] = []
-    for strategy in strategies:
-        path = ledger_path_for(strategy.name, base_dir=base_dir)
         if winning_label is None:
-            out.append(StrategyRunResult(
-                name=strategy.name,
+            return ProfileRunResult(
+                profile_id=profile.id,
                 action="RESOLVED_NO_WINNER",
-            ))
-            continue
-        settled = settle_event(event.event_id, winning_label, path=path)
-        out.append(StrategyRunResult(
-            name=strategy.name,
+                lead_hours=lead_hours,
+            )
+        settled = store.settle_event(profile.id, event.event_id, winning_label)
+        return ProfileRunResult(
+            profile_id=profile.id,
             action="SETTLED" if settled else "NOTHING_TO_SETTLE",
+            lead_hours=lead_hours,
             settled=settled,
-        ))
-    return out
+        )
 
+    if enforce_gate and lead_hours is not None:
+        gate = profile.entry_gate
+        if not lead_hours_at_target(
+            lead_hours,
+            gate.target_lead_hours,
+            gate.tolerance_seconds,
+        ):
+            if isinstance(store, PostgresLedgerStore):
+                store.log_gate_skip(
+                    profile.id,
+                    lead_hours=lead_hours,
+                    reason="outside_entry_gate",
+                    metadata={
+                        "target_lead_hours": gate.target_lead_hours,
+                        "tolerance_seconds": gate.tolerance_seconds,
+                    },
+                )
+            return ProfileRunResult(
+                profile_id=profile.id,
+                action="GATE_SKIP",
+                lead_hours=lead_hours,
+                gate_passed=False,
+            )
 
-def _open_all(
-    forecast: ForecastValues,
-    event: PolymarketEvent,
-    strategies: list[Strategy],
-    base_dir: Path,
-    calibration_rule: CalibrationRule | None,
-    lead_hours: float | None = None,
-    model_strategy: str = "ensemble_spread",
-    station_id: str | None = None,
-) -> list[StrategyRunResult]:
-    analyses = analyze_event_multi(
+    if dedupe and store.has_open_on_event(profile.id, event.event_id):
+        return ProfileRunResult(
+            profile_id=profile.id,
+            action="DEDUPED_OPEN_TRADES_EXIST",
+            lead_hours=lead_hours,
+            gate_passed=True,
+        )
+
+    strategy = profile.strategy_instance()
+    analysis = analyze_event(
         forecast,
         event,
-        strategies=strategies,
+        strategy=strategy,
         calibration_rule=calibration_rule,
         lead_hours=lead_hours,
-        model_strategy=model_strategy,
-        station_id=station_id,
+        model_strategy=profile.model_strategy,
+        station_id=_station_id_for_city(profile.city),
+        calibration_stats_path=profile.calibration_stats_path,
     )
-    out: list[StrategyRunResult] = []
-    for strategy in strategies:
-        analysis = analyses[strategy.name]
-        path = ledger_path_for(strategy.name, base_dir=base_dir)
-        opened = open_trades_from_analysis(analysis, event_id=event.event_id, path=path)
-        out.append(StrategyRunResult(
-            name=strategy.name,
-            action="OPENED" if opened else "SKIP",
-            opened=opened,
-            analysis=analysis,
-        ))
-    return out
+    opened = store.open_trades_from_analysis(
+        profile.id,
+        analysis,
+        event.event_id,
+        lead_hours=lead_hours,
+        model_strategy=profile.model_strategy,
+    )
+    action = "OPENED" if opened else "SKIP"
+    if isinstance(store, PostgresLedgerStore):
+        store.log_tick(
+            profile.id,
+            polymarket_event_id=event.event_id,
+            lead_hours=lead_hours,
+            model_strategy=profile.model_strategy,
+            trade_action=action,
+        )
+    return ProfileRunResult(
+        profile_id=profile.id,
+        action=action,
+        lead_hours=lead_hours,
+        gate_passed=True,
+        opened=opened,
+        analysis=analysis,
+    )
 
 
-def _append_runs_log(summary: RunSummary, base_dir: Path) -> None:
-    path = base_dir / RUNS_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "ts": summary.ts,
-        "mode": summary.mode,
-        "event_id": summary.event_id,
-        "event_title": summary.event_title,
-        "resolved": summary.resolved,
-        "winning_label": summary.winning_label,
-        "strategies": {
-            s.name: _strategy_to_record(s) for s in summary.strategies
-        },
-    }
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record) + "\n")
+def run_profiles(
+    store: LedgerStore | None,
+    profiles: list[TradingProfile],
+    forecast: ForecastValues,
+    event: PolymarketEvent,
+    *,
+    lead_hours: float | None = None,
+    calibration_rule: CalibrationRule | None = None,
+    dedupe: bool = True,
+    enforce_gate: bool = True,
+    mode: str = "trade",
+) -> RunSummary:
+    """Run all profiles against shared market context."""
+    if mode != "preview" and store is None:
+        raise ValueError("store is required when mode is trade")
+    ts = datetime.now(timezone.utc).isoformat()
+    resolved = is_event_resolved(event)
+    winning_label = winning_label_from_event(event) if resolved else None
+
+    results: list[ProfileRunResult] = []
+    for profile in profiles:
+        if mode == "preview" and not resolved:
+            strategy = profile.strategy_instance()
+            analysis = analyze_event(
+                forecast,
+                event,
+                strategy=strategy,
+                calibration_rule=calibration_rule,
+                lead_hours=lead_hours,
+                model_strategy=profile.model_strategy,
+                station_id=_station_id_for_city(profile.city),
+                calibration_stats_path=profile.calibration_stats_path,
+            )
+            results.append(
+                ProfileRunResult(
+                    profile_id=profile.id,
+                    action="PREVIEW",
+                    lead_hours=lead_hours,
+                    analysis=analysis,
+                )
+            )
+            continue
+
+        results.append(
+            run_profile(
+                store,
+                profile,
+                forecast,
+                event,
+                lead_hours=lead_hours,
+                calibration_rule=calibration_rule,
+                dedupe=dedupe,
+                enforce_gate=enforce_gate,
+            )
+        )
+
+    settlement_date = (
+        event.settlement_date.isoformat() if event.settlement_date else None
+    )
+    return RunSummary(
+        ts=ts,
+        event_id=event.event_id,
+        event_title=event.title,
+        target_date=settlement_date,
+        resolved=resolved,
+        winning_label=winning_label,
+        profiles=results,
+        mode=mode,
+    )
 
 
-def _strategy_to_record(result: StrategyRunResult) -> dict:
-    if result.opened:
-        return {
-            "action": result.action,
-            "trades": [
-                {
-                    "bucket": t.bucket_label,
-                    "side": t.side,
-                    "entry_price": t.entry_price,
-                    "stake_usd": t.stake_usd,
-                    "shares": t.shares,
-                    "edge_pp": t.edge_pp,
-                }
-                for t in result.opened
-            ],
-        }
-    if result.settled:
-        return {
-            "action": result.action,
-            "settled": [
-                {
-                    "bucket": t.bucket_label,
-                    "side": t.side,
-                    "stake_usd": t.stake_usd,
-                    "shares": t.shares,
-                }
-                for t in result.settled
-            ],
-        }
-    return {"action": result.action}
+def _station_id_for_city(city: str) -> str:
+    from polytempo.weather.stations import get_station
+
+    return get_station(city).icao

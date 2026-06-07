@@ -78,34 +78,65 @@ polytempo live --mode preview --days-ahead 3 --city london
 
 `live` is the canonical entrypoint. `paper open` below remains as a thin per-event wrapper for scripts that already use it.
 
-## paper (Phase B)
+## paper (PostgreSQL profiles)
 
-Paper-trading ledger across **three strategies in parallel** — `argmax_yes`, `dist_arb`, `mid_band`. Each strategy gets its own JSONL ledger under `paper_ledger/` (e.g. `paper_ledger/argmax_yes.jsonl`). Ledgers are committed to git (shared state across machines); avoid concurrent runs.
+Paper trading uses **12 trading profiles** (2 model strategies × 3 trade strategies × 2 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files.
 
-No live orders. No active-sell / profit-taking yet (deferred to Phase D — trades only settle at event resolution).
+### Database setup (one-time)
+
+```sql
+CREATE DATABASE polytempo_paper;
+CREATE DATABASE polytempo_paper_test;  -- pytest only
+```
+
+```bash
+export POLYTEMPO_PAPER_DATABASE_URL='postgresql://jnlow@100.74.116.100:5432/polytempo_paper'
+export POLYTEMPO_PAPER_TEST_DATABASE_URL='postgresql://jnlow@HOST:5432/polytempo_paper_test'
+
+python scripts/init_paper_db.py
+python scripts/init_paper_db.py --database-url "$POLYTEMPO_PAPER_TEST_DATABASE_URL"
+```
+
+External programs can query views: `paper_open_positions`, `paper_profile_balances`, `paper_recent_ticks`.
+
+### run_paper_bot (always-on)
+
+Schedule-driven bot: wakes at the exact UTC instant when lead hours equals each profile's target (±90s), settles resolved events every 15 minutes.
+
+`--once` is a **dry-run preview** only: shows model decisions for **today, tomorrow, and day after** in per-date tables. No Postgres writes, no gate enforcement — use the continuous bot for real paper trades.
+
+```bash
+python scripts/run_paper_bot.py
+python scripts/run_paper_bot.py --once   # preview snapshot (no DB)
+python scripts/run_paper_bot.py --config config/paper_profiles.yaml
+```
+
+Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need the paper DB.
+
+No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).
 
 ### paper open
 
-Fetch event + forecast, run all three strategies through the pipeline, open trades. Auto-settles if the event already resolved.
+Fetch event + forecast for the settlement date, run all active profiles, open trades. Auto-settles if resolved. Per-profile dedupe (not global across profiles).
 
 | Flag | Meaning |
 | --- | --- |
 | `--event-id` | Polymarket Gamma event id |
-| `--date` | Settlement date `YYYY-MM-DD` (Open-Meteo target day) |
-| `--city` | Contract station for Open-Meteo (default `london`) |
+| `--date` | Settlement date `YYYY-MM-DD` |
+| `--city` | Contract station (default `london`) |
+| `--config` | Path to `paper_profiles.yaml` |
 
 ```bash
 polytempo paper open --event-id 509200 --date 2026-05-23 --city london
 ```
 
-Prints a side-by-side run summary (per-strategy `OPEN`/`SETTLE` actions) and updated balances per ledger.
-
 ### paper status
 
-Side-by-side balances for all three strategies plus open positions per strategy.
+Balances for all active profiles from Postgres.
 
 ```bash
 polytempo paper status
+polytempo paper status --config config/paper_profiles.yaml
 ```
 
 ### paper scenarios
@@ -139,10 +170,10 @@ polytempo paper settle --event-id 509200 --winner "29°C"
 
 ### paper list-london
 
-List active London weather events from Polymarket Gamma.
+List London weather events; pass `--date` to filter Gamma by settlement day.
 
 ```bash
-polytempo paper list-london --limit 20
+polytempo paper list-london --limit 20 --date 2026-05-23
 ```
 
 ## fetch-historical-forecasts

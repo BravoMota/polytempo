@@ -5,7 +5,8 @@ from datetime import date, datetime, timezone
 import pytest
 from typer.testing import CliRunner
 
-from polytempo.cli.main import _lead_hours_to_end_of_target_day, app
+from polytempo.model.lead_time import lead_hours_to_end_of_target_day
+from polytempo.cli.main import app
 
 
 def test_live_command_help_exits_zero() -> None:
@@ -64,18 +65,18 @@ def test_lead_hours_anchors_at_end_of_same_day_target() -> None:
     target = date(2026, 5, 28)
     now = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
 
-    assert _lead_hours_to_end_of_target_day(target, now=now) == pytest.approx(12.0)
+    assert lead_hours_to_end_of_target_day(target, now=now) == pytest.approx(12.0)
 
 
 def test_lead_hours_anchors_at_end_of_next_day_target() -> None:
     target = date(2026, 5, 29)
     now = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
 
-    assert _lead_hours_to_end_of_target_day(target, now=now) == pytest.approx(36.0)
+    assert lead_hours_to_end_of_target_day(target, now=now) == pytest.approx(36.0)
 
 
 def test_lead_hours_clamps_to_zero_past_end_of_target() -> None:
     target = date(2026, 5, 28)
     now = datetime(2026, 5, 29, 0, 1, tzinfo=timezone.utc)
 
-    assert _lead_hours_to_end_of_target_day(target, now=now) == 0.0
+    assert lead_hours_to_end_of_target_day(target, now=now) == 0.0

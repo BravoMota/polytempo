@@ -15,12 +15,17 @@ Production weather DB: `polytempo` on the shared Postgres host. Snapshot data is
   - Require `POLYTEMPO_TEST_DATABASE_URL` pointing at `polytempo_test` (or skip tests).
   - Do NOT use `POLYTEMPO_DATABASE_URL` for tests.
 - NEVER run `migrate_sqlite_to_postgres.py --init-target` against production without explicit user confirmation (it also TRUNCATEs).
+- NEVER run `pytest` while `POLYTEMPO_PAPER_DATABASE_URL` targets database name `polytempo_paper` (prod paper ledger).
+- Paper tests using `paper_db_url` TRUNCATE `paper_events` and `paper_bot_state`. Require `POLYTEMPO_PAPER_TEST_DATABASE_URL` pointing at `polytempo_paper_test`.
 
 ## Safe commands
 
 - Production schema only (non-destructive): `python scripts/init_weather_db.py`
 - Production collector: `python scripts/run_collector.py`
+- Paper schema only (non-destructive): `python scripts/init_paper_db.py`
+- Paper bot: `python scripts/run_paper_bot.py` (requires `POLYTEMPO_PAPER_DATABASE_URL`)
 - Tests: `POLYTEMPO_TEST_DATABASE_URL='postgresql://…/polytempo_test' pytest tests/…`
+- Paper tests: `POLYTEMPO_PAPER_TEST_DATABASE_URL='postgresql://…/polytempo_paper_test' pytest tests/test_ledger.py tests/test_paper_run.py tests/test_paper_postgres.py`
 
 ## If unsure which DB URL is set
 

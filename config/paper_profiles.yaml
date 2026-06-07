@@ -1,0 +1,41 @@
+# Paper trading profiles: model × trade strategy × lead-time entry gate.
+# Twelve combinations by default (2 × 3 × 2).
+
+active_profiles: all_twelve
+
+city: london
+target_day: tomorrow
+
+calibration_stats_path: data/weather/statistical/calibration_stats.csv
+
+# Bot wakes at the exact UTC instant when lead_hours == target_lead_hours
+# (± tolerance_seconds, default 90s). Not a multi-hour window.
+lead_gates:
+  lead12:
+    target_lead_hours: 12
+  lead15:
+    target_lead_hours: 15
+  lead18:
+    target_lead_hours: 18
+  lead24:
+    target_lead_hours: 24
+  lead30:
+    target_lead_hours: 30
+  lead36:
+    target_lead_hours: 36
+  lead42:
+    target_lead_hours: 42
+  lead48:
+    target_lead_hours: 48
+
+model_strategies:
+  - best_historical
+  - ensemble_spread
+
+trade_strategies:
+  - argmax_yes
+  - dist_arb
+  - mid_band
+
+# Profile ids generated as: {bh|es}_{trade}_{lead30|lead24}
+# e.g. bh_dist_arb_lead30, es_mid_band_lead24

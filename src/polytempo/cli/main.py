@@ -37,6 +37,7 @@ from polytempo.analysis import (
     analyze_event,
 )
 from polytempo.model.distribution import format_distribution_build_markdown
+from polytempo.model.lead_time import lead_hours_to_end_of_target_day
 from polytempo.markets.buckets import bucket_label_for_value, parse_temperature_bucket
 from polytempo.markets.polymarket import (
     PolymarketEvent,
@@ -49,16 +50,11 @@ from polytempo.markets.polymarket import (
 )
 from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
 from polytempo.reports.writer import RunReporter
-from polytempo.paper.ledger import (
-    DEFAULT_LEDGER_DIR,
-    DEFAULT_LEDGER_PATH,
-    ledger_path_for,
-    open_trades_from_analysis,
-    read_state,
-    settle_event,
-)
-from polytempo.paper.run import RunSummary, open_event_ids, preview_pipeline, run_pipeline
-from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
+from polytempo.paper.ledger import PostgresLedgerStore, default_ledger_store
+from polytempo.paper.run import RunSummary, open_event_ids, run_profiles
+from polytempo.paper.bot_log import format_run_summary
+from polytempo.paper.market_context import fetch_market_context
+from polytempo.profiles import DEFAULT_PROFILES_PATH, load_paper_profiles
 from polytempo.strategy.edge import MarketPrice
 from polytempo.weather.calibration_dataset import (
     DEFAULT_CALIBRATION_STATS_PATH,
@@ -359,7 +355,7 @@ def _run_live_one_day(
                 _md_forecast(station, target_date, daily, forecast),
             )
 
-            lead_hours = _lead_hours_to_end_of_target_day(target_date)
+            lead_hours = lead_hours_to_end_of_target_day(target_date)
             if lead_hours < 6.0:
                 typer.echo(
                     f"warning: lead_hours={lead_hours:.1f} < 6 — near settle, forecast value drops and edges sharpen.",
@@ -387,26 +383,19 @@ def _run_live_one_day(
                 format_distribution_build_markdown(preview_result.distribution_build),
             )
 
-            strategies = _default_strategies()
-            if mode is LiveMode.TRADE:
-                summary = run_pipeline(
-                    forecast,
-                    event,
-                    strategies,
-                    dedupe=True,
-                    lead_hours=lead_hours,
-                    model_strategy=model_strategy.value,
-                    station_id=station.icao,
-                )
-            else:
-                summary = preview_pipeline(
-                    forecast,
-                    event,
-                    strategies,
-                    lead_hours=lead_hours,
-                    model_strategy=model_strategy.value,
-                    station_id=station.icao,
-                )
+            profiles = _load_profiles()
+            store = default_ledger_store()
+            pipeline_mode = "preview" if mode is LiveMode.PREVIEW else "trade"
+            summary = run_profiles(
+                store,
+                profiles,
+                forecast,
+                event,
+                lead_hours=lead_hours,
+                dedupe=True,
+                enforce_gate=False,
+                mode=pipeline_mode,
+            )
 
             reporter.section(
                 "Run outcome",
@@ -424,10 +413,10 @@ def _run_live_one_day(
             typer.echo(_render_run_summary(summary))
             if mode is LiveMode.TRADE:
                 typer.echo("")
-                for s in summary.strategies:
-                    state = read_state(ledger_path_for(s.name))
+                for p in summary.profiles:
+                    state = store.read_state(p.profile_id)
                     typer.echo(
-                        f"  {s.name:<12} balance=${state.balance_usd:>8.2f} "
+                        f"  {p.profile_id:<24} balance=${state.balance_usd:>8.2f} "
                         f"open={len(state.open_trades):>2} settled={state.settled_count:>3} "
                         f"realized=${state.realized_pnl_usd:>+8.2f}"
                     )
@@ -443,46 +432,28 @@ def _md_run_summary(summary: RunSummary) -> str:
         f"- winning_label: `{summary.winning_label}`" if summary.winning_label else "- winning_label: `-`",
         "",
     ]
-    for s in summary.strategies:
-        lines.append(f"### {s.name} — {s.action}")
-        if s.analysis is not None:
+    for p in summary.profiles:
+        lines.append(f"### {p.profile_id} — {p.action}")
+        if p.analysis is not None:
             lines.append("")
-            lines.append(_md_result(s.analysis))
-        if s.opened:
+            lines.append(_md_result(p.analysis))
+        if p.opened:
             lines.append("")
             lines.append("opened:")
-            for t in s.opened:
+            for t in p.opened:
                 lines.append(
                     f"- {t.bucket_label} side={t.side} entry={t.entry_price:.2f} "
                     f"stake=${t.stake_usd:.2f} shares={t.shares:.2f} edge={t.edge_pp:.2f}pp"
                 )
-        if s.settled:
+        if p.settled:
             lines.append("")
             lines.append("settled:")
-            for t in s.settled:
+            for t in p.settled:
                 lines.append(
                     f"- {t.bucket_label} side={t.side} stake=${t.stake_usd:.2f} shares={t.shares:.2f}"
                 )
         lines.append("")
     return "\n".join(lines)
-
-
-def _lead_hours_to_end_of_target_day(
-    target: date, now: datetime | None = None
-) -> float:
-    """Hours from ``now`` (UTC) until UTC midnight at the END of ``target``.
-
-    End-of-target is UTC midnight of the day after ``target`` — the same
-    anchor used by the offline calibration pipeline in
-    ``scripts/4_build_forecast_records_csv.py::compute_lead_hours``. Matching
-    anchors is what makes ``best_historical`` lead-hours lookups line up with
-    ``data/weather/statistical/calibration_stats.csv`` row by row.
-    """
-    end_of_target = datetime.combine(
-        target + timedelta(days=1), time.min, tzinfo=timezone.utc
-    )
-    now = now if now is not None else datetime.now(timezone.utc)
-    return max(0.0, (end_of_target - now).total_seconds() / 3600.0)
 
 
 def _md_event(event: PolymarketEvent) -> str:
@@ -780,27 +751,38 @@ def compute_calibration_stats_cmd(
 # ---------------------------------------------------------------------------
 
 
+def _load_profiles(config: Path = DEFAULT_PROFILES_PATH):
+    return load_paper_profiles(config)
+
+
 @paper_app.command("status")
-def paper_status() -> None:
-    """Print balances side-by-side for all three Phase B strategies."""
-    names = [s.name for s in _default_strategies()]
-    header = f"{'strategy':<12} {'balance':>10} {'open':>5} {'settled':>8} {'realized':>11}"
+def paper_status(
+    config: Path = typer.Option(
+        DEFAULT_PROFILES_PATH,
+        "--config",
+        help="Path to paper_profiles.yaml",
+    ),
+) -> None:
+    """Print balances for all active trading profiles."""
+    store = default_ledger_store()
+    profiles = _load_profiles(config)
+    header = f"{'profile':<24} {'balance':>10} {'open':>5} {'settled':>8} {'realized':>11}"
     typer.echo(header)
     typer.echo("-" * len(header))
-    for name in names:
-        state = read_state(ledger_path_for(name))
+    for profile in profiles:
+        state = store.read_state(profile.id)
         typer.echo(
-            f"{name:<12} ${state.balance_usd:>9.2f} "
+            f"{profile.id:<24} ${state.balance_usd:>9.2f} "
             f"{len(state.open_trades):>5} {state.settled_count:>8} "
             f"${state.realized_pnl_usd:>+10.2f}"
         )
 
-    for name in names:
-        state = read_state(ledger_path_for(name))
+    for profile in profiles:
+        state = store.read_state(profile.id)
         if not state.open_trades:
             continue
         typer.echo("")
-        typer.echo(f"[{name}] open positions:")
+        typer.echo(f"[{profile.id}] open positions:")
         sub = f"  {'trade_id':<14} {'event_id':<14} {'bucket':<18} {'side':<4} {'entry':>6} {'stake':>8} {'shares':>8}"
         typer.echo(sub)
         typer.echo("  " + "-" * (len(sub) - 2))
@@ -835,21 +817,24 @@ def paper_scenarios(
     ("X°C or lower" / "Y°C or higher"); the row's PnL is the worst-case net
     across the rolled-up buckets.
     """
+    store = default_ledger_store()
+    profiles = _load_profiles()
+    profile_ids = [p.id for p in profiles]
     open_by_event: dict[str, dict[str, list]] = {}
-    for strat in _default_strategies():
-        state = read_state(ledger_path_for(strat.name))
+    for profile in profiles:
+        state = store.read_state(profile.id)
         for trade in state.open_trades:
             if event_id and trade.event_id != event_id:
                 continue
             open_by_event.setdefault(trade.event_id, {}).setdefault(
-                strat.name, []
+                profile.id, []
             ).append(trade)
 
     if not open_by_event:
         typer.echo("no open positions on any event")
         return
 
-    strategy_names = [s.name for s in _default_strategies()]
+    strategy_names = profile_ids
 
     for evt_id, by_strat in open_by_event.items():
         try:
@@ -961,9 +946,17 @@ def paper_scenarios(
 
 
 @paper_app.command("list-london")
-def paper_list_london(limit: int = typer.Option(20, help="Max events to scan.")) -> None:
+def paper_list_london(
+    limit: int = typer.Option(20, help="Max events to scan."),
+    target_date: str | None = typer.Option(
+        None,
+        "--date",
+        help="Filter by settlement date YYYY-MM-DD (recommended).",
+    ),
+) -> None:
     """List active London weather events from Polymarket."""
-    events = fetch_weather_events(limit=limit)
+    end_on = date.fromisoformat(target_date) if target_date else None
+    events = fetch_weather_events(limit=limit, end_on_date=end_on)
     matches = [e for e in events if "london" in e.title.lower()]
     if not matches:
         typer.echo("no active London events found")
@@ -972,35 +965,8 @@ def paper_list_london(limit: int = typer.Option(20, help="Max events to scan."))
         typer.echo(f"{event.event_id}\t{event.slug}\t{event.title}")
 
 
-def _default_strategies() -> list:
-    return [ArgmaxYesStrategy(), DistArbStrategy(), MidBandStrategy()]
-
-
-def _render_run_summary(summary: RunSummary, base_dir: date | str | None = None) -> str:
-    """Side-by-side strategy summary for one pipeline run."""
-    lines: list[str] = []
-    header = f"event: {summary.event_title} ({summary.event_id})"
-    lines.append(header)
-    if summary.resolved:
-        winner = summary.winning_label or "(no winner)"
-        lines.append(f"status:   RESOLVED winner={winner}")
-    else:
-        lines.append("status:   OPEN (unresolved)")
-    lines.append("")
-    for s in summary.strategies:
-        lines.append(f"[{s.name}] {s.action}")
-        for t in s.opened:
-            lines.append(
-                f"  + OPEN  {t.bucket_label:<14} side={t.side} "
-                f"entry={t.entry_price:.2f} stake=${t.stake_usd:.2f} "
-                f"shares={t.shares:.2f} edge={t.edge_pp:.2f}pp"
-            )
-        for t in s.settled:
-            lines.append(
-                f"  - SETTLE {t.bucket_label:<14} side={t.side} "
-                f"stake=${t.stake_usd:.2f} shares={t.shares:.2f}"
-            )
-    return "\n".join(lines)
+def _render_run_summary(summary: RunSummary) -> str:
+    return format_run_summary(summary)
 
 
 @paper_app.command("open")
@@ -1008,20 +974,34 @@ def paper_open(
     event_id: str = typer.Option(..., "--event-id", help="Polymarket event id."),
     target_date: str = typer.Option(..., "--date", help="Settlement date YYYY-MM-DD."),
     city: str = typer.Option("london", "--city", help="Contract station for Open-Meteo."),
+    config: Path = typer.Option(DEFAULT_PROFILES_PATH, "--config"),
 ) -> None:
-    """Run all strategies against one event. Settles automatically if resolved."""
+    """Run all active profiles against one event. Settles automatically if resolved."""
     parsed_date = date.fromisoformat(target_date)
-    event = hydrate_prices(fetch_event(event_id))
-    station = get_station(city)
-    forecast = fetch_for_station(station, parsed_date).to_forecast_values()
+    ctx = fetch_market_context(city, parsed_date, event_id=event_id)
+    if ctx.date_mismatch:
+        typer.echo(
+            f"Warning: event settlement {ctx.event.settlement_date} != target {parsed_date}.",
+            err=True,
+        )
 
-    summary = run_pipeline(forecast, event, _default_strategies(), dedupe=True)
+    store = default_ledger_store()
+    profiles = _load_profiles(config)
+    summary = run_profiles(
+        store,
+        profiles,
+        ctx.forecast,
+        ctx.event,
+        lead_hours=ctx.lead_hours,
+        dedupe=True,
+        enforce_gate=False,
+    )
     typer.echo(_render_run_summary(summary))
     typer.echo("")
-    for s in summary.strategies:
-        state = read_state(ledger_path_for(s.name))
+    for p in summary.profiles:
+        state = store.read_state(p.profile_id)
         typer.echo(
-            f"  {s.name:<12} balance=${state.balance_usd:>8.2f} "
+            f"  {p.profile_id:<24} balance=${state.balance_usd:>8.2f} "
             f"open={len(state.open_trades):>2} settled={state.settled_count:>3} "
             f"realized=${state.realized_pnl_usd:>+8.2f}"
         )
@@ -1113,21 +1093,20 @@ def paper_settle(
     obs_note = f" observed={observed_tmax:.2f}°C" if observed_tmax is not None else ""
     typer.echo(f"winner={winning_label!r} source={source}{obs_note}")
 
-    strategies = _default_strategies()
+    store = default_ledger_store()
+    profiles = _load_profiles()
     total_settled = 0
-    for strat in strategies:
-        strategy = strat.name
-        path = ledger_path_for(strategy)
-        if not path.exists():
+    for profile in profiles:
+        if not store.has_open_on_event(profile.id, event_id):
             continue
-        settled = settle_event(event_id, winning_label, path=path)
-        state = read_state(path)
+        settled = store.settle_event(profile.id, event_id, winning_label)
+        state = store.read_state(profile.id)
         total_settled += len(settled)
         typer.echo("")
         if not settled:
-            typer.echo(f"[{strategy}] no open trades for this event")
+            typer.echo(f"[{profile.id}] no open trades for this event")
         else:
-            typer.echo(f"[{strategy}] settled {len(settled)} trade(s):")
+            typer.echo(f"[{profile.id}] settled {len(settled)} trade(s):")
             for trade in settled:
                 outcome = "YES" if trade.bucket_label == winning_label else "NO"
                 typer.echo(f"  {trade.trade_id} {trade.bucket_label}  -> {outcome}")
@@ -1139,17 +1118,18 @@ def paper_settle(
         )
 
     if total_settled == 0:
-        typer.echo("\nno open trades matched this event across any strategy")
+        typer.echo("\nno open trades matched this event across any profile")
 
 
 def _settle_all_open() -> None:
-    """Settle every open event Gamma reports resolved, across all ledgers."""
-    event_ids = open_event_ids()
+    """Settle every open event Gamma reports resolved, across all profiles."""
+    store = default_ledger_store()
+    profiles = _load_profiles()
+    event_ids = open_event_ids(store)
     if not event_ids:
-        typer.echo("no open trades in any ledger")
+        typer.echo("no open trades in any profile")
         return
 
-    strategies = _default_strategies()
     grand_total = 0
     for eid in event_ids:
         event = fetch_event(eid)
@@ -1162,13 +1142,12 @@ def _settle_all_open() -> None:
             continue
 
         typer.echo(f"[{eid}] {event.title} — winner={winning_label!r}")
-        for strat in strategies:
-            path = ledger_path_for(strat.name)
-            if not path.exists():
+        for profile in profiles:
+            if not store.has_open_on_event(profile.id, eid):
                 continue
-            settled = settle_event(eid, winning_label, path=path)
+            settled = store.settle_event(profile.id, eid, winning_label)
             grand_total += len(settled)
             if settled:
-                typer.echo(f"  [{strat.name}] settled {len(settled)} trade(s)")
+                typer.echo(f"  [{profile.id}] settled {len(settled)} trade(s)")
 
     typer.echo(f"\ntotal settled across all open events: {grand_total}")

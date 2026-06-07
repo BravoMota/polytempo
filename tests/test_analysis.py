@@ -340,20 +340,6 @@ def test_analyze_event_multi_rejects_duplicate_names() -> None:
         )
 
 
-def test_ledger_path_for_returns_per_strategy_jsonl(tmp_path) -> None:
-    from polytempo.paper.ledger import ledger_path_for
-
-    path = ledger_path_for("dist_arb", base_dir=tmp_path)
-    assert path == tmp_path / "dist_arb.jsonl"
-
-
-def test_ledger_path_for_rejects_path_separators() -> None:
-    from polytempo.paper.ledger import ledger_path_for
-
-    with pytest.raises(ValueError):
-        ledger_path_for("../evil")
-
-
 _CALIBRATION_HEADER = (
     "station_id,model,lead_hours,n_samples,bias_c,mae_c,rmse_c,error_std_c"
 )
