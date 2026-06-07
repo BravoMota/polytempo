@@ -1,6 +1,15 @@
-docs/
-*.md
-*.yaml
-*.yml
-config/
-data/
+*.pdf
+*.png
+data/weather/
+
+# Secrets
+.env
+.env.*
+
+# Without LLM API key
+# *.md
+# *.yaml
+# *.yml
+# docs/
+# config/
+# data/

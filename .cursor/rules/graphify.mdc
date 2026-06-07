@@ -1,27 +1,11 @@
 ---
-description: Use Graphify knowledge graph for repo navigation and token-efficient context selection
-globs:
-  - "**/*"
+description: graphify knowledge graph context
 alwaysApply: true
 ---
 
-# Graphify-aware workflow
+This project has a graphify knowledge graph at graphify-out/.
 
-This project has Graphify available.
-
-When a task requires understanding project structure, dependencies, or cross-file relationships:
-
-1. Prefer using existing Graphify output before scanning many files.
-2. Look for Graphify artifacts such as:
-   - `graphify-out/`
-   - `GRAPH_REPORT.md`
-   - `graph.json`
-3. Use Graphify context to identify the smallest relevant file set.
-4. Do not load broad folders or the entire repo unless explicitly asked.
-5. Before editing, list the small set of files you plan to inspect/change and why.
-6. If Graphify output seems stale after recent code changes, ask to rerun `graphify .`.
-
-Token discipline:
-- Do not include long previous conversation context unless directly relevant.
-- Prefer fresh task summaries and targeted file reads.
-- Avoid reading docs, papers, images, or generated artifacts unless the task requires them.
+- For codebase or architecture questions, when `graphify-out/graph.json` exists, first run `graphify query "<question>"` (or `graphify path "<A>" "<B>"` / `graphify explain "<concept>"`). These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context
+- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
