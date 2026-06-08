@@ -11,6 +11,7 @@ target date as the forecast sample set.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import date
 
@@ -32,6 +33,12 @@ DEFAULT_MODELS: tuple[str, ...] = (
 
 PLAUSIBLE_MIN_C = -40.0
 PLAUSIBLE_MAX_C = 60.0
+
+DEFAULT_FORECAST_TIMEOUT_S = 60.0
+DEFAULT_FORECAST_MAX_RETRIES = 3
+DEFAULT_FORECAST_RETRY_BACKOFF_S = (2.0, 4.0)
+
+_RETRYABLE_STATUS_CODES = frozenset({502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -114,6 +121,14 @@ def parse_forecast_payload(payload: dict, target_date: date) -> DailyMaxForecast
     )
 
 
+def _is_retryable_forecast_error(exc: BaseException) -> bool:
+    if isinstance(exc, (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUS_CODES
+    return False
+
+
 def fetch_daily_max(
     latitude: float,
     longitude: float,
@@ -121,29 +136,46 @@ def fetch_daily_max(
     timezone: str,
     models: tuple[str, ...] | list[str] = DEFAULT_MODELS,
     base_url: str = "https://api.open-meteo.com/v1/forecast",
+    *,
+    timeout_s: float = DEFAULT_FORECAST_TIMEOUT_S,
+    max_retries: int = DEFAULT_FORECAST_MAX_RETRIES,
+    retry_backoff_s: tuple[float, ...] = DEFAULT_FORECAST_RETRY_BACKOFF_S,
 ) -> DailyMaxForecast:
     """Fetch a daily-max temperature ensemble across models for one date."""
     if not models:
         raise ValueError("models must not be empty")
     if not timezone.strip():
         raise ValueError("timezone must not be empty")
+    if max_retries < 1:
+        raise ValueError("max_retries must be >= 1")
 
     target_iso = target_date.isoformat()
-    response = httpx.get(
-        base_url,
-        params={
-            "latitude": latitude,
-            "longitude": longitude,
-            "daily": "temperature_2m_max",
-            "temperature_unit": "celsius",
-            "models": ",".join(models),
-            "timezone": timezone,
-            "start_date": target_iso,
-            "end_date": target_iso,
-        },
-    )
-    response.raise_for_status()
-    return parse_forecast_payload(response.json(), target_date)
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "temperature_2m_max",
+        "temperature_unit": "celsius",
+        "models": ",".join(models),
+        "timezone": timezone,
+        "start_date": target_iso,
+        "end_date": target_iso,
+    }
+
+    last_exc: BaseException | None = None
+    for attempt in range(max_retries):
+        try:
+            response = httpx.get(base_url, params=params, timeout=timeout_s)
+            response.raise_for_status()
+            return parse_forecast_payload(response.json(), target_date)
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_retries - 1 or not _is_retryable_forecast_error(exc):
+                raise
+            if attempt < len(retry_backoff_s):
+                time.sleep(retry_backoff_s[attempt])
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def fetch_for_station(

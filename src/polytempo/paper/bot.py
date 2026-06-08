@@ -30,6 +30,7 @@ from polytempo.storage.paper_postgres import upsert_bot_state
 logger = logging.getLogger(__name__)
 
 SETTLE_SWEEP_INTERVAL = timedelta(minutes=15)
+GATE_RETRY_INTERVAL = timedelta(seconds=30)
 PREVIEW_DAYS = 3
 
 
@@ -44,6 +45,12 @@ class BotState:
 class WorkUnit:
     city: str
     target_date: date
+
+
+@dataclass(frozen=True)
+class TickResult:
+    box: str
+    gate_retry_at: datetime | None = None
 
 
 def reload_profiles(config_path: Path) -> list[TradingProfile]:
@@ -224,13 +231,14 @@ def run_tick(
     *,
     events_limit: int = 20,
     enforce_gate: bool = True,
-) -> str:
+) -> TickResult:
     """One bot iteration: settle, then attempt opens for gated profiles."""
     now = datetime.now(timezone.utc)
     settle_count = settle_resolved_open_events(store, profiles)
 
     profile_lines: list[str] = []
     no_event_dates: list[date] = []
+    gate_retry_at: datetime | None = None
     units = work_units_for_profiles(profiles, now=now)
 
     for unit in units:
@@ -255,6 +263,11 @@ def run_tick(
             profile_lines.append(
                 f"target={unit.target_date.isoformat()}  ERROR   {exc}"
             )
+            lead_hours = lead_hours_to_end_of_target_day(unit.target_date, now=now)
+            if any(_profile_at_entry_target(p, lead_hours) for p in unit_profiles):
+                retry_at = now + GATE_RETRY_INTERVAL
+                if gate_retry_at is None or retry_at < gate_retry_at:
+                    gate_retry_at = retry_at
             continue
 
         if ctx.date_mismatch:
@@ -321,4 +334,4 @@ def run_tick(
         )
         conn.commit()
 
-    return box
+    return TickResult(box=box, gate_retry_at=gate_retry_at)

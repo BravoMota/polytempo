@@ -106,14 +106,21 @@ def main() -> int:
             last_mtime = mtime
 
         try:
-            box = run_tick(store, state.profiles, enforce_gate=True)
-            print(box)
+            tick = run_tick(store, state.profiles, enforce_gate=True)
+            print(tick.box)
         except Exception:
             logger.exception("tick failed")
+            tick = None
 
         now = datetime.now(timezone.utc)
         state.next_settle_wake = now + SETTLE_SWEEP_INTERVAL
         wake_at = compute_next_wake(state, now)
+        if tick is not None and tick.gate_retry_at is not None and tick.gate_retry_at > now:
+            wake_at = min(wake_at, tick.gate_retry_at)
+            logger.info(
+                "gate fetch failed at entry window; retrying at %s",
+                tick.gate_retry_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
         logger.info(
             "sleeping until %s (%d profiles active)",
             wake_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

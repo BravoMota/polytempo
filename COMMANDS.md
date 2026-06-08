@@ -115,6 +115,18 @@ Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need 
 
 No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).
 
+### probe_open_meteo_schedule (API demand study)
+
+Long-running probe: hits the same 8-model Open-Meteo forecast request the paper bot uses, at **UTC :00, :05, and :10** every hour. Logs success/errors to JSONL (`max_retries=1` per probe — raw API behavior, no retry masking).
+
+Run for 24h+ to cover all hours. Compare failure rates at `on_hour` vs `plus_5min` / `plus_10min`.
+
+```bash
+python scripts/probe_open_meteo_schedule.py
+python scripts/probe_open_meteo_schedule.py --output data/weather/open_meteo_probe.jsonl
+python scripts/probe_open_meteo_schedule.py --city london
+```
+
 ### paper open
 
 Fetch event + forecast for the settlement date, run all active profiles, open trades. Auto-settles if resolved. Per-profile dedupe (not global across profiles).
