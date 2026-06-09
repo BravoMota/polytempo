@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from polytempo.profiles.load import generate_all_twelve_profiles, load_paper_profiles
+from polytempo.profiles.registry import trade_strategy_for_name
+from polytempo.strategy import TopKStrategy
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
@@ -50,5 +52,12 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 4 trade strategies × 2 model strategies (bh + es)
-    assert len(profiles) == 72
+    # 9 lead gates × 8 trade strategies × 2 model strategies (bh + es)
+    assert len(profiles) == 144
+
+
+def test_topk_no_resolves_to_no_side_variant() -> None:
+    strat = trade_strategy_for_name("topk_no")
+    assert isinstance(strat, TopKStrategy)
+    assert strat.name == "topk_no"
+    assert strat.side == "NO"

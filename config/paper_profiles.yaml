@@ -40,6 +40,10 @@ trade_strategies:
   - argmax_no
   - dist_arb
   - mid_band
+  - topk_yes
+  - topk_no
+  - max_edge
+  - edge_band
 
 # Profile ids generated as: {bh|es}_{trade}_{lead30|lead24}
 # e.g. bh_dist_arb_lead30, es_mid_band_lead24
