@@ -82,3 +82,42 @@ CREATE INDEX IF NOT EXISTS idx_forecast_snapshots_station_target_date
 
 CREATE INDEX IF NOT EXISTS idx_collector_state_lookup
     ON collector_state(collector_name, station_id, source);
+
+CREATE TABLE IF NOT EXISTS calibration_observed_tmax (
+    station_id TEXT NOT NULL REFERENCES stations(station_id),
+    target_date TEXT NOT NULL,
+    observed_tmax_f DOUBLE PRECISION NOT NULL,
+    observed_tmax_c DOUBLE PRECISION NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at_utc TEXT NOT NULL,
+    PRIMARY KEY (station_id, target_date)
+);
+
+CREATE TABLE IF NOT EXISTS calibration_forecast_records (
+    station_id TEXT NOT NULL REFERENCES stations(station_id),
+    model TEXT NOT NULL,
+    run_time_utc TEXT NOT NULL,
+    target_date TEXT NOT NULL,
+    lead_hours DOUBLE PRECISION NOT NULL,
+    predicted_tmax_c DOUBLE PRECISION NOT NULL,
+    forecast_lat DOUBLE PRECISION,
+    forecast_lon DOUBLE PRECISION,
+    raw_file_path TEXT,
+    ingested_at_utc TEXT NOT NULL,
+    PRIMARY KEY (station_id, model, run_time_utc, target_date)
+);
+
+CREATE TABLE IF NOT EXISTS calibration_job_state (
+    job_name TEXT PRIMARY KEY,
+    last_success_at_utc TEXT,
+    last_error_at_utc TEXT,
+    last_error_message TEXT,
+    last_target_date TEXT,
+    updated_at_utc TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calibration_forecast_station_target
+    ON calibration_forecast_records(station_id, target_date);
+
+CREATE INDEX IF NOT EXISTS idx_calibration_observed_station_target
+    ON calibration_observed_tmax(station_id, target_date);

@@ -9,14 +9,29 @@ import yaml
 from polytempo.analysis import MODEL_STRATEGIES
 from polytempo.profiles.models import EntryGate, TradingProfile
 from polytempo.profiles.registry import known_trade_strategies
-from polytempo.weather.calibration_stats_csv import DEFAULT_CALIBRATION_STATS_CSV_PATH
+from polytempo.weather.calibration_stats_csv import (
+    DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+)
 
 DEFAULT_PROFILES_PATH = Path("config/paper_profiles.yaml")
 
 _MODEL_ABBREV = {
     "best_historical": "bh",
+    "best_historical_updated": "bhu",
     "ensemble_spread": "es",
 }
+
+
+def _calibration_path_for_strategy(
+    model_strategy: str,
+    *,
+    static_path: Path,
+    updated_path: Path,
+) -> Path:
+    if model_strategy == "best_historical_updated":
+        return updated_path
+    return static_path
 
 
 def _target_lead_hours_from_gate(gate: dict[str, float]) -> float:
@@ -40,6 +55,7 @@ def generate_all_twelve_profiles(
     model_strategies: list[str] | None = None,
     trade_strategies: list[str] | None = None,
     calibration_stats_path: Path = DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    updated_calibration_stats_path: Path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
     city: str = "london",
     target_day: str = "tomorrow",
 ) -> list[TradingProfile]:
@@ -58,7 +74,11 @@ def generate_all_twelve_profiles(
                             target_lead_hours=_target_lead_hours_from_gate(gate),
                             tolerance_seconds=float(gate.get("tolerance_seconds", 90.0)),
                         ),
-                        calibration_stats_path=calibration_stats_path,
+                        calibration_stats_path=_calibration_path_for_strategy(
+                            model,
+                            static_path=calibration_stats_path,
+                            updated_path=updated_calibration_stats_path,
+                        ),
                         city=city,
                         target_day=target_day,
                     )
@@ -84,6 +104,12 @@ def load_paper_profiles(
     cal_path = Path(
         raw.get("calibration_stats_path", DEFAULT_CALIBRATION_STATS_CSV_PATH)
     )
+    updated_cal_path = Path(
+        raw.get(
+            "updated_calibration_stats_path",
+            DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+        )
+    )
     city = str(raw.get("city", "london"))
     target_day = str(raw.get("target_day", "tomorrow"))
     models = raw.get("model_strategies")
@@ -94,6 +120,7 @@ def load_paper_profiles(
         model_strategies=models,
         trade_strategies=trades,
         calibration_stats_path=cal_path,
+        updated_calibration_stats_path=updated_cal_path,
         city=city,
         target_day=target_day,
     )

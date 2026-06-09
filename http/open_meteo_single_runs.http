@@ -13,3 +13,6 @@
 @timezone = Europe/London
 
 GET https://single-runs-api.open-meteo.com/v1/forecast?latitude={{latitude}}&longitude={{longitude}}&daily=temperature_2m_max&temperature_unit=celsius&models={{model}}&timezone={{timezone}}&run={{run_time}}
+
+#test
+GET https://single-runs-api.open-meteo.com/v1/forecast?latitude=51.5053&longitude=0.0553&daily=temperature_2m_max&temperature_unit=celsius&models=icon_eu&timezone=Europe%2FLondon&run=2026-02-08T21%3A00&forecast_days=5

@@ -1,47 +1,65 @@
-# Offline calibration data
+# Calibration data
 
-All weather calibration artifacts live under **`data/weather/`** at the repository root.
+Weather calibration artifacts live under **`data/weather/`** at the repository root. There are two paths: the **frozen V1 manual pipeline** (`best_historical`) and the **automated updated store** (`best_historical_updated`).
 
-## Layout
+## Updated path (automated, `best_historical_updated`)
+
+Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_forecast_records`, `calibration_job_state`). Runtime output is `statistical/calibration_stats_updated.csv` (gitignored, regenerated nightly).
+
+| Layer | Role |
+| --- | --- |
+| Postgres `calibration_*` tables | Incremental observations + forecast records + job state |
+| `raw/single-runs/` | Cached Open-Meteo Single Runs JSON (reused from V1 fetch) |
+| `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated` |
+
+**Observations:** WU history daily page reported `temperatureMax` in °F, stored as both `observed_tmax_f` and `observed_tmax_c` (F→C, 2 dp). Not `max()` of hourly obs, not metric API.
+
+**Scripts:**
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/bootstrap_calibration_store.py` | One-time heavy load from `2026-02-01` (see `config/calibration.yaml`) |
+| `scripts/run_daily_calibration.py --once` | Incremental nightly update (cron 02:00 UTC) |
+
+Config: `config/calibration.yaml` — stations resolved from `config/weather_collectors.yaml`; models and cadence baked in (no `capabilities_csv` at runtime).
+
+**Not used by the updated path:** `observed_tmax.jsonl`, `observed_tmax.csv`, `processed/forecast_records.csv`, `statistical/forecast_errors.csv`, `statistical/calibration_stats.csv`.
+
+## Frozen V1 path (`best_historical`)
+
+Numbered scripts under `scripts/Calibrator_V1/` (or legacy numbered `scripts/1_` … `scripts/6_`) produce the static baseline in git:
 
 | Path | Produced by | Purpose |
 | --- | --- | --- |
-| `raw/single-runs/` | `scripts/2_fetch_historical_forecasts_by_model.py`, `polytempo fetch-historical-forecasts` | Cached Open-Meteo Single Runs JSON (one file per run init) |
-| `raw/wunderground/` | `scripts/run_collector.py` | Raw Wunderground HTML + meta sidecars from continuous collector |
-| PostgreSQL (`observation_snapshots`, `forecast_snapshots`, `collector_state`, `stations`) | `scripts/init_weather_db.py`, `scripts/run_collector.py` | Collector snapshots and operational state (via `POLYTEMPO_DATABASE_URL`) |
-| `raw_capabilities/` | `scripts/1_analyze_single_runs_models.py` | Probe API payloads for model capability analysis |
-| `single_runs_model_capabilities.csv` | `scripts/1_analyze_single_runs_models.py` | Per-model cadence, grid offset, daily Tmax availability |
-| `historical_forecasts.jsonl` | `polytempo fetch-historical-forecasts` | Parsed historical model-run Tmax predictions |
-| `observed_tmax.jsonl` | `scripts/3_fetch_wunderground_observations.py` | Observed daily Tmax for join targets |
-| `observed_tmax.csv` | `scripts/5_build_observed_tmax_csv.py` | CSV view of observations |
-| `processed/forecast_records.csv` | `scripts/4_build_forecast_records_csv.py` | One row per predicted Tmax from raw JSON |
-| `statistical/forecast_errors.csv` | `scripts/6_compute_calibration_errors.py` | Joined forecast + observation rows with signed/abs/squared errors |
-| `statistical/calibration_stats.csv` | `scripts/6_compute_calibration_errors.py` | `n_samples`, bias, MAE, RMSE, `error_std_c` by `(station, model, lead_hours)` |
-| `calibration_stats.json` | `polytempo compute-calibration-stats` | RMSE / MAE / bias by station, model, lead bucket |
+| `raw/single-runs/` | script 2 | Cached Single Runs JSON |
+| `observed_tmax.jsonl` | script 3 | Observed daily Tmax (legacy WU API) |
+| `processed/forecast_records.csv` | script 4 | Parsed forecast rows |
+| `observed_tmax.csv` | script 5 | CSV view of observations |
+| `statistical/forecast_errors.csv` | script 6 | Joined errors |
+| `statistical/calibration_stats.csv` | script 6 | Grouped stats for `best_historical` |
 
-## Rules
+## Collector snapshots (separate)
 
-- Generated files are machine-written. Do not hand-edit.
-- **Live analysis reads prepared artifacts only.** Historical or Single-Runs APIs must not be called during live runs.
-- Re-running fetch commands skips duplicates when output already exists. Partial failures may leave gaps; inspect stderr and re-run.
-- Run times are snapped to synoptic model inits (00/06/12/18 UTC) in CLI date-range mode.
+| Path / store | Purpose |
+| --- | --- |
+| PostgreSQL `observation_snapshots`, `forecast_snapshots` | Live collector HTML scrape (`scripts/run_collector.py`) |
+| `raw/wunderground/` | Raw collector HTML sidecars |
+
+Collector data is **not** used for calibration joins.
 
 ## Lead-hours convention
 
-Canonical for `processed/forecast_records.csv`, `statistical/forecast_errors.csv`, `statistical/calibration_stats.csv`, and the live `polytempo live` lookup:
+Canonical for forecast records, error joins, `calibration_stats*.csv`, and live `polytempo live` lookup:
 
-- `lead_hours = (UTC midnight at the END of target_date) - run_time_utc` in hours. End-of-target is UTC midnight of `target_date + 1 day`. Example: run `2026-04-01T12:00Z`, target `2026-04-02` → `36`.
-- Live `polytempo live` uses the **same** anchor with `run_time_utc = now`, so a live `lead_hours` value indexes the calibration table row-for-row.
-- Tmax itself is aggregated over the **station-local** calendar day (e.g. Europe/London for EGLC) by Open-Meteo. The lead anchor is UTC midnight, not local midnight; that's intentional and applied identically on both sides, so the up-to-1-2h gap (DST / non-UTC stations) only shifts the absolute lead label and never breaks calibration matching.
+- `lead_hours = (UTC midnight at the END of target_date) - run_time_utc` in hours.
+- Live `polytempo live` uses the same anchor with `run_time_utc = now`.
 
-The legacy JSONL pipeline ([src/polytempo/weather/historical_forecasts.py](../src/polytempo/weather/historical_forecasts.py) `_actual_lead_hours`) anchors at the **start of the local target day** instead. That convention feeds `calibration_stats.json` (the `compute-calibration-stats` JSON / lead-bucket path) and is **not** consumed by `best_historical`. Do not mix the two.
+Tmax is aggregated over the **station-local** calendar day by Open-Meteo; the lead anchor is UTC midnight on both sides.
 
-## Example observation record (`observed_tmax.jsonl`)
-
-One JSON object per line:
+## Example observation record (legacy jsonl)
 
 ```json
 {"station_id": "EGLC", "target_date": "2026-05-14", "observed_tmax_c": 22.4, "source": "wunderground"}
 ```
 
-Required keys: `station_id`, `target_date` (YYYY-MM-DD), `observed_tmax_c`, `source`.
+Updated-store DB rows also carry `observed_tmax_f` (reported °F from WU page).

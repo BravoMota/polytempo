@@ -28,6 +28,9 @@ from polytempo.weather.data_dir import WEATHER_DATA_DIR
 DEFAULT_CALIBRATION_STATS_CSV_PATH = (
     WEATHER_DATA_DIR / "statistical" / "calibration_stats.csv"
 )
+DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH = (
+    WEATHER_DATA_DIR / "statistical" / "calibration_stats_updated.csv"
+)
 
 
 @dataclass(frozen=True)

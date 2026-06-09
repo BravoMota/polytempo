@@ -11,9 +11,10 @@ Production weather DB: `polytempo` on the shared Postgres host. Snapshot data is
 
 - NEVER run `pytest` (any args) while `POLYTEMPO_DATABASE_URL` or `DATABASE_URL` targets database name `polytempo`.
 - Tests that use `weather_db_url` TRUNCATE all snapshot tables. Treat that as data destruction.
-- Before any pytest involving `tests/test_storage_postgres.py`, `tests/test_collectors_wunderground.py`, or `tests/conftest.py`:
+- Before any pytest involving `tests/test_storage_postgres.py`, `tests/test_calibration_storage.py`, `tests/test_collectors_wunderground.py`, or `tests/conftest.py`:
   - Require `POLYTEMPO_TEST_DATABASE_URL` pointing at `polytempo_test` (or skip tests).
   - Do NOT use `POLYTEMPO_DATABASE_URL` for tests.
+  - `assert_test_database_url` refuses URLs whose database name does not contain `test`.
 - NEVER run `migrate_sqlite_to_postgres.py --init-target` against production without explicit user confirmation (it also TRUNCATEs).
 - NEVER run `pytest` while `POLYTEMPO_PAPER_DATABASE_URL` targets database name `polytempo_paper` (prod paper ledger).
 - Paper tests using `paper_db_url` TRUNCATE `paper_events` and `paper_bot_state`. Require `POLYTEMPO_PAPER_TEST_DATABASE_URL` pointing at `polytempo_paper_test`.
@@ -24,7 +25,7 @@ Production weather DB: `polytempo` on the shared Postgres host. Snapshot data is
 - Production collector: `python scripts/run_collector.py`
 - Paper schema only (non-destructive): `python scripts/init_paper_db.py`
 - Paper bot: `python scripts/run_paper_bot.py` (requires `POLYTEMPO_PAPER_DATABASE_URL`)
-- Tests: `POLYTEMPO_TEST_DATABASE_URL='postgresql://…/polytempo_test' pytest tests/…`
+- Tests: `POLYTEMPO_TEST_DATABASE_URL='postgresql://…/polytempo_test' pytest tests/test_calibration_storage.py tests/test_storage_postgres.py …`
 - Paper tests: `POLYTEMPO_PAPER_TEST_DATABASE_URL='postgresql://…/polytempo_paper_test' pytest tests/test_ledger.py tests/test_paper_run.py tests/test_paper_postgres.py`
 
 ## If unsure which DB URL is set

@@ -354,12 +354,65 @@ One-shot cycle (no sleep loop):
 python scripts/run_collector.py --once
 ```
 
-Tests (require `POLYTEMPO_DATABASE_URL` or `DATABASE_URL`; storage/collector DB tests skip otherwise):
+Tests (require `POLYTEMPO_TEST_DATABASE_URL` pointing at a database whose name contains `test`; storage/collector DB tests skip otherwise):
 
 ```bash
-pytest tests/test_storage_postgres.py tests/test_collector_config.py \
-  tests/test_collector_schedule.py tests/test_collectors_wunderground.py
+POLYTEMPO_TEST_DATABASE_URL='postgresql://USER:PASS@host:5432/polytempo_test' \
+  python scripts/init_weather_db.py --database-url "$POLYTEMPO_TEST_DATABASE_URL"
+
+POLYTEMPO_TEST_DATABASE_URL='postgresql://USER:PASS@host:5432/polytempo_test' \
+  pytest tests/test_storage_postgres.py tests/test_calibration_storage.py \
+  tests/test_collector_config.py tests/test_collector_schedule.py \
+  tests/test_collectors_wunderground.py tests/test_postgres_safety.py
 ```
+
+## Automated calibration (updated store)
+
+Nightly automation for `best_historical_updated`. Does **not** modify frozen `scripts/Calibrator_V1/` or `data/weather/statistical/calibration_stats.csv`.
+
+| Script | When | Purpose |
+| --- | --- | --- |
+| `scripts/bootstrap_calibration_store.py` | Once on prod | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_*` Postgres tables; write `calibration_stats_updated.csv` |
+| `scripts/run_daily_calibration.py` | Cron **02:00 UTC** | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv` |
+
+Config: `config/calibration.yaml` (stations from `config/weather_collectors.yaml`, models + cadence baked in — no `capabilities_csv` at runtime).
+
+```bash
+# one-time bootstrap (uses POLYTEMPO_DATABASE_URL on prod):
+python scripts/bootstrap_calibration_store.py
+
+# re-run forecasts + stats only (observations already in DB):
+python scripts/bootstrap_calibration_store.py --no-obs
+
+# nightly cron:
+python scripts/run_daily_calibration.py --once
+
+# optional daemon loop (same 02:00 UTC anchor):
+python scripts/run_daily_calibration.py
+```
+
+Model strategies:
+
+| Strategy | Calibration CSV |
+| --- | --- |
+| `best_historical` | `data/weather/statistical/calibration_stats.csv` (frozen, in git) |
+| `best_historical_updated` | `data/weather/statistical/calibration_stats_updated.csv` (nightly) |
+| `ensemble_spread` | *(none)* |
+
+```bash
+polytempo live --model-strategy best_historical_updated ...
+```
+
+Bootstrap stderr summary fields:
+
+| Field | Meaning |
+| --- | --- |
+| `observations_ingested` | Days upserted into `calibration_observed_tmax` this run |
+| `fetched_raw` | New Single-Runs JSON files downloaded (0 if cache complete) |
+| `forecast_rows_ingested` | Predicted Tmax rows upserted into `calibration_forecast_records` |
+| `joined_rows` | Inner-join pairs `(forecast, observation)` with `error_c` — **not** API failures |
+| `unjoined_forecasts` | Forecast rows whose `target_date` has no observation (often future dates beyond yesterday) |
+| `stat_groups` | Aggregated CSV rows: one per `(station_id, model, lead_hours)` |
 
 ## Offline calibration pipeline (standalone scripts)
 

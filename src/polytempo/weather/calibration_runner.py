@@ -1,0 +1,385 @@
+"""Orchestration for bootstrap and daily calibration jobs."""
+
+from __future__ import annotations
+
+import logging
+import sys
+from datetime import date, datetime, time, timedelta
+from datetime import timezone as dt_timezone
+from pathlib import Path
+
+import httpx
+
+from polytempo.collectors.config import StationConfig
+from polytempo.storage.postgres import get_connection, insert_station, utc_now_iso
+from polytempo.weather.calibration_compute import (
+    compute_calibration_stats,
+    iter_forecast_records_from_payload,
+    join_with_observations,
+    write_calibration_stats_csv,
+)
+from polytempo.weather.calibration_config import CalibrationConfig
+from polytempo.weather.calibration_storage import (
+    DEFAULT_JOB_NAME,
+    load_forecast_records,
+    load_observations_map,
+    read_job_state,
+    record_job_success,
+    upsert_forecast_record,
+    upsert_observation,
+)
+from polytempo.weather.historical_forecasts import (
+    DEFAULT_RAW_FORECASTS_DIR,
+    DEFAULT_SINGLE_RUNS_BASE_URL,
+    _station_model_from_raw_filename,
+    generate_run_times_utc,
+    load_or_fetch_single_run_payload,
+    parse_run_time_utc_from_raw_filename,
+    read_raw_forecast_response,
+    raw_forecast_path,
+)
+from polytempo.weather.wunderground import (
+    fetch_wunderground_observations_range,
+    to_calibration_observed,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _utc_yesterday(today_utc: date | None = None) -> date:
+    today = today_utc or datetime.now(dt_timezone.utc).date()
+    return today - timedelta(days=1)
+
+
+def _parse_iso_utc(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(dt_timezone.utc)
+
+
+def _sync_stations(conn, stations: list[StationConfig]) -> None:
+    for station in stations:
+        insert_station(
+            conn,
+            station_id=station.station_id,
+            name=station.name,
+            timezone=station.timezone,
+            lat=station.lat,
+            lon=station.lon,
+            country=station.country,
+            active=True,
+        )
+
+
+def ingest_observations(
+    conn,
+    config: CalibrationConfig,
+    *,
+    start_date: date,
+    end_date: date,
+    client: httpx.Client,
+) -> int:
+    count = 0
+    for station in config.stations:
+        rows = fetch_wunderground_observations_range(
+            station.station_id,
+            start_date,
+            end_date,
+            client=client,
+            country=station.country,
+            city_slug=station.city_slug,
+            lat=station.lat,
+            lon=station.lon,
+        )
+        for row in rows:
+            upsert_observation(conn, to_calibration_observed(row))
+            count += 1
+    return count
+
+
+def _ingest_payload_file(conn, path: Path) -> int:
+    station_id, model = _station_model_from_raw_filename(path.name)
+    run_time = parse_run_time_utc_from_raw_filename(path.name)
+    payload = read_raw_forecast_response(path)
+    count = 0
+    for record in iter_forecast_records_from_payload(
+        payload,
+        station_id=station_id,
+        model=model,
+        run_time_utc=run_time,
+    ):
+        upsert_forecast_record(conn, record, raw_file_path=str(path))
+        count += 1
+    return count
+
+
+def ingest_forecasts_for_range(
+    conn,
+    config: CalibrationConfig,
+    *,
+    run_start: datetime,
+    run_end: datetime,
+    client: httpx.Client,
+    raw_dir: Path = DEFAULT_RAW_FORECASTS_DIR,
+) -> tuple[int, int]:
+    fetched = 0
+    ingested_rows = 0
+    run_start_utc = run_start.astimezone(dt_timezone.utc)
+    run_end_utc = run_end.astimezone(dt_timezone.utc)
+
+    for station in config.stations:
+        if station.lat is None or station.lon is None:
+            continue
+        for model_cfg in config.models:
+            run_times = generate_run_times_utc(
+                run_start_utc,
+                run_end_utc,
+                model_cfg.run_init_interval_hours,
+            )
+            for run_time in run_times:
+                cached_path = raw_forecast_path(
+                    raw_dir,
+                    station.station_id,
+                    model_cfg.name,
+                    run_time,
+                )
+                if not cached_path.exists():
+                    try:
+                        load_or_fetch_single_run_payload(
+                            station.lat,
+                            station.lon,
+                            model_cfg.name,
+                            run_time,
+                            station_id=station.station_id,
+                            timezone=station.timezone,
+                            raw_dir=raw_dir,
+                            forecast_days=model_cfg.forecast_days,
+                            base_url=DEFAULT_SINGLE_RUNS_BASE_URL,
+                            client=client,
+                        )
+                        fetched += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "forecast fetch failed station=%s model=%s run=%s: %s",
+                            station.station_id,
+                            model_cfg.name,
+                            run_time.isoformat(),
+                            exc,
+                        )
+                        continue
+                    cached_path = raw_forecast_path(
+                        raw_dir,
+                        station.station_id,
+                        model_cfg.name,
+                        run_time,
+                    )
+                if cached_path.exists():
+                    ingested_rows += _ingest_payload_file(conn, cached_path)
+    return fetched, ingested_rows
+
+
+def _join_diagnostics(
+    forecasts: list,
+    observations: dict[tuple[str, date], float],
+    joined: list,
+) -> dict[str, object]:
+    """Summarize inner-join coverage for logging."""
+    obs_dates = sorted({d for _, d in observations})
+    forecast_dates = sorted({r.target_date for r in forecasts})
+    unjoined = len(forecasts) - len(joined)
+    unjoined_dates: dict[str, int] = {}
+    for record in forecasts:
+        if (record.station_id, record.target_date) not in observations:
+            key = record.target_date.isoformat()
+            unjoined_dates[key] = unjoined_dates.get(key, 0) + 1
+    top_unjoined = sorted(unjoined_dates.items(), key=lambda x: x[1], reverse=True)[:8]
+    return {
+        "observation_days": len(obs_dates),
+        "observation_range": (
+            f"{obs_dates[0].isoformat()}..{obs_dates[-1].isoformat()}"
+            if obs_dates
+            else None
+        ),
+        "forecast_records": len(forecasts),
+        "forecast_target_range": (
+            f"{forecast_dates[0].isoformat()}..{forecast_dates[-1].isoformat()}"
+            if forecast_dates
+            else None
+        ),
+        "joined_rows": len(joined),
+        "unjoined_forecasts": unjoined,
+        "top_unjoined_target_dates": top_unjoined,
+        "stat_groups": 0,
+    }
+
+
+def recompute_stats(conn, output_path: Path) -> tuple[int, int, dict[str, object]]:
+    """Join forecasts with observations, aggregate, and write calibration CSV."""
+    observations = load_observations_map(conn)
+    forecasts = load_forecast_records(conn)
+    joined = join_with_observations(forecasts, observations)
+    diag = _join_diagnostics(forecasts, observations, joined)
+    if not joined:
+        return 0, 0, diag
+    stats = compute_calibration_stats(joined)
+    write_calibration_stats_csv(stats, output_path)
+    diag["stat_groups"] = len(stats)
+    return len(joined), len(stats), diag
+
+
+def _log_recompute_summary(prefix: str, diag: dict[str, object]) -> None:
+    """Explain join/aggregate counts (joined_rows are calibration samples, not failures)."""
+    logger.info(
+        "%s recompute: observation_days=%s obs_range=%s forecast_records=%s "
+        "forecast_target_range=%s joined_rows=%s unjoined_forecasts=%s stat_groups=%s",
+        prefix,
+        diag.get("observation_days"),
+        diag.get("observation_range"),
+        diag.get("forecast_records"),
+        diag.get("forecast_target_range"),
+        diag.get("joined_rows"),
+        diag.get("unjoined_forecasts"),
+        diag.get("stat_groups"),
+    )
+    top_unjoined = diag.get("top_unjoined_target_dates")
+    if isinstance(top_unjoined, list) and top_unjoined:
+        logger.info("%s top unjoined target_dates (no observation): %s", prefix, top_unjoined)
+    print(
+        f"{prefix}: joined_rows={diag.get('joined_rows')} "
+        f"(forecast+observation pairs used for bias/MAE/RMSE; not API failures), "
+        f"unjoined_forecasts={diag.get('unjoined_forecasts')} "
+        f"(forecast target_date has no observation), "
+        f"stat_groups={diag.get('stat_groups')}",
+        file=sys.stderr,
+    )
+    print(
+        f"{prefix}: observations={diag.get('observation_days')} days "
+        f"({diag.get('observation_range')}), "
+        f"forecast_records={diag.get('forecast_records')} "
+        f"(target_range={diag.get('forecast_target_range')})",
+        file=sys.stderr,
+    )
+
+
+def run_bootstrap(
+    config: CalibrationConfig,
+    database_url: str,
+    *,
+    end_date: date | None = None,
+    skip_observations: bool = False,
+) -> int:
+    """Populate calibration store from start_date through yesterday."""
+    end = end_date or _utc_yesterday()
+    if end < config.start_date:
+        print("end_date is before start_date; nothing to do", file=sys.stderr)
+        return 0
+
+    with httpx.Client() as client, get_connection(database_url) as conn:
+        _sync_stations(conn, config.stations)
+        if skip_observations:
+            obs_count = 0
+            print("bootstrap: skipping observation ingest (--no-obs)", file=sys.stderr)
+        else:
+            obs_count = ingest_observations(
+                conn,
+                config,
+                start_date=config.start_date,
+                end_date=end,
+                client=client,
+            )
+        run_start = datetime.combine(
+            config.start_date,
+            time.min,
+            tzinfo=dt_timezone.utc,
+        )
+        run_end = datetime.combine(end, time.max.replace(microsecond=0), tzinfo=dt_timezone.utc)
+        fetched, forecast_rows = ingest_forecasts_for_range(
+            conn,
+            config,
+            run_start=run_start,
+            run_end=run_end,
+            client=client,
+        )
+        joined_rows, stat_groups, diag = recompute_stats(conn, config.updated_stats_csv)
+        if joined_rows == 0:
+            conn.rollback()
+            print("no joined forecast+observation rows after bootstrap; not updating job state", file=sys.stderr)
+            return 2
+        record_job_success(conn, last_target_date=end)
+        conn.commit()
+
+    print(
+        f"bootstrap: observations_ingested={obs_count} fetched_raw={fetched} "
+        f"forecast_rows_ingested={forecast_rows}",
+        file=sys.stderr,
+    )
+    _log_recompute_summary("bootstrap", diag)
+    print(f"wrote {config.updated_stats_csv}", file=sys.stderr)
+    return 0
+
+
+def run_daily(
+    config: CalibrationConfig,
+    database_url: str,
+    *,
+    end_date: date | None = None,
+) -> int:
+    """Incremental nightly calibration update."""
+    end = end_date or _utc_yesterday()
+
+    with httpx.Client() as client, get_connection(database_url) as conn:
+        _sync_stations(conn, config.stations)
+        state = read_job_state(conn, DEFAULT_JOB_NAME)
+        if state is None or state.get("last_target_date") is None:
+            print(
+                "bootstrap has not run yet; run scripts/bootstrap_calibration_store.py first",
+                file=sys.stderr,
+            )
+            return 2
+
+        last_target = date.fromisoformat(str(state["last_target_date"]))
+        obs_start = min(end, last_target + timedelta(days=1))
+        if obs_start > end:
+            obs_start = end
+
+        obs_count = ingest_observations(
+            conn,
+            config,
+            start_date=obs_start,
+            end_date=end,
+            client=client,
+        )
+
+        last_success_text = state.get("last_success_at_utc")
+        if isinstance(last_success_text, str) and last_success_text:
+            run_start = _parse_iso_utc(last_success_text)
+        else:
+            run_start = datetime.combine(
+                config.start_date,
+                time.min,
+                tzinfo=dt_timezone.utc,
+            )
+        run_end = datetime.now(dt_timezone.utc)
+        fetched, forecast_rows = ingest_forecasts_for_range(
+            conn,
+            config,
+            run_start=run_start,
+            run_end=run_end,
+            client=client,
+        )
+
+        joined_rows, stat_groups, diag = recompute_stats(conn, config.updated_stats_csv)
+        if joined_rows == 0:
+            conn.rollback()
+            print("no joined forecast+observation rows; not updating job state", file=sys.stderr)
+            return 2
+
+        record_job_success(conn, last_target_date=end)
+        conn.commit()
+
+    print(
+        f"daily: observations_ingested={obs_count} fetched_raw={fetched} "
+        f"forecast_rows_ingested={forecast_rows}",
+        file=sys.stderr,
+    )
+    _log_recompute_summary("daily", diag)
+    print(f"wrote {config.updated_stats_csv}", file=sys.stderr)
+    return 0

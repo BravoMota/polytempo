@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator
+from urllib.parse import urlparse
 
 import psycopg
 from psycopg import Connection
@@ -28,6 +29,22 @@ def resolve_database_url(*, override: str | None = None) -> str:
     if not url:
         raise RuntimeError("Set POLYTEMPO_DATABASE_URL or DATABASE_URL")
     return url
+
+
+def database_name_from_url(url: str) -> str:
+    """Return the database name component from a Postgres URL."""
+    parsed = urlparse(url)
+    path = parsed.path.lstrip("/")
+    if not path:
+        raise ValueError(f"database name missing from URL: {url!r}")
+    return path.split("/", 1)[0]
+
+
+def assert_test_database_url(url: str) -> None:
+    """Refuse URLs that do not clearly target a test database."""
+    db_name = database_name_from_url(url)
+    if "test" not in db_name.lower():
+        raise RuntimeError(f"refusing non-test database: {db_name!r}")
 
 
 @contextmanager
@@ -317,4 +334,125 @@ def mark_collector_started(
             updated_at_utc = EXCLUDED.updated_at_utc
         """,
         (collector_name, station_id, source, now, now),
+    )
+
+
+def upsert_calibration_observed_tmax(
+    conn: Connection,
+    *,
+    station_id: str,
+    target_date: str,
+    observed_tmax_f: float,
+    observed_tmax_c: float,
+    source: str,
+    fetched_at_utc: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO calibration_observed_tmax (
+            station_id, target_date, observed_tmax_f, observed_tmax_c,
+            source, fetched_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (station_id, target_date) DO UPDATE SET
+            observed_tmax_f = EXCLUDED.observed_tmax_f,
+            observed_tmax_c = EXCLUDED.observed_tmax_c,
+            source = EXCLUDED.source,
+            fetched_at_utc = EXCLUDED.fetched_at_utc
+        """,
+        (
+            station_id,
+            target_date,
+            observed_tmax_f,
+            observed_tmax_c,
+            source,
+            fetched_at_utc,
+        ),
+    )
+
+
+def upsert_calibration_forecast_record(
+    conn: Connection,
+    *,
+    station_id: str,
+    model: str,
+    run_time_utc: str,
+    target_date: str,
+    lead_hours: float,
+    predicted_tmax_c: float,
+    ingested_at_utc: str,
+    forecast_lat: float | None = None,
+    forecast_lon: float | None = None,
+    raw_file_path: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO calibration_forecast_records (
+            station_id, model, run_time_utc, target_date, lead_hours,
+            predicted_tmax_c, forecast_lat, forecast_lon, raw_file_path,
+            ingested_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (station_id, model, run_time_utc, target_date) DO UPDATE SET
+            lead_hours = EXCLUDED.lead_hours,
+            predicted_tmax_c = EXCLUDED.predicted_tmax_c,
+            forecast_lat = EXCLUDED.forecast_lat,
+            forecast_lon = EXCLUDED.forecast_lon,
+            raw_file_path = EXCLUDED.raw_file_path,
+            ingested_at_utc = EXCLUDED.ingested_at_utc
+        """,
+        (
+            station_id,
+            model,
+            run_time_utc,
+            target_date,
+            lead_hours,
+            predicted_tmax_c,
+            forecast_lat,
+            forecast_lon,
+            raw_file_path,
+            ingested_at_utc,
+        ),
+    )
+
+
+def get_calibration_job_state(
+    conn: Connection,
+    job_name: str,
+) -> dict[str, object] | None:
+    return conn.execute(
+        "SELECT * FROM calibration_job_state WHERE job_name = %s",
+        (job_name,),
+    ).fetchone()
+
+
+def upsert_calibration_job_state(
+    conn: Connection,
+    *,
+    job_name: str,
+    updated_at_utc: str,
+    last_success_at_utc: str | None = None,
+    last_error_at_utc: str | None = None,
+    last_error_message: str | None = None,
+    last_target_date: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO calibration_job_state (
+            job_name, last_success_at_utc, last_error_at_utc,
+            last_error_message, last_target_date, updated_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (job_name) DO UPDATE SET
+            last_success_at_utc = COALESCE(EXCLUDED.last_success_at_utc, calibration_job_state.last_success_at_utc),
+            last_error_at_utc = COALESCE(EXCLUDED.last_error_at_utc, calibration_job_state.last_error_at_utc),
+            last_error_message = COALESCE(EXCLUDED.last_error_message, calibration_job_state.last_error_message),
+            last_target_date = COALESCE(EXCLUDED.last_target_date, calibration_job_state.last_target_date),
+            updated_at_utc = EXCLUDED.updated_at_utc
+        """,
+        (
+            job_name,
+            last_success_at_utc,
+            last_error_at_utc,
+            last_error_message,
+            last_target_date,
+            updated_at_utc,
+        ),
     )

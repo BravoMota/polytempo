@@ -22,6 +22,18 @@ class ObservedTmax:
     target_date: date
     observed_tmax_c: float
     source: str
+    observed_tmax_f: float | None = None
+
+
+@dataclass(frozen=True)
+class CalibrationObservedTmax:
+    """Observed daily Tmax for the updated calibration store (DB-backed)."""
+
+    station_id: str
+    target_date: date
+    observed_tmax_f: float
+    observed_tmax_c: float
+    source: str
 
 
 def parse_observation_records(records: list[dict[str, Any]]) -> list[ObservedTmax]:
@@ -39,32 +51,41 @@ def parse_observation_records(records: list[dict[str, Any]]) -> list[ObservedTma
         if not math.isfinite(observed_tmax_c):
             raise ValueError(f"record {index} observed_tmax_c must be finite")
 
+        observed_tmax_f = record.get("observed_tmax_f")
+        parsed_f = float(observed_tmax_f) if observed_tmax_f is not None else None
+
         out.append(
             ObservedTmax(
                 station_id=str(record["station_id"]),
                 target_date=date.fromisoformat(str(record["target_date"])),
                 observed_tmax_c=observed_tmax_c,
                 source=str(record["source"]),
+                observed_tmax_f=parsed_f,
             )
         )
     return out
 
 
 def _observation_to_dict(observation: ObservedTmax) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "station_id": observation.station_id,
         "target_date": observation.target_date.isoformat(),
         "observed_tmax_c": observation.observed_tmax_c,
         "source": observation.source,
     }
+    if observation.observed_tmax_f is not None:
+        data["observed_tmax_f"] = observation.observed_tmax_f
+    return data
 
 
 def _observation_from_dict(data: dict[str, Any]) -> ObservedTmax:
+    observed_tmax_f = data.get("observed_tmax_f")
     return ObservedTmax(
         station_id=str(data["station_id"]),
         target_date=date.fromisoformat(str(data["target_date"])),
         observed_tmax_c=float(data["observed_tmax_c"]),
         source=str(data["source"]),
+        observed_tmax_f=float(observed_tmax_f) if observed_tmax_f is not None else None,
     )
 
 

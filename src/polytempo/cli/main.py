@@ -30,11 +30,16 @@ except ImportError:
 
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     AnalysisInput,
     AnalysisResult,
     analyze,
     analyze_event,
+)
+from polytempo.weather.calibration_stats_csv import (
+    DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
 )
 from polytempo.model.distribution import format_distribution_build_markdown
 from polytempo.model.lead_time import lead_hours_to_end_of_target_day
@@ -93,6 +98,7 @@ class ModelStrategy(str, Enum):
 
     ENSEMBLE_SPREAD = MODEL_STRATEGY_ENSEMBLE_SPREAD
     BEST_HISTORICAL = MODEL_STRATEGY_BEST_HISTORICAL
+    BEST_HISTORICAL_UPDATED = MODEL_STRATEGY_BEST_HISTORICAL_UPDATED
 
 
 class LiveMode(str, Enum):
@@ -362,19 +368,25 @@ def _run_live_one_day(
                     err=True,
                 )
 
+            cal_path = DEFAULT_CALIBRATION_STATS_CSV_PATH
+            if model_strategy is ModelStrategy.BEST_HISTORICAL_UPDATED:
+                cal_path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+
             preview_result = analyze_event(
                 forecast,
                 event,
                 lead_hours=lead_hours,
                 model_strategy=model_strategy.value,
                 station_id=station.icao,
+                calibration_stats_path=cal_path,
             )
             if (
-                model_strategy is ModelStrategy.BEST_HISTORICAL
+                model_strategy
+                in (ModelStrategy.BEST_HISTORICAL, ModelStrategy.BEST_HISTORICAL_UPDATED)
                 and preview_result.fallback_reason is not None
             ):
                 typer.echo(
-                    f"warning: --model-strategy best_historical fell back to "
+                    f"warning: --model-strategy {model_strategy.value} fell back to "
                     f"ensemble_spread ({preview_result.fallback_reason}).",
                     err=True,
                 )

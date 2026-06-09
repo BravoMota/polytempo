@@ -32,9 +32,15 @@ from polytempo.weather.schema import ForecastValues
 
 MODEL_STRATEGY_ENSEMBLE_SPREAD = "ensemble_spread"
 MODEL_STRATEGY_BEST_HISTORICAL = "best_historical"
+MODEL_STRATEGY_BEST_HISTORICAL_UPDATED = "best_historical_updated"
 MODEL_STRATEGIES: tuple[str, ...] = (
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+)
+
+_BEST_HISTORICAL_STRATEGIES = frozenset(
+    {MODEL_STRATEGY_BEST_HISTORICAL, MODEL_STRATEGY_BEST_HISTORICAL_UPDATED}
 )
 
 
@@ -167,7 +173,10 @@ def _resolve_strategy(
             calibrated_sigma=None,
         )
 
-    if requested_strategy != MODEL_STRATEGY_BEST_HISTORICAL:
+    if requested_strategy not in (
+        MODEL_STRATEGY_BEST_HISTORICAL,
+        MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    ):
         raise ValueError(
             f"unknown model_strategy {requested_strategy!r}; "
             f"expected one of {MODEL_STRATEGIES}"
@@ -207,7 +216,7 @@ def _resolve_strategy(
     mu = predicted - row.bias_c
 
     return _StrategyResolution(
-        strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        strategy=requested_strategy,
         selected_model=row.model,
         calibration_row=row,
         sigma_source=sigma_source,
@@ -268,7 +277,7 @@ def analyze_event_multi(
         calibration_stats_path=calibration_stats_path,
     )
 
-    if resolution.strategy == MODEL_STRATEGY_BEST_HISTORICAL:
+    if resolution.strategy in _BEST_HISTORICAL_STRATEGIES:
         assert resolution.calibrated_mu is not None
         assert resolution.calibrated_sigma is not None
         distribution, distribution_build = build_calibrated_distribution(
@@ -375,7 +384,7 @@ def analyze_event(
         calibration_stats_path=calibration_stats_path,
     )
 
-    if resolution.strategy == MODEL_STRATEGY_BEST_HISTORICAL:
+    if resolution.strategy in _BEST_HISTORICAL_STRATEGIES:
         assert resolution.calibrated_mu is not None
         assert resolution.calibrated_sigma is not None
         distribution, distribution_build = build_calibrated_distribution(

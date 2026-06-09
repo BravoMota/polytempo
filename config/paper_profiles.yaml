@@ -7,6 +7,7 @@ city: london
 target_day: tomorrow
 
 calibration_stats_path: data/weather/statistical/calibration_stats.csv
+updated_calibration_stats_path: data/weather/statistical/calibration_stats_updated.csv
 
 # Bot wakes at the exact UTC instant when lead_hours == target_lead_hours
 # (± tolerance_seconds, default 90s). Not a multi-hour window.
@@ -27,6 +28,8 @@ lead_gates:
     target_lead_hours: 42
   lead48:
     target_lead_hours: 48
+  lead54:
+    target_lead_hours: 54
 
 model_strategies:
   - best_historical

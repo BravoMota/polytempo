@@ -6,7 +6,11 @@ import os
 
 import pytest
 
-from polytempo.storage.postgres import get_connection, initialize_database
+from polytempo.storage.postgres import (
+    assert_test_database_url,
+    get_connection,
+    initialize_database,
+)
 
 
 @pytest.fixture
@@ -15,6 +19,7 @@ def paper_db_url() -> str:
     url = os.environ.get("POLYTEMPO_PAPER_TEST_DATABASE_URL")
     if not url:
         pytest.skip("Set POLYTEMPO_PAPER_TEST_DATABASE_URL for paper Postgres tests")
+    assert_test_database_url(url)
 
     from polytempo.storage.paper_postgres import initialize_paper_database, truncate_paper_tables
     from polytempo.storage.paper_postgres import get_paper_connection
@@ -29,14 +34,16 @@ def paper_db_url() -> str:
 @pytest.fixture
 def weather_db_url() -> str:
     """Provide a clean Postgres database URL for storage/collector tests."""
-    url = os.environ.get("POLYTEMPO_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    url = os.environ.get("POLYTEMPO_TEST_DATABASE_URL")
     if not url:
-        pytest.skip("Set POLYTEMPO_DATABASE_URL or DATABASE_URL for Postgres tests")
+        pytest.skip("Set POLYTEMPO_TEST_DATABASE_URL for Postgres tests")
+    assert_test_database_url(url)
 
     initialize_database(url)
     with get_connection(url) as conn:
         conn.execute(
-            "TRUNCATE TABLE forecast_snapshots, observation_snapshots, "
+            "TRUNCATE TABLE calibration_forecast_records, calibration_observed_tmax, "
+            "calibration_job_state, forecast_snapshots, observation_snapshots, "
             "collector_state, stations RESTART IDENTITY CASCADE"
         )
         conn.commit()

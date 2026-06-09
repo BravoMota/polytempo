@@ -1,0 +1,24 @@
+start_date: "2026-02-01"
+schedule_anchor_time_utc: "02:00"
+updated_stats_csv: data/weather/statistical/calibration_stats_updated.csv
+
+collector_config: config/weather_collectors.yaml
+station_ids:
+  - EGLC
+
+models:
+  - name: ukmo_uk_deterministic_2km
+    run_init_interval_hours: 3
+    forecast_days: 3
+  - name: ukmo_global_deterministic_10km
+    run_init_interval_hours: 6
+    forecast_days: 7
+  - name: ecmwf_ifs025
+    run_init_interval_hours: 6
+    forecast_days: 15
+  - name: icon_eu
+    run_init_interval_hours: 3
+    forecast_days: 5
+  - name: gfs_seamless
+    run_init_interval_hours: 6
+    forecast_days: 16

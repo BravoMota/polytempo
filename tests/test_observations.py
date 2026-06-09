@@ -1,6 +1,7 @@
 """Tests for observed Tmax JSONL helpers and Wunderground script parsing."""
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,20 @@ from polytempo.weather.observations import (
     read_observations_jsonl,
     write_observations_jsonl,
 )
+
+
+def _history_page_html(temp_f: int) -> str:
+    body = (
+        '{"temperatureMax":['
+        f"{temp_f}"
+        '],"validTimeLocal":["2026-05-14T07:00:00+0100"]}'
+    )
+    state = (
+        '{"x":{"u":"https://api.weather.com/v3/wx/conditions/historical/dailysummary",'
+        f'"b":{body}'
+        "}}"
+    )
+    return f'<html><script id="app-root-state" type="application/json">{state}</script></html>'
 
 
 def test_parse_observation_records_validates_required_keys() -> None:
@@ -58,96 +73,113 @@ def test_read_observations_jsonl_missing_file_returns_empty(tmp_path: Path) -> N
     assert read_observations_jsonl(tmp_path / "missing.jsonl") == []
 
 
-def test_build_wunderground_history_url() -> None:
-    url = _WU_MODULE.build_wunderground_history_url(
-        "EGLC", date(2026, 5, 14), country_code="GB"
+def test_build_wunderground_history_page_url() -> None:
+    url = _WU_MODULE.build_wunderground_history_page_url(
+        "EGLC",
+        date(2026, 5, 14),
+        country="gb",
+        city_slug="london",
     )
-    assert "api.weather.com" in url
-    assert "/v1/location/EGLC:9:GB/observations/historical.json" in url
-    assert "startDate=20260514" in url
-    assert "endDate=20260514" in url
-    assert "units=m" in url
-    assert "apiKey=" in url
+    assert "wunderground.com/history/daily/gb/london/EGLC/date/2026-05-14" in url
 
 
-def test_parse_wunderground_daily_high_takes_max_temp_from_observations() -> None:
-    payload = (
-        '{"metadata":{"status_code":200},'
-        '"observations":['
-        '{"valid_time_gmt":1748000000,"temp":15},'
-        '{"valid_time_gmt":1748010000,"temp":22},'
-        '{"valid_time_gmt":1748020000,"temp":null},'
-        '{"valid_time_gmt":1748030000,"temp":18}'
-        "]}"
-    )
-    row = _WU_MODULE.parse_wunderground_daily_high(
+def test_parse_wunderground_daily_high_uses_reported_temperature_max() -> None:
+    payload = {
+        "validTimeLocal": ["2026-05-14T07:00:00+0100"],
+        "temperatureMax": [72],
+    }
+    row = _WU_MODULE.parse_dailysummary_payload(
         payload,
         station_id="EGLC",
-        target_date=date(2025, 5, 24),
+        target_date=date(2026, 5, 14),
     )
     assert row == ObservedTmax(
         station_id="EGLC",
-        target_date=date(2025, 5, 24),
-        observed_tmax_c=22.0,
+        target_date=date(2026, 5, 14),
+        observed_tmax_c=22.22,
+        observed_tmax_f=72.0,
         source="wunderground",
     )
 
 
+def test_parse_wunderground_daily_high_from_embedded_page_json() -> None:
+    row = _WU_MODULE.parse_wunderground_daily_high(
+        _history_page_html(72),
+        station_id="EGLC",
+        target_date=date(2026, 5, 14),
+    )
+    assert row.observed_tmax_f == 72.0
+
+
+def test_parse_summary_table_high_temp() -> None:
+    html = (
+        '<div class="summary-table"><table aria-labelledby="History summary">'
+        "<tbody><tr><th>High Temp</th><td>61</td><td>69</td></tr></tbody></table></div>"
+    )
+    assert _WU_MODULE._parse_summary_table_high_temp_f(html) == 61.0
+
+
+def test_parse_wunderground_daily_high_does_not_use_hourly_observations() -> None:
+    payload = (
+        '{"x":{"u":"https://api.weather.com/v1/location/EGLC/observations/historical.json",'
+        '"b":{"observations":[{"temp":99},{"temp":50}]}}}'
+    )
+    html = f'<html><script id="app-root-state" type="application/json">{payload}</script></html>'
+    with pytest.raises(ValueError, match="temperatureMax missing"):
+        _WU_MODULE.parse_wunderground_daily_high(
+            html,
+            station_id="EGLC",
+            target_date=date(2026, 5, 14),
+        )
+
+
 def test_parse_wunderground_daily_high_raises_when_missing() -> None:
+    empty_summary = (
+        '<html><script id="app-root-state" type="application/json">'
+        '{"x":{"u":"https://api.weather.com/v3/wx/conditions/historical/dailysummary","b":{}}}'
+        "</script></html>"
+    )
     with pytest.raises(ValueError, match="daily high not found"):
         _WU_MODULE.parse_wunderground_daily_high(
-            '{"observations":[]}',
+            empty_summary,
             station_id="EGLC",
             target_date=date(2026, 5, 14),
         )
 
 
-def test_parse_wunderground_daily_high_raises_when_all_temps_null() -> None:
-    payload = '{"observations":[{"temp":null},{"temp":null}]}'
-    with pytest.raises(ValueError, match="daily high not found"):
-        _WU_MODULE.parse_wunderground_daily_high(
-            payload,
-            station_id="EGLC",
-            target_date=date(2026, 5, 14),
-        )
+def test_fetch_wunderground_observed_tmax_uses_station_hourly_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_hourly_max(
+        station_id: str,
+        target_date: date,
+        *,
+        country_code: str,
+        client=None,
+        api_key=None,
+    ) -> float:
+        assert station_id == "EGLC"
+        assert target_date == date(2026, 5, 14)
+        assert country_code == "GB"
+        return 71.0
 
-
-def test_parse_wunderground_daily_high_raises_on_non_json() -> None:
-    with pytest.raises(ValueError, match="daily high not found"):
-        _WU_MODULE.parse_wunderground_daily_high(
-            "<html><body>No weather numbers here</body></html>",
-            station_id="EGLC",
-            target_date=date(2026, 5, 14),
-        )
-
-
-def test_fetch_wunderground_observed_tmax_uses_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeResponse:
-        text = '{"observations":[{"temp":15},{"temp":21},{"temp":17}]}'
-
-        def raise_for_status(self) -> None:
-            return None
-
-    called: dict[str, object] = {}
-
-    def fake_get(url: str, headers: dict[str, str], timeout: float):
-        called["url"] = url
-        called["headers"] = headers
-        called["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr(_WU_MODULE.httpx, "get", fake_get)
-
-    row = _WU_MODULE.fetch_wunderground_observed_tmax(
-        "EGLC", date(2026, 5, 14), country_code="GB"
+    monkeypatch.setattr(_WU_MODULE, "fetch_dailysummary_30day_map", lambda *a, **k: {})
+    monkeypatch.setattr(
+        _WU_MODULE, "_fetch_v1_historical_daily_high_f", fake_hourly_max
     )
 
-    assert row.observed_tmax_c == pytest.approx(21.0)
+    row = _WU_MODULE.fetch_wunderground_observed_tmax(
+        "EGLC",
+        date(2026, 5, 14),
+        country_code="GB",
+        city_slug="london",
+        lat=51.5053,
+        lon=0.0553,
+    )
+
+    assert row.observed_tmax_c == pytest.approx(21.67)
+    assert row.observed_tmax_f == pytest.approx(71.0)
     assert row.source == "wunderground"
-    assert "User-Agent" in called["headers"]
-    assert "EGLC:9:GB" in str(called["url"])
-    assert "startDate=20260514" in str(called["url"])
-    assert "endDate=20260514" in str(called["url"])
 
 
 def test_fetch_wunderground_observations_range_skips_failures(
