@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from polytempo.strategy import ArgmaxYesStrategy, DistArbStrategy, MidBandStrategy
+from polytempo.strategy import (
+    ArgmaxNoStrategy,
+    ArgmaxYesStrategy,
+    DistArbStrategy,
+    MidBandStrategy,
+)
 from polytempo.strategy.base import Strategy
 
 _TRADE_STRATEGIES: dict[str, type] = {
     "argmax_yes": ArgmaxYesStrategy,
+    "argmax_no": ArgmaxNoStrategy,
     "dist_arb": DistArbStrategy,
     "mid_band": MidBandStrategy,
 }

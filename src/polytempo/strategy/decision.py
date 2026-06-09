@@ -98,6 +98,74 @@ def decide_bucket(edge: BucketEdge, config: DecisionConfig | None = None) -> Tra
     )
 
 
+def decide_bucket_no(edge: BucketEdge, config: DecisionConfig | None = None) -> TradeDecision:
+    """Return BUY_NO or SKIP from NO-side edge metrics and thresholds.
+
+    Mirror of :func:`decide_bucket` on the NO side. NO fills at ``1 - yes_bid``
+    and its edge is ``yes_bid - p_model`` (``edge.edge_no_pp``). The chosen
+    side's edge is reported in ``edge_yes_pp`` (same convention as dist_arb).
+    """
+    cfg = config if config is not None else DecisionConfig()
+    warnings = _spread_warnings(edge, cfg)
+
+    if edge.edge_no_pp is None:
+        return TradeDecision(
+            label=edge.label,
+            action="SKIP",
+            reason="missing edge",
+            edge_yes_pp=None,
+            confidence="none",
+            side="NO",
+            warnings=warnings,
+        )
+
+    if edge.edge_no_pp <= cfg.min_edge_pp:
+        return TradeDecision(
+            label=edge.label,
+            action="SKIP",
+            reason="edge below threshold",
+            edge_yes_pp=edge.edge_no_pp,
+            confidence="none",
+            side="NO",
+            warnings=warnings,
+        )
+
+    if edge.liquidity_usd is None:
+        return TradeDecision(
+            label=edge.label,
+            action="SKIP",
+            reason="missing liquidity",
+            edge_yes_pp=edge.edge_no_pp,
+            confidence="none",
+            side="NO",
+            warnings=warnings,
+        )
+
+    if edge.liquidity_usd < cfg.min_liquidity_usd:
+        return TradeDecision(
+            label=edge.label,
+            action="SKIP",
+            reason="liquidity below threshold",
+            edge_yes_pp=edge.edge_no_pp,
+            confidence="none",
+            side="NO",
+            warnings=warnings,
+        )
+
+    confidence = (
+        "high" if edge.edge_no_pp >= cfg.high_confidence_edge_pp else "medium"
+    )
+    return TradeDecision(
+        label=edge.label,
+        action="BUY_NO",
+        reason="edge and liquidity rules passed",
+        edge_yes_pp=edge.edge_no_pp,
+        confidence=confidence,
+        side="NO",
+        warnings=warnings,
+    )
+
+
 def _spread_warnings(edge: BucketEdge, cfg: DecisionConfig) -> list[str]:
     if edge.spread is None:
         return []

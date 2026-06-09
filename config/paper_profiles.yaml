@@ -37,6 +37,7 @@ model_strategies:
 
 trade_strategies:
   - argmax_yes
+  - argmax_no
   - dist_arb
   - mid_band
 

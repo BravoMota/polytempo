@@ -18,6 +18,7 @@ def test_generate_all_twelve_profiles_count() -> None:
             "lead24": {"target_lead_hours": 24},
         },
         model_strategies=["best_historical", "ensemble_spread"],
+        trade_strategies=["argmax_yes", "dist_arb", "mid_band"],
     )
     assert len(profiles) == 12
     ids = {p.id for p in profiles}
@@ -49,5 +50,5 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 3 trade strategies × 2 model strategies (bh + es)
-    assert len(profiles) == 54
+    # 9 lead gates × 4 trade strategies × 2 model strategies (bh + es)
+    assert len(profiles) == 72
