@@ -34,6 +34,7 @@ lead_gates:
 model_strategies:
   - best_historical
   - ensemble_spread
+  - best_historical_updated
 
 trade_strategies:
   - argmax_yes
