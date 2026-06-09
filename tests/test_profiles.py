@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from polytempo.profiles.load import generate_all_twelve_profiles, load_paper_profiles
 from polytempo.profiles.registry import trade_strategy_for_name
@@ -52,8 +53,17 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 8 trade strategies × 2 model strategies (bh + es)
-    assert len(profiles) == 144
+    # 9 lead gates × 8 trade strategies × 3 model strategies
+    assert len(profiles) == 216
+
+
+def test_config_trade_strategies_are_registered() -> None:
+    path = Path("config/paper_profiles.yaml")
+    if not path.is_file():
+        pytest.skip("config/paper_profiles.yaml missing")
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for name in raw["trade_strategies"]:
+        trade_strategy_for_name(name)
 
 
 def test_topk_no_resolves_to_no_side_variant() -> None:

@@ -49,6 +49,17 @@ def _profile_id(model: str, trade: str, lead_key: str) -> str:
     return f"{abbrev}_{trade}_{lead_key}"
 
 
+def _validate_trade_strategy_names(names: list[str]) -> None:
+    known = set(known_trade_strategies())
+    unknown = sorted({name for name in names if name not in known})
+    if unknown:
+        raise ValueError(
+            f"unknown trade_strategies in paper_profiles.yaml: {unknown}; "
+            f"register each name in profiles/registry.py "
+            f"(known: {sorted(known)})"
+        )
+
+
 def generate_all_twelve_profiles(
     *,
     lead_gates: dict[str, dict[str, float]],
@@ -114,6 +125,8 @@ def load_paper_profiles(
     target_day = str(raw.get("target_day", "tomorrow"))
     models = raw.get("model_strategies")
     trades = raw.get("trade_strategies")
+    if trades is not None:
+        _validate_trade_strategy_names(list(trades))
 
     all_profiles = generate_all_twelve_profiles(
         lead_gates=lead_gates,

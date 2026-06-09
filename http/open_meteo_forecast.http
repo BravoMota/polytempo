@@ -5,7 +5,7 @@
 
 @latitude = 51.5053
 @longitude = 0.0553
-@target_date = 2026-05-27
+@target_date = 2026-06-10
 
 GET https://api.open-meteo.com/v1/forecast
     ?latitude={{latitude}}
