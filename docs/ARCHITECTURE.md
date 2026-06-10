@@ -14,20 +14,23 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: Phases **0–9** complete. Engine: Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`** (`ForecastValues` + `DailyMaxForecast.to_forecast_values()`), **`analyze_event`** with optional calibration, **`model/calibration.py`**, and the **paper ledger** (`paper/ledger.py`, append-only JSONL OPEN/SETTLE records, $1000 demo balance, 2-5% edge-scaled sizing) wired through `polytempo paper {open,settle,status,list-london}` for London. Next: **Phase 10** reports (`reports/writer.py`) and product wiring (event-specific settlement date + auto-resolution from the Gamma payload).
+Current status: all plan phases (**0–10**) complete. Engine: Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`**, **`analyze_event`** with three model strategies (`best_historical`, `best_historical_updated`, `ensemble_spread`), eight trade strategies in `strategy/`, and **profile-based paper trading**: 216 profiles (3 model × 8 trade × 9 lead gates) from `config/paper_profiles.yaml`, each with its own $1000 bankroll in PostgreSQL (`polytempo_paper`). The always-on bot (`scripts/run_paper_bot.py`) opens at exact lead-hour gates and settles resolved events; nightly calibration (`scripts/run_daily_calibration.py`) refreshes the updated stats CSV; reports (`reports/writer.py`) capture every live run.
 
 ## Project shape
 
 ```text
 src/polytempo/
-  weather/     # forecast ingestion and normalization
+  weather/     # forecast ingestion, normalization, calibration pipelines
   markets/     # Polymarket fetching and bucket parsing
   model/       # calibration and probability distribution
-  strategy/    # edge and deterministic decision rules
+  strategy/    # edge and deterministic decision rules (8 trade strategies)
   analysis.py   # local analysis use-case layer
-  paper/       # simulated paper-trading ledger
+  profiles/    # trading profiles (model × trade × lead gate) from YAML
+  paper/       # simulated paper-trading ledger + bot pipeline
+  collectors/  # Wunderground HTML collectors → Postgres snapshots
+  storage/     # PostgreSQL access + schemas (weather + paper databases)
   cli/         # command entry points
-  reports/     # JSON/Markdown outputs
+  reports/     # Markdown run reports
 ```
 
 ## Module responsibilities
@@ -64,13 +67,34 @@ Compare model probabilities to executable market prices and apply BUY/SKIP rules
 
 Local use-case layer that connects buckets, distribution, edge, and decision for analysis.
 
+### profiles/
+
+Trading profiles: every combination of model strategy × trade strategy ×
+lead-time entry gate, generated from `config/paper_profiles.yaml`
+(`load.py`). `registry.py` maps trade-strategy names to zero-arg factories;
+YAML names are validated against it at load time.
+
 ### paper/
 
-Record simulated trades and outcomes. No real trading. `ledger.py` writes an
-append-only JSONL of `OPEN`/`SETTLE` records; balance and open positions are
-always derived by replaying the log. Stake sizing is `2%-5%` of the current
-balance, scaled linearly by model edge (`edge_pp ≤ 7` → 2%, `edge_pp ≥ 15` →
-5%).
+Record simulated trades and outcomes. No real trading. `ledger.py` stores
+`OPEN`/`SETTLE` records per profile in PostgreSQL (`polytempo_paper`,
+`PostgresLedgerStore`); balance and open positions are always derived by
+replaying the per-profile event log from its $1000 start. Stake sizing is
+`2%-5%` of the current balance, scaled linearly by model edge (`edge_pp ≤ 7`
+→ 2%, `edge_pp ≥ 15` → 5%), unless the strategy supplies a flat
+`stake_usd` (e.g. `mid_band`). `run.py` orchestrates settle → gate check →
+dedupe → open per profile; `bot.py` is the always-on scheduler loop.
+
+### collectors/
+
+Continuous Wunderground HTML scraping (observations + hourly forecasts) into
+the weather Postgres database on UTC wall-clock schedules.
+
+### storage/
+
+PostgreSQL connection helpers and schemas for the two databases:
+`polytempo_weather` (collector snapshots + calibration store) and
+`polytempo_paper` (profile ledgers, ticks, views).
 
 ### cli/
 

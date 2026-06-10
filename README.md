@@ -4,7 +4,16 @@ PolyTempo is a deterministic weather-market analysis tool.
 
 The goal is to compare weather forecast distributions against Polymarket temperature bucket prices, estimate edge, and produce strict BUY/SKIP recommendations.
 
-Current status: **Phases 0–9 complete** on the plan: Polymarket/Gamma ingestion (`markets/polymarket.py`), Open-Meteo daily-max ensemble (`weather/open_meteo.py` + `weather/stations.py`), shared **`ForecastValues`** in `weather/schema.py` (with **`DailyMaxForecast.to_forecast_values()`** for the pipeline), **manual bias calibration** (`model/calibration.py`, used by **`analyze_event`**), and a **paper trading ledger** (`paper/ledger.py`, $1000 demo balance, 2-5% edge-scaled stake, append-only JSONL) wired through `polytempo paper {open,settle,status,list-london}` for London. **Phase 10** (reports) is next. Live API smoke: `POLYTEMPO_RUN_LIVE_API_TESTS=1 pytest tests/test_pipeline.py` (opt-in; may still skip if no parseable event).
+Current status: **all plan phases (0–10) complete**, and the project has grown past the original plan into a profile-based paper-trading system:
+
+- **Ingestion** — Polymarket Gamma discovery + live CLOB order-book prices (`markets/polymarket.py`), Open-Meteo daily-max ensemble (`weather/open_meteo.py` + `weather/stations.py`), shared `ForecastValues` in `weather/schema.py`.
+- **Model** — three model strategies: `best_historical` (frozen calibration CSV), `best_historical_updated` (nightly-recomputed CSV), `ensemble_spread` (live model spread).
+- **Trade strategies** — eight: `argmax_yes`, `argmax_no`, `dist_arb`, `mid_band`, `topk_yes`, `topk_no`, `max_edge`, `edge_band` (`strategy/`, registered in `profiles/registry.py`).
+- **Paper trading** — **216 profiles** (3 model strategies × 8 trade strategies × 9 lead-time gates) from `config/paper_profiles.yaml`; each profile has its own $1000 bankroll in **PostgreSQL** (`polytempo_paper`). The always-on bot (`scripts/run_paper_bot.py`) opens trades at each profile's exact lead-hour gate and settles resolved events.
+- **Data collection** — Wunderground collectors into Postgres (`scripts/run_collector.py`) and nightly calibration updates (`scripts/run_daily_calibration.py`).
+- **Reports** — every `polytempo live` run writes a Markdown report under `reports/`.
+
+Live API smoke: `POLYTEMPO_RUN_LIVE_API_TESTS=1 pytest tests/test_pipeline.py` (opt-in; may still skip if no parseable event).
 
 ## Quickstart
 
@@ -52,22 +61,26 @@ python3 -m pytest
 
 ## Paper trading (London, demo only)
 
+Paper state lives in PostgreSQL (`polytempo_paper`, set `POLYTEMPO_PAPER_DATABASE_URL`);
+each of the 216 profiles keeps its own $1000 bankroll. See
+[COMMANDS.md](COMMANDS.md) for setup and the always-on bot.
+
 ```bash
 # 1. find an active London weather event
 polytempo paper list-london
 
-# 2. lock paper trades against it for a given settlement date
+# 2. lock paper trades against it for a given settlement date (all active profiles)
 polytempo paper open --event-id <id> --date 2026-05-19
 
 # 3. after the market resolves, settle against the winning bucket label
 polytempo paper settle --event-id <id> --winner "23°C"
 
-# 4. inspect the account
+# 4. inspect per-profile balances
 polytempo paper status
-```
 
-The ledger lives at `paper_ledger.jsonl` (append-only). Starting balance is
-$1000; each BUY_YES gets 2-5% of the live balance based on edge.
+# 5. per-event scenario PnL for open trades
+polytempo paper scenarios
+```
 
 ## Principles
 

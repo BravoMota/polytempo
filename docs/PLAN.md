@@ -9,7 +9,7 @@ Deterministic engine decides.
 LLM explains or audits later.
 ```
 
-Do not add LLM agents, live trading, dashboards, databases, or background schedulers until the deterministic core is proven.
+Do not add LLM agents, live trading, or dashboards until the deterministic core is proven. (Databases and background schedulers, originally deferred here, were added once the core was proven: Postgres weather/paper stores, the always-on paper bot, and nightly calibration.)
 
 ---
 
@@ -27,23 +27,22 @@ Phase 6 complete: Polymarket/Gamma market ingestion (markets/polymarket.py)
 Phase 7 complete: Open-Meteo daily-max forecast ingestion (weather/open_meteo.py)
 Phase 8 complete: manual forecast calibration (model/calibration.py) + weather/schema.py
 Phase 9 complete: paper trading ledger (paper/ledger.py) + `polytempo paper {open,settle,status,list-london}` CLI
+Phase 10 complete: Markdown run reports (reports/writer.py, RunReporter)
 ```
 
-Current scope:
+Work since the original plan (post-Phase 10):
 
 ```text
-Polymarket ingestion: implemented. Gamma for discovery/resolution (HTTP client + payload parsing); executable prices (bid/ask/spread/liquidity) hydrated from the live CLOB `/books` order book on decision paths.
-Open-Meteo ingestion: implemented (multi-model daily max temperature).
-weather/schema.py: ForecastValues (calibration + analyze_event). DailyMaxForecast.to_forecast_values() bridges fetch → schema.
-analyze_event: Polymarket event + ForecastValues + optional CalibrationRule → AnalysisResult.
-paper/ledger.py: append-only JSONL of OPEN/SETTLE records. $1000 demo balance. Stake 2-5% of balance, linear ramp on edge_pp (2% at 7pp → 5% at >=15pp). London-only entry-point for now.
+Multi-strategy paper trading: 8 trade strategies in strategy/ (argmax_yes, argmax_no, dist_arb, mid_band, topk_yes, topk_no, max_edge, edge_band).
+Model strategies: best_historical (frozen CSV), best_historical_updated (nightly CSV), ensemble_spread.
+Trading profiles: 216 = 3 model × 8 trade × 9 lead gates (config/paper_profiles.yaml, profiles/), each with its own $1000 Postgres bankroll.
+Always-on paper bot: scripts/run_paper_bot.py wakes at exact lead-hour gates, settles every 15 minutes.
+Storage: PostgreSQL databases polytempo_weather (collectors + calibration store) and polytempo_paper (profile ledgers).
+Collectors: Wunderground HTML scraping (scripts/run_collector.py).
+Automated calibration: scripts/bootstrap_calibration_store.py + scripts/run_daily_calibration.py (02:00 UTC cron).
+NO-side edge: implemented (BUY_NO in dist_arb, argmax_no, topk_no, max_edge, edge_band).
 Opt-in live smoke: tests/test_pipeline.py (POLYTEMPO_RUN_LIVE_API_TESTS=1).
-Next plan phase: Phase 10 reports (reports/writer.py).
-No LLM agent.
-No dashboard.
-No live trading.
-BUY_YES only for now.
-NO-side edge is intentionally deferred.
+Still out of scope: LLM agent, dashboard, live trading.
 ```
 
 ---
@@ -402,6 +401,11 @@ Write:
 reports/latest_analysis.json
 reports/latest_analysis.md
 ```
+
+**Status:** complete (`reports/writer.py`). Implemented as `RunReporter`: one
+Markdown file per `polytempo live` run under `reports/` (timestamped, not
+`latest_analysis.*`), capturing inputs, raw HTTP calls, distribution build,
+and per-profile run outcomes.
 
 ---
 

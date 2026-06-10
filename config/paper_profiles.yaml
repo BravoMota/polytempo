@@ -1,6 +1,7 @@
 # Paper trading profiles: model × trade strategy × lead-time entry gate.
-# Twelve combinations by default (2 × 3 × 2).
+# 216 combinations (3 model × 8 trade × 9 lead gates).
 
+# "all_twelve" is the legacy keyword for "every combination" (same as omitting it).
 active_profiles: all_twelve
 
 city: london
@@ -46,5 +47,5 @@ trade_strategies:
   - max_edge
   - edge_band
 
-# Profile ids generated as: {bh|es}_{trade}_{lead30|lead24}
-# e.g. bh_dist_arb_lead30, es_mid_band_lead24
+# Profile ids generated as: {bh|bhu|es}_{trade}_{leadN}
+# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, es_mid_band_lead24

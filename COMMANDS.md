@@ -21,7 +21,7 @@ polytempo demo
 
 ## live
 
-Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all three Phase B strategies, optionally open paper trades, and write one Markdown report per target day.
+Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run **all active profiles** from `config/paper_profiles.yaml` (Postgres paper store), optionally open paper trades, and write one Markdown report per target day.
 
 ### Step-by-step (what happens on `polytempo live`)
 
@@ -37,16 +37,17 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
       | Strategy | mean | sigma |
       | --- | --- | --- |
       | `best_historical` (default) | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
+      | `best_historical_updated` | same as `best_historical`, but reads the nightly `calibration_stats_updated.csv` | same |
       | `ensemble_spread` | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
 
       `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. Live and calibration `lead_hours` share the same end-of-target-date UTC anchor, so the ceiling lookup is exact. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
    5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
-   6. **Per-strategy decisions** — `analyze_event_multi` produces three `AnalysisResult`s (one each for `argmax_yes`, `dist_arb`, `mid_band`) sharing the same distribution + edges.
+   6. **Per-profile decisions** — `run_profiles` produces one `AnalysisResult` per active profile from `config/paper_profiles.yaml`. Each profile combines its **own** model strategy × trade strategy (the `--model-strategy` flag only controls the report's Distribution section, not the profiles). Lead-time entry gates are **not** enforced by `live` (`enforce_gate=False`) — only the always-on bot enforces them.
    7. **Mode branch:**
-      - **`preview`**: `preview_pipeline` — no ledger writes. One row appended to `paper_ledger/runs.jsonl` with `mode="preview"` (audit trail).
-      - **`trade`**: `run_pipeline(..., dedupe=True)`. **Dedupe**: if any open trade already exists for `event_id` across any per-strategy ledger, every strategy returns `DEDUPED_OPEN_TRADES_EXIST` and no OPEN is written. Otherwise each strategy appends OPEN records to its own ledger (`paper_ledger/<strategy>.jsonl`). One row appended to `runs.jsonl` with `mode="trade"`.
-   8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-strategy result tables + opened/settled trades).
-   9. **Stdout summary** — side-by-side strategy actions; in trade mode, per-strategy balances after writes.
+      - **`preview`**: analysis only — no trades opened. (Resolved events are still settled against the Postgres store.)
+      - **`trade`**: per-profile **dedupe** — a profile that already has an open trade on `event_id` returns `DEDUPED_OPEN_TRADES_EXIST`; otherwise OPEN rows are written to the paper Postgres database (`POLYTEMPO_PAPER_DATABASE_URL`).
+   8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-profile result tables + opened/settled trades).
+   9. **Stdout summary** — per-profile actions; in trade mode, per-profile balances after writes.
 
 ### Flags
 
@@ -58,7 +59,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run all thre
 | `--event-id` | Pin a specific Gamma event id (one day only; not compatible with `--day both`). |
 | `--city` | Contract station registry key (default `london`). |
 | `--limit` | Max events to scan when `--event-id` is not set (default `20`). |
-| `--model-strategy` | `best_historical` (default) or `ensemble_spread`. |
+| `--model-strategy` | `best_historical` (default), `best_historical_updated`, or `ensemble_spread`. Affects the report's Distribution section only; profiles use their own model strategy. |
 
 ### Examples
 
@@ -80,7 +81,7 @@ polytempo live --mode preview --days-ahead 3 --city london
 
 ## paper (PostgreSQL profiles)
 
-Paper trading uses **12 trading profiles** (2 model strategies × 3 trade strategies × 2 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files.
+Paper trading uses **216 trading profiles** (3 model strategies × 8 trade strategies × 9 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|es}_{trade}_{leadN}` (e.g. `bh_dist_arb_lead30`, `bhu_topk_no_lead12`); each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
 
 ### Database setup (one-time)
 
