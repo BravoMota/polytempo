@@ -37,6 +37,7 @@ class TradeDecision:
     confidence: str
     side: str = "YES"
     stake_usd: float | None = None
+    stake_fraction: float | None = None
     warnings: list[str] = field(default_factory=list)
 
 

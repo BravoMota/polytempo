@@ -8,7 +8,7 @@ The system should answer:
 
 > Given weather forecasts and market prices, is any bucket mispriced enough to justify a trade?
 
-Current progress: all plan phases (0-10) are complete — Polymarket ingestion (Gamma discovery + live CLOB order-book prices), Open-Meteo forecast ingestion, calibration (frozen + nightly-updated), edge/decision with 8 trade strategies (YES and NO sides), Markdown run reports, and profile-based paper trading: 216 profiles (3 model × 8 trade × 9 lead gates) with per-profile $1000 bankrolls in PostgreSQL, driven by an always-on bot.
+Current progress: all plan phases (0-10) are complete — Polymarket ingestion (Gamma discovery + live CLOB order-book prices), Open-Meteo forecast ingestion, calibration (frozen + nightly-updated), edge/decision with 14 trade strategies (YES and NO sides), Markdown run reports, and profile-based paper trading: 378 profiles (3 model × 14 trade × 9 lead gates) with per-profile $1000 bankrolls in PostgreSQL, driven by an always-on bot.
 
 ## Non-goals
 
@@ -52,7 +52,7 @@ The system should eventually output:
 
 ## Current decision scope
 
-- BUY_YES and BUY_NO (NO-side via `dist_arb`, `argmax_no`, `topk_no`, `max_edge`, `edge_band`).
+- BUY_YES and BUY_NO (NO-side via `dist_arb`, `argmax_no`, `topk_no`, `max_edge`, `edge_band`, `book_arb`, `max_roi`, `dist_arb_tight`, `dist_arb_kelly`, `tail_fade`).
 - Assume buy and hold until settlement (no active sell / take-profit yet).
-- Spread is a warning only, not a hard blocker.
+- Spread is a warning only, not a hard blocker (except `dist_arb_tight`, which gates on it).
 - Liquidity is a crude stale-quote filter; later prefer ask-side depth for the intended stake size.

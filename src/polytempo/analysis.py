@@ -69,6 +69,7 @@ class AnalysisRow:
     yes_bid: float | None = None
     edge_no_pp: float | None = None
     stake_usd: float | None = None
+    stake_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ def analyze(
             yes_bid=edge.yes_bid,
             edge_no_pp=edge.edge_no_pp,
             stake_usd=decision.stake_usd,
+            stake_fraction=decision.stake_fraction,
         )
         for probability, edge, decision in zip(
             probabilities,
@@ -316,6 +318,7 @@ def analyze_event_multi(
                 yes_bid=edge.yes_bid,
                 edge_no_pp=edge.edge_no_pp,
                 stake_usd=decision.stake_usd,
+                stake_fraction=decision.stake_fraction,
             )
             for probability, edge, decision in zip(
                 probabilities,
@@ -421,6 +424,7 @@ def analyze_event(
             yes_bid=edge.yes_bid,
             edge_no_pp=edge.edge_no_pp,
             stake_usd=decision.stake_usd,
+            stake_fraction=decision.stake_fraction,
         )
         for probability, edge, decision in zip(
             probabilities,

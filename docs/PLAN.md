@@ -33,14 +33,14 @@ Phase 10 complete: Markdown run reports (reports/writer.py, RunReporter)
 Work since the original plan (post-Phase 10):
 
 ```text
-Multi-strategy paper trading: 8 trade strategies in strategy/ (argmax_yes, argmax_no, dist_arb, mid_band, topk_yes, topk_no, max_edge, edge_band).
+Multi-strategy paper trading: 14 trade strategies in strategy/ (argmax_yes, argmax_no, dist_arb, mid_band, topk_yes, topk_no, max_edge, edge_band, book_arb, coverage_band, max_roi, dist_arb_tight, dist_arb_kelly, tail_fade).
 Model strategies: best_historical (frozen CSV), best_historical_updated (nightly CSV), ensemble_spread.
-Trading profiles: 216 = 3 model × 8 trade × 9 lead gates (config/paper_profiles.yaml, profiles/), each with its own $1000 Postgres bankroll.
+Trading profiles: 378 = 3 model × 14 trade × 9 lead gates (config/paper_profiles.yaml, profiles/), each with its own $1000 Postgres bankroll.
 Always-on paper bot: scripts/run_paper_bot.py wakes at exact lead-hour gates, settles every 15 minutes.
 Storage: PostgreSQL databases polytempo_weather (collectors + calibration store) and polytempo_paper (profile ledgers).
 Collectors: Wunderground HTML scraping (scripts/run_collector.py).
 Automated calibration: scripts/bootstrap_calibration_store.py + scripts/run_daily_calibration.py (02:00 UTC cron).
-NO-side edge: implemented (BUY_NO in dist_arb, argmax_no, topk_no, max_edge, edge_band).
+NO-side edge: implemented (BUY_NO in dist_arb, argmax_no, topk_no, max_edge, edge_band, book_arb, max_roi, dist_arb_tight, dist_arb_kelly, tail_fade).
 Opt-in live smoke: tests/test_pipeline.py (POLYTEMPO_RUN_LIVE_API_TESTS=1).
 Still out of scope: LLM agent, dashboard, live trading.
 ```

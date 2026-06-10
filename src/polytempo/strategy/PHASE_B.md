@@ -1,7 +1,7 @@
 # Trade strategies — multi-strategy paper trading
 
 Originally the Phase B locked-decisions doc (three strategies, JSONL ledgers).
-Updated to the current lineup: **eight trade strategies**, run per profile
+Updated to the current lineup: **fourteen trade strategies**, run per profile
 against a shared model distribution. Every run fetches the event + forecast
 once, builds the distribution once per model strategy, then each profile
 applies its trade strategy to the same edges. Names are registered in
@@ -87,9 +87,97 @@ Config (`EdgeBandConfig`):
 - `high_confidence_edge_pp = 15.0`
 - `min_liquidity_usd = 25.0`
 
+### 9. `book_arb`
+
+Model-free whole-event sum check. Exactly one bucket resolves YES, so if the
+asks across every bucket sum below $1, buying the full YES book locks in
+profit regardless of outcome; if the bids sum above $1, the full NO book
+does. Buys equal shares of every leg (stake per leg proportional to entry
+price, `total_ticket_usd` across the book) and trades nothing unless every
+bucket is quoted and liquid. Doubles as a control: it needs no model input.
+
+Config (`BookArbConfig`):
+- `min_profit_pp = 2.0` (noise buffer on the $1 gap)
+- `high_confidence_profit_pp = 5.0`
+- `min_liquidity_usd = 25.0` (every bucket; else `thin book`)
+- `total_ticket_usd = 20.0`
+
+### 10. `coverage_band`
+
+Buys the model's credible interval as a basket: the smallest contiguous
+bucket window around the model peak holding ≥ `target_mass` probability,
+bought YES-only with a flat ticket per leg when the **basket** edge
+(`sum(p) - sum(ask)` over the window, in pp) clears the gate. Individual leg
+edges may be negative; the basket is the unit. Robust to the model being
+right about the distribution but one bucket off on the peak.
+
+Config (`CoverageBandConfig`):
+- `target_mass = 0.80`
+- `min_basket_edge_pp = 5.0`
+- `high_confidence_edge_pp = 15.0` (on the basket edge)
+- `min_liquidity_usd = 25.0`
+- `flat_ticket_usd = 5.0` (per leg)
+
+### 11. `max_roi`
+
+Like `max_edge` scans both sides of every bucket, but ranks by expected
+return on stake (`win_probability / entry_price - 1`) instead of edge pp:
+5pp of edge at a 5-cent ask doubles the stake in expectation, while 5pp at
+50 cents returns 10%. One ticket per event. `min_win_probability` floors the
+chosen side's model win probability so the ranking cannot chase longshots
+whose ROI explodes as the entry price approaches zero.
+
+Config (`MaxRoiConfig`):
+- `min_roi = 0.05`, `high_confidence_roi = 0.25`
+- `min_win_probability = 0.05`
+- `min_liquidity_usd = 25.0`
+
+### 12. `dist_arb_tight`
+
+`dist_arb` selection behind hard quote-quality gates: the spread must be
+present and ≤ `max_spread` (a missing spread rejects the bucket — not a
+warning), and the liquidity floor is raised to 100. Tests whether dist_arb's
+long-lead "edge" is real mispricing or stale/wide quotes; compare the two
+head-to-head per lead.
+
+Config (`DistArbTightConfig`):
+- `min_edge_pp = 0.0`
+- `high_confidence_edge_pp = 15.0`
+- `min_liquidity_usd = 100.0`
+- `max_spread = 0.05`
+
+### 13. `dist_arb_kelly`
+
+Identical selection to `dist_arb`; only sizing differs. Stakes a fractional
+Kelly bet via `TradeDecision.stake_fraction` (fraction of current balance,
+honored by the ledger ahead of the edge ramp): full Kelly for a binary
+payout at entry price `c` with win probability `p` is `(p - c) / (1 - c)`,
+scaled by `kelly_multiplier` and capped at `max_stake_fraction` — the ramp
+ceiling, so the two sizing schemes stay comparable.
+
+Config (`DistArbKellyConfig`):
+- selection gates as `DistArbConfig` (`min_edge_pp = 0.0`, `min_liquidity_usd = 25.0`)
+- `kelly_multiplier = 0.25`, `max_stake_fraction = 0.05`
+
+### 14. `tail_fade`
+
+BUY_NO on the open-ended tail buckets (`or_below` / `or_higher` / `above`
+label kinds) when the market still bids ≥ `min_yes_bid` for an outcome the
+model puts at ≤ `max_model_probability` — harvesting favorite-longshot bias.
+Selection is structural (tail position), not edge-ranked, isolating whether
+NO trades win because of the model or because longshots are systematically
+overpriced. Requires the NO edge to be positive (`tail not overpriced`
+otherwise).
+
+Config (`TailFadeConfig`):
+- `max_model_probability = 0.05`
+- `min_yes_bid = 0.03`
+- `high_confidence_edge_pp = 15.0`
+- `min_liquidity_usd = 25.0`
+
 ## Bankroll & ledgers
 
-Each **profile** (model strategy × trade strategy × lead gate — 216 total
+Each **profile** (model strategy × trade strategy × lead gate — 378 total
 from `config/paper_profiles.yaml`) starts with $1000 and keeps an independent
 ledger in the paper Postgres database (`paper_events` table, append-only;
 see `storage/schema_paper_postgres.sql`). Balance is always derived by
@@ -119,7 +207,6 @@ NO leg pays `shares × $1` if `winning_label != bucket_label`, else $0.
 
 ## Out of scope
 
-- Kelly sizing (revisit if backtest motivates it).
 - Active-sell logic for `mid_band` (needs websocket).
 - **Take-profit / early-exit when a held bucket re-prices favorably against the
   model.** Hold-to-settlement only; see also the per-profile de-dup guard on

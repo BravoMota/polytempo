@@ -81,7 +81,7 @@ polytempo live --mode preview --days-ahead 3 --city london
 
 ## paper (PostgreSQL profiles)
 
-Paper trading uses **216 trading profiles** (3 model strategies × 8 trade strategies × 9 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|es}_{trade}_{leadN}` (e.g. `bh_dist_arb_lead30`, `bhu_topk_no_lead12`); each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
+Paper trading uses **378 trading profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|es}_{trade}_{leadN}` (e.g. `bh_dist_arb_lead30`, `bhu_topk_no_lead12`); each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
 
 ### Database setup (one-time)
 

@@ -2,7 +2,9 @@
 
 Append-only OPEN and SETTLE events in ``paper_events``. Demo account starts at
 $1000 per profile. Stake per BUY is 2-5% of current balance, scaled linearly
-by model edge. CLOSE is reserved for future early-exit support.
+by model edge; a decision's ``stake_usd`` (flat ticket) or ``stake_fraction``
+(fraction of current balance) overrides the ramp. CLOSE is reserved for
+future early-exit support.
 """
 
 from __future__ import annotations
@@ -178,6 +180,8 @@ class PostgresLedgerStore:
                     break
                 if row.stake_usd is not None:
                     stake = round(row.stake_usd, 2)
+                elif row.stake_fraction is not None:
+                    stake = round(balance * row.stake_fraction, 2)
                 else:
                     frac = stake_fraction(row.edge_yes_pp)
                     stake = round(balance * frac, 2)

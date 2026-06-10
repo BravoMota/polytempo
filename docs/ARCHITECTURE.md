@@ -14,7 +14,7 @@ market data + weather data
   → report / paper ledger
 ```
 
-Current status: all plan phases (**0–10**) complete. Engine: Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`**, **`analyze_event`** with three model strategies (`best_historical`, `best_historical_updated`, `ensemble_spread`), eight trade strategies in `strategy/`, and **profile-based paper trading**: 216 profiles (3 model × 8 trade × 9 lead gates) from `config/paper_profiles.yaml`, each with its own $1000 bankroll in PostgreSQL (`polytempo_paper`). The always-on bot (`scripts/run_paper_bot.py`) opens at exact lead-hour gates and settles resolved events; nightly calibration (`scripts/run_daily_calibration.py`) refreshes the updated stats CSV; reports (`reports/writer.py`) capture every live run.
+Current status: all plan phases (**0–10**) complete. Engine: Open-Meteo (`weather/open_meteo.py`), contract stations (`weather/stations.py`), shared **`weather/schema.py`**, **`analyze_event`** with three model strategies (`best_historical`, `best_historical_updated`, `ensemble_spread`), fourteen trade strategies in `strategy/`, and **profile-based paper trading**: 378 profiles (3 model × 14 trade × 9 lead gates) from `config/paper_profiles.yaml`, each with its own $1000 bankroll in PostgreSQL (`polytempo_paper`). The always-on bot (`scripts/run_paper_bot.py`) opens at exact lead-hour gates and settles resolved events; nightly calibration (`scripts/run_daily_calibration.py`) refreshes the updated stats CSV; reports (`reports/writer.py`) capture every live run.
 
 ## Project shape
 
@@ -23,7 +23,7 @@ src/polytempo/
   weather/     # forecast ingestion, normalization, calibration pipelines
   markets/     # Polymarket fetching and bucket parsing
   model/       # calibration and probability distribution
-  strategy/    # edge and deterministic decision rules (8 trade strategies)
+  strategy/    # edge and deterministic decision rules (14 trade strategies)
   analysis.py   # local analysis use-case layer
   profiles/    # trading profiles (model × trade × lead gate) from YAML
   paper/       # simulated paper-trading ledger + bot pipeline

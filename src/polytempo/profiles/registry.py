@@ -7,10 +7,16 @@ from collections.abc import Callable
 from polytempo.strategy import (
     ArgmaxNoStrategy,
     ArgmaxYesStrategy,
+    BookArbStrategy,
+    CoverageBandStrategy,
+    DistArbKellyStrategy,
     DistArbStrategy,
+    DistArbTightStrategy,
     EdgeBandStrategy,
     MaxEdgeStrategy,
+    MaxRoiStrategy,
     MidBandStrategy,
+    TailFadeStrategy,
     TopKStrategy,
 )
 from polytempo.strategy.base import Strategy
@@ -26,6 +32,12 @@ _TRADE_STRATEGIES: dict[str, Callable[[], Strategy]] = {
     "topk_no": lambda: TopKStrategy(side="NO", name="topk_no"),
     "max_edge": MaxEdgeStrategy,
     "edge_band": EdgeBandStrategy,
+    "book_arb": BookArbStrategy,
+    "coverage_band": CoverageBandStrategy,
+    "max_roi": MaxRoiStrategy,
+    "dist_arb_tight": DistArbTightStrategy,
+    "dist_arb_kelly": DistArbKellyStrategy,
+    "tail_fade": TailFadeStrategy,
 }
 
 

@@ -53,8 +53,8 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 8 trade strategies × 3 model strategies
-    assert len(profiles) == 216
+    # 9 lead gates × 14 trade strategies × 3 model strategies
+    assert len(profiles) == 378
 
 
 def test_config_trade_strategies_are_registered() -> None:
