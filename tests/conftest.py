@@ -42,7 +42,8 @@ def weather_db_url() -> str:
     initialize_database(url)
     with get_connection(url) as conn:
         conn.execute(
-            "TRUNCATE TABLE calibration_forecast_records, calibration_observed_tmax, "
+            "TRUNCATE TABLE open_meteo_forecast_snapshots, open_meteo_model_meta_snapshots, "
+            "open_meteo_fetch_cycles, calibration_forecast_records, calibration_observed_tmax, "
             "calibration_job_state, forecast_snapshots, observation_snapshots, "
             "collector_state, stations RESTART IDENTITY CASCADE"
         )

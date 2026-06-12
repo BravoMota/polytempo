@@ -2,6 +2,14 @@
 
 Developer cheat sheet for PolyTempo CLI entrypoints. For product overview see [README.md](README.md).
 
+## New terminal
+
+```bash
+cd /path/to/PolyTempo
+source .venv/bin/activate
+set -a && source .env && set +a
+```
+
 ## One-time setup
 
 ```bash
@@ -113,6 +121,8 @@ python scripts/run_paper_bot.py --config config/paper_profiles.yaml
 ```
 
 Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need the paper DB.
+
+**Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` calibration CSV lookup uses **per-model init lead** from metadata. **Restart `run_paper_bot.py` after deploying this change.**
 
 No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).
 
@@ -312,6 +322,18 @@ Each poll per station fetches:
 
 Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station. Forecast rows include `raw_temp_text` (integer °F string from Wunderground).
 
+### Open-Meteo collector (`open_meteo` block in YAML)
+
+Forecast-only collector: pairs rolling S3 `meta.json` (per model run init) with the live Forecast API, stores **parsed** rows (no raw JSON):
+
+| Table | Contents |
+| --- | --- |
+| `open_meteo_fetch_cycles` | One row per station poll (`fetched_at_utc`, staleness flag) |
+| `open_meteo_model_meta_snapshots` | Per-model init / availability / lag |
+| `open_meteo_forecast_snapshots` | Per `(model, target_date)` Tmax + `init_lead_hours` + `wall_clock_lead_hours` |
+
+Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). See [`docs/calibration-data.md`](docs/calibration-data.md) for SQL joins vs `calibration_forecast_records`.
+
 Scheduling uses **UTC wall-clock slots** (not sleep-after-work). Per collector in YAML:
 
 ```yaml
@@ -364,8 +386,26 @@ POLYTEMPO_TEST_DATABASE_URL='postgresql://USER:PASS@host:5432/polytempo_test' \
 POLYTEMPO_TEST_DATABASE_URL='postgresql://USER:PASS@host:5432/polytempo_test' \
   pytest tests/test_storage_postgres.py tests/test_calibration_storage.py \
   tests/test_collector_config.py tests/test_collector_schedule.py \
-  tests/test_collectors_wunderground.py tests/test_postgres_safety.py
+  tests/test_collectors_wunderground.py tests/test_open_meteo_meta.py \
+  tests/test_open_meteo_collector.py tests/test_postgres_safety.py
 ```
+
+### Open-Meteo collector — post-deploy runbook
+
+1. `export POLYTEMPO_DATABASE_URL='postgresql://…/polytempo'` (weather DB, not paper).
+2. `python scripts/init_weather_db.py` — creates `open_meteo_*` tables (idempotent).
+3. Enable `open_meteo` in `config/weather_collectors.yaml` (`enabled: true`, `models:`, `stations:`).
+4. Smoke: `python scripts/run_collector.py --once` (runs all enabled collectors).
+5. Verify:
+
+```bash
+psql "$POLYTEMPO_DATABASE_URL" -c "\dt open_meteo*"
+psql "$POLYTEMPO_DATABASE_URL" -c "SELECT COUNT(*) FROM open_meteo_fetch_cycles;"
+```
+
+6. Production loop: `python scripts/run_collector.py`
+
+To debug open_meteo only, temporarily set `wunderground.enabled: false` in YAML.
 
 ## Automated calibration (updated store)
 

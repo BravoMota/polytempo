@@ -33,3 +33,27 @@ collectors:
         country: gb
         city_slug: london
         pws_id: ILONDO288
+
+  - name: open_meteo
+    enabled: true
+    source: open_meteo
+    forecast_interval_seconds: 600
+    forecast_anchor_time_utc: "00:00"
+    observations_interval_seconds: 86400
+    models:
+      - ukmo_uk_deterministic_2km
+      - ukmo_global_deterministic_10km
+      - ecmwf_ifs025
+      - icon_eu
+      - gfs_seamless
+    target_horizon_days: 2
+    stations:
+      - station_id: EGLC
+        station_type: icao
+        name: London City Airport
+        timezone: Europe/London
+        lat: 51.5053
+        lon: 0.0553
+        country: gb
+        city_slug: london
+        pws_id: null

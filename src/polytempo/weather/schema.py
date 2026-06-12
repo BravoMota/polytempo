@@ -27,6 +27,8 @@ class ForecastValues:
     target_date: date
     values_c: list[float]
     models: list[str] | None = None
+    init_lead_hours: list[float] | None = None
+    model_run_init_utc: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.models is not None and len(self.models) != len(self.values_c):
@@ -34,3 +36,19 @@ class ForecastValues:
                 "ForecastValues.models length must match values_c "
                 f"({len(self.models)} != {len(self.values_c)})"
             )
+        if self.init_lead_hours is not None:
+            if self.models is None:
+                raise ValueError("init_lead_hours requires models")
+            if len(self.init_lead_hours) != len(self.models):
+                raise ValueError(
+                    "ForecastValues.init_lead_hours length must match models "
+                    f"({len(self.init_lead_hours)} != {len(self.models)})"
+                )
+        if self.model_run_init_utc is not None:
+            if self.models is None:
+                raise ValueError("model_run_init_utc requires models")
+            if len(self.model_run_init_utc) != len(self.models):
+                raise ValueError(
+                    "ForecastValues.model_run_init_utc length must match models "
+                    f"({len(self.model_run_init_utc)} != {len(self.models)})"
+                )

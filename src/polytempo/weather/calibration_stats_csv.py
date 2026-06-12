@@ -162,19 +162,25 @@ def select_best_model(
     station_id: str,
     available_models: list[str],
     current_lead_hours: float,
+    *,
+    init_lead_hours_by_model: dict[str, float] | None = None,
 ) -> tuple[CalibrationStatRow, str] | None:
     """Pick the model with the lowest valid sigma at its ceiling lead row.
 
     For each available model, the ceiling row (smallest ``lead_hours >= current``)
-    is looked up. Models without a ceiling row are dropped. Among the remaining
-    models, the one with the lowest valid ``error_std_c`` wins; if every
+    is looked up. When ``init_lead_hours_by_model`` is set, each model uses its
+    own init-based lead for that lookup; otherwise all models share
+    ``current_lead_hours``. Models without a ceiling row are dropped. Among the
+    remaining models, the one with the lowest valid ``error_std_c`` wins; if every
     candidate's ``error_std_c`` is missing/zero/non-finite, ``rmse_c`` is used
     as the tie-break source. Returns ``(row, sigma_source)`` or ``None`` when
     no model qualifies.
     """
+    init_leads = init_lead_hours_by_model or {}
     candidates: list[tuple[CalibrationStatRow, float, str]] = []
     for model in available_models:
-        row = select_ceiling_row(rows, station_id, model, current_lead_hours)
+        lead = init_leads.get(model, current_lead_hours)
+        row = select_ceiling_row(rows, station_id, model, lead)
         if row is None:
             continue
         sigma_info = _sigma_for_calibration(row)

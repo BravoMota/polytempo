@@ -42,19 +42,51 @@ Numbered scripts under `scripts/Calibrator_V1/` (or legacy numbered `scripts/1_`
 
 | Path / store | Purpose |
 | --- | --- |
-| PostgreSQL `observation_snapshots`, `forecast_snapshots` | Live collector HTML scrape (`scripts/run_collector.py`) |
-| `raw/wunderground/` | Raw collector HTML sidecars |
+| PostgreSQL `observation_snapshots`, `forecast_snapshots` | Wunderground HTML scrape (`scripts/run_collector.py`) |
+| PostgreSQL `open_meteo_fetch_cycles`, `open_meteo_model_meta_snapshots`, `open_meteo_forecast_snapshots` | Open-Meteo rolling meta + Forecast API audit (`run_collector.py` `open_meteo` block) |
+| `raw/wunderground/` | Raw WU HTML sidecars |
 
-Collector data is **not** used for calibration joins.
+WU collector data is **not** used for calibration joins. Open-Meteo collector rows are for **delay / run-correspondence analysis** against `calibration_forecast_records` (Single Runs).
+
+### Open-Meteo live audit (init vs wall-clock lead)
+
+Each `open_meteo` poll stores:
+
+| Column | Meaning |
+| --- | --- |
+| `init_lead_hours` | `compute_lead_hours(run_init_utc, target_date)` — matches calibration / Single Runs `run=` semantics |
+| `wall_clock_lead_hours` | Hours from `fetched_at_utc` to end of target day — when the collector actually polled |
+| `run_init_utc` | From rolling `data/{model}/static/meta.json` (`last_run_initialisation_time`) |
+| `availability_lag_hours` | Meta: hours from init to `last_run_availability_time` |
+
+Join live forecasts to Single Runs calibration rows:
+
+```sql
+SELECT live.fetched_at_utc, live.model, live.run_init_utc, live.target_date_local,
+       live.predicted_tmax_c AS live_c, cal.predicted_tmax_c AS single_runs_c,
+       live.predicted_tmax_c - cal.predicted_tmax_c AS delta_c
+FROM open_meteo_forecast_snapshots live
+JOIN calibration_forecast_records cal
+  ON cal.station_id = live.station_id
+ AND cal.model = live.model
+ AND cal.run_time_utc = live.run_init_utc
+ AND cal.target_date = live.target_date_local;
+```
 
 ## Lead-hours convention
 
-Canonical for forecast records, error joins, `calibration_stats*.csv`, and live `polytempo live` lookup:
+Canonical for forecast records, error joins, and `calibration_stats*.csv`:
 
 - `lead_hours = (UTC midnight at the END of target_date) - run_time_utc` in hours.
-- Live `polytempo live` uses the same anchor with `run_time_utc = now`.
+
+**Paper bot (`fetch_market_context`):**
+
+- **Entry gates / ledger:** wall-clock lead from `now` to end of target day (`lead_hours_to_end_of_target_day`).
+- **`best_historical` CSV lookup:** per-model init lead from rolling `meta.json` (`compute_lead_hours(run_init_utc, target_date)`), carried on `ForecastValues.init_lead_hours`.
 
 Tmax is aggregated over the **station-local** calendar day by Open-Meteo; the lead anchor is UTC midnight on both sides.
+
+`polytempo live` still uses wall-clock lead only (not wired to init metadata).
 
 ## Example observation record (legacy jsonl)
 

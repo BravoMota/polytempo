@@ -45,6 +45,8 @@ class CollectorConfig:
     forecast_interval_seconds: int
     forecast_anchor_time_utc: str
     stations: list[StationConfig]
+    models: tuple[str, ...] = ()
+    target_horizon_days: int = 2
 
 
 @dataclass(frozen=True)
@@ -148,8 +150,22 @@ def _parse_collector(raw: dict[str, Any]) -> CollectorConfig:
     if not isinstance(stations_raw, list):
         raise ValueError("collectors[].stations must be a list")
 
+    name = str(raw["name"]).strip()
+    models_raw = raw.get("models") or []
+    if not isinstance(models_raw, list):
+        raise ValueError("collectors[].models must be a list")
+    models = tuple(str(m).strip() for m in models_raw if str(m).strip())
+
+    horizon_raw = raw.get("target_horizon_days", 2)
+    target_horizon_days = int(horizon_raw)
+    if target_horizon_days < 1:
+        raise ValueError("target_horizon_days must be >= 1")
+
+    if name == "open_meteo" and not models:
+        raise ValueError("open_meteo collector requires a non-empty models list")
+
     return CollectorConfig(
-        name=str(raw["name"]).strip(),
+        name=name,
         enabled=bool(raw.get("enabled", True)),
         source=str(raw.get("source", raw["name"])).strip(),
         observations_interval_seconds=obs_interval,
@@ -161,6 +177,8 @@ def _parse_collector(raw: dict[str, Any]) -> CollectorConfig:
             str(fc_anchor_raw) if fc_anchor_raw not in (None, "") else None
         ),
         stations=[_parse_station(s) for s in stations_raw],
+        models=models,
+        target_horizon_days=target_horizon_days,
     )
 
 

@@ -130,23 +130,52 @@ def test_parse_forecast_payload_rejects_implausible_temperature(bad_value: float
         parse_forecast_payload(payload, date(2026, 5, 14))
 
 
-def test_fetch_daily_max_calls_expected_url_and_params(
+def _install_forecast_client(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    *,
+    fail_until: int = 0,
+    fail_exc: Exception | None = None,
+    fail_status: int | None = None,
+) -> list[tuple[str, dict, float | None]]:
     calls: list[tuple[str, dict, float | None]] = []
+    attempt = 0
 
     class FakeResponse:
+        def __init__(self, status_code: int = 200) -> None:
+            self.status_code = status_code
+
         def raise_for_status(self) -> None:
-            return None
+            if self.status_code >= 400:
+                request = httpx.Request("GET", "https://example.test/v1/forecast")
+                response = httpx.Response(self.status_code, request=request)
+                raise httpx.HTTPStatusError("error", request=request, response=response)
 
         def json(self) -> dict:
             return _payload()
 
-    def fake_get(url: str, params: dict, timeout: float | None = None) -> FakeResponse:
-        calls.append((url, params, timeout))
-        return FakeResponse()
+    class FakeClient:
+        def get(self, url: str, params: dict, timeout: float | None = None) -> FakeResponse:
+            nonlocal attempt
+            attempt += 1
+            calls.append((url, params, timeout))
+            if attempt <= fail_until:
+                if fail_exc is not None:
+                    raise fail_exc
+                if fail_status is not None:
+                    return FakeResponse(fail_status)
+            return FakeResponse()
 
-    monkeypatch.setattr(httpx, "get", fake_get)
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    return calls
+
+
+def test_fetch_daily_max_calls_expected_url_and_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _install_forecast_client(monkeypatch)
 
     forecast = fetch_daily_max(
         latitude=40.4168,
@@ -179,24 +208,12 @@ def test_fetch_daily_max_calls_expected_url_and_params(
 def test_fetch_daily_max_retries_on_read_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
     sleeps: list[float] = []
-
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return _payload()
-
-    def fake_get(url: str, params: dict, timeout: float | None = None) -> FakeResponse:
-        nonlocal calls
-        calls += 1
-        if calls < 3:
-            raise httpx.ReadTimeout("timed out")
-        return FakeResponse()
-
-    monkeypatch.setattr(httpx, "get", fake_get)
+    calls = _install_forecast_client(
+        monkeypatch,
+        fail_until=2,
+        fail_exc=httpx.ReadTimeout("timed out"),
+    )
     monkeypatch.setattr("polytempo.weather.open_meteo.time.sleep", lambda s: sleeps.append(s))
 
     forecast = fetch_daily_max(
@@ -208,38 +225,14 @@ def test_fetch_daily_max_retries_on_read_timeout(
     )
 
     assert isinstance(forecast, DailyMaxForecast)
-    assert calls == 3
+    assert len(calls) == 3
     assert sleeps == [2.0, 4.0]
 
 
 def test_fetch_daily_max_retries_on_502(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
-
-    class FakeResponse:
-        status_code: int
-
-        def __init__(self, status_code: int) -> None:
-            self.status_code = status_code
-
-        def raise_for_status(self) -> None:
-            if self.status_code >= 400:
-                request = httpx.Request("GET", "https://example.test/v1/forecast")
-                response = httpx.Response(self.status_code, request=request)
-                raise httpx.HTTPStatusError("bad gateway", request=request, response=response)
-
-        def json(self) -> dict:
-            return _payload()
-
-    def fake_get(url: str, params: dict, timeout: float | None = None) -> FakeResponse:
-        nonlocal calls
-        calls += 1
-        if calls < 3:
-            return FakeResponse(502)
-        return FakeResponse(200)
-
-    monkeypatch.setattr(httpx, "get", fake_get)
+    calls = _install_forecast_client(monkeypatch, fail_until=2, fail_status=502)
     monkeypatch.setattr("polytempo.weather.open_meteo.time.sleep", lambda _s: None)
 
     forecast = fetch_daily_max(
@@ -251,21 +244,18 @@ def test_fetch_daily_max_retries_on_502(
     )
 
     assert isinstance(forecast, DailyMaxForecast)
-    assert calls == 3
+    assert len(calls) == 3
 
 
 def test_fetch_daily_max_max_retries_one_no_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
     sleeps: list[float] = []
-
-    def fake_get(url: str, params: dict, timeout: float | None = None) -> None:
-        nonlocal calls
-        calls += 1
-        raise httpx.ReadTimeout("timed out")
-
-    monkeypatch.setattr(httpx, "get", fake_get)
+    calls = _install_forecast_client(
+        monkeypatch,
+        fail_until=1,
+        fail_exc=httpx.ReadTimeout("timed out"),
+    )
     monkeypatch.setattr("polytempo.weather.open_meteo.time.sleep", lambda s: sleeps.append(s))
 
     with pytest.raises(httpx.ReadTimeout):
@@ -278,7 +268,7 @@ def test_fetch_daily_max_max_retries_one_no_retry(
             max_retries=1,
         )
 
-    assert calls == 1
+    assert len(calls) == 1
     assert sleeps == []
 
 
@@ -306,27 +296,14 @@ def test_fetch_daily_max_rejects_empty_timezone() -> None:
 def test_fetch_for_station_uses_station_coordinates_and_timezone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict] = []
-
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict:
-            return _payload()
-
-    def fake_get(url: str, params: dict, timeout: float | None = None) -> FakeResponse:
-        calls.append(params)
-        return FakeResponse()
-
-    monkeypatch.setattr(httpx, "get", fake_get)
+    calls = _install_forecast_client(monkeypatch)
 
     london = get_station("London")
     fetch_for_station(london, target_date=date(2026, 5, 14))
 
-    assert calls[0]["latitude"] == pytest.approx(london.latitude)
-    assert calls[0]["longitude"] == pytest.approx(london.longitude)
-    assert calls[0]["timezone"] == "Europe/London"
+    assert calls[0][1]["latitude"] == pytest.approx(london.latitude)
+    assert calls[0][1]["longitude"] == pytest.approx(london.longitude)
+    assert calls[0][1]["timezone"] == "Europe/London"
 
 
 def test_live_open_meteo_daily_max() -> None:

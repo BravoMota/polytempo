@@ -774,6 +774,11 @@ def paper_status(
         "--config",
         help="Path to paper_profiles.yaml",
     ),
+    no_open: bool = typer.Option(
+        False,
+        "--no-open",
+        help="Only print profile balances; skip open position details.",
+    ),
 ) -> None:
     """Print balances for all active trading profiles."""
     store = default_ledger_store()
@@ -789,21 +794,22 @@ def paper_status(
             f"${state.realized_pnl_usd:>+10.2f}"
         )
 
-    for profile in profiles:
-        state = store.read_state(profile.id)
-        if not state.open_trades:
-            continue
-        typer.echo("")
-        typer.echo(f"[{profile.id}] open positions:")
-        sub = f"  {'trade_id':<14} {'event_id':<14} {'bucket':<18} {'side':<4} {'entry':>6} {'stake':>8} {'shares':>8}"
-        typer.echo(sub)
-        typer.echo("  " + "-" * (len(sub) - 2))
-        for trade in state.open_trades:
-            entry = trade.entry_price if trade.entry_price is not None else trade.yes_ask
-            typer.echo(
-                f"  {trade.trade_id:<14} {trade.event_id:<14} {trade.bucket_label:<18} "
-                f"{trade.side:<4} {entry:>6.2f} ${trade.stake_usd:>7.2f} {trade.shares:>8.2f}"
-            )
+    if not no_open:
+        for profile in profiles:
+            state = store.read_state(profile.id)
+            if not state.open_trades:
+                continue
+            typer.echo("")
+            typer.echo(f"[{profile.id}] open positions:")
+            sub = f"  {'trade_id':<14} {'event_id':<14} {'bucket':<18} {'side':<4} {'entry':>6} {'stake':>8} {'shares':>8}"
+            typer.echo(sub)
+            typer.echo("  " + "-" * (len(sub) - 2))
+            for trade in state.open_trades:
+                entry = trade.entry_price if trade.entry_price is not None else trade.yes_ask
+                typer.echo(
+                    f"  {trade.trade_id:<14} {trade.event_id:<14} {trade.bucket_label:<18} "
+                    f"{trade.side:<4} {entry:>6.2f} ${trade.stake_usd:>7.2f} {trade.shares:>8.2f}"
+                )
 
 
 @paper_app.command("scenarios")

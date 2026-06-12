@@ -424,6 +424,120 @@ def get_calibration_job_state(
     ).fetchone()
 
 
+def insert_open_meteo_fetch_cycle(
+    conn: Connection,
+    *,
+    station_id: str,
+    fetched_at_utc: str,
+    requested_lat: float | None,
+    requested_lon: float | None,
+    returned_lat: float | None,
+    returned_lon: float | None,
+    collector_name: str,
+    meta_staleness_detected: bool,
+    created_at_utc: str | None = None,
+) -> int:
+    """Insert one Open-Meteo fetch cycle row and return its id."""
+    created = created_at_utc or utc_now_iso()
+    row = conn.execute(
+        """
+        INSERT INTO open_meteo_fetch_cycles (
+            station_id, fetched_at_utc, requested_lat, requested_lon,
+            returned_lat, returned_lon, collector_name, meta_staleness_detected,
+            created_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            station_id,
+            fetched_at_utc,
+            requested_lat,
+            requested_lon,
+            returned_lat,
+            returned_lon,
+            collector_name,
+            meta_staleness_detected,
+            created,
+        ),
+    ).fetchone()
+    assert row is not None
+    return int(row["id"])
+
+
+def insert_open_meteo_model_meta_snapshot(
+    conn: Connection,
+    *,
+    fetch_cycle_id: int,
+    station_id: str,
+    model: str,
+    run_init_utc: str,
+    run_available_utc: str,
+    run_modified_utc: str,
+    availability_lag_hours: float,
+    update_interval_seconds: int,
+    temporal_resolution_seconds: int,
+    data_end_utc: str | None,
+    fetched_at_utc: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO open_meteo_model_meta_snapshots (
+            fetch_cycle_id, station_id, model, run_init_utc, run_available_utc,
+            run_modified_utc, availability_lag_hours, update_interval_seconds,
+            temporal_resolution_seconds, data_end_utc, fetched_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            fetch_cycle_id,
+            station_id,
+            model,
+            run_init_utc,
+            run_available_utc,
+            run_modified_utc,
+            availability_lag_hours,
+            update_interval_seconds,
+            temporal_resolution_seconds,
+            data_end_utc,
+            fetched_at_utc,
+        ),
+    )
+
+
+def insert_open_meteo_forecast_snapshot(
+    conn: Connection,
+    *,
+    fetch_cycle_id: int,
+    station_id: str,
+    model: str,
+    target_date_local: str,
+    predicted_tmax_c: float,
+    run_init_utc: str,
+    init_lead_hours: float,
+    wall_clock_lead_hours: float,
+    fetched_at_utc: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO open_meteo_forecast_snapshots (
+            fetch_cycle_id, station_id, model, target_date_local,
+            predicted_tmax_c, run_init_utc, init_lead_hours,
+            wall_clock_lead_hours, fetched_at_utc
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            fetch_cycle_id,
+            station_id,
+            model,
+            target_date_local,
+            predicted_tmax_c,
+            run_init_utc,
+            init_lead_hours,
+            wall_clock_lead_hours,
+            fetched_at_utc,
+        ),
+    )
+
+
 def upsert_calibration_job_state(
     conn: Connection,
     *,

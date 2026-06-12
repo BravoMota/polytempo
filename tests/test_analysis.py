@@ -209,6 +209,29 @@ def test_analyze_event_applies_calibration_before_distribution() -> None:
     assert calibrated.distribution_mean_c == pytest.approx(24.0)
 
 
+def test_calibrate_forecast_preserves_init_lead_hours() -> None:
+    from polytempo.model.calibration import calibrate_forecast
+
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 10),
+        values_c=[24.0, 25.0],
+        models=["alpha", "beta"],
+        init_lead_hours=[34.0, 28.0],
+        model_run_init_utc=["2026-06-10T16:00:00Z", "2026-06-10T18:00:00Z"],
+    )
+
+    calibrated = calibrate_forecast(forecast, CalibrationRule(source="open_meteo", station_id=None))
+
+    assert calibrated.init_lead_hours == [34.0, 28.0]
+    assert calibrated.model_run_init_utc == [
+        "2026-06-10T16:00:00Z",
+        "2026-06-10T18:00:00Z",
+    ]
+
+
 def test_analyze_event_none_calibration_rule_behaves_like_zero_bias() -> None:
     forecast = _forecast([24.0, 26.0])
     event = _event(["24°C"])
@@ -519,6 +542,71 @@ def test_analyze_event_best_historical_requires_lead_hours(tmp_path: Path) -> No
 
     assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
     assert result.fallback_reason == "missing_lead_hours"
+
+
+def test_analyze_event_best_historical_uses_init_lead_hours(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,30,40,0.0,1.0,1.0,1.0",
+            "EGLC,alpha,34,40,0.0,1.0,1.0,2.0",
+            "EGLC,beta,28,40,0.0,1.0,1.0,0.8",
+            "EGLC,beta,30,40,0.0,1.0,1.0,1.5",
+        ],
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 10),
+        values_c=[23.0, 25.0],
+        models=["alpha", "beta"],
+        init_lead_hours=[34.0, 28.0],
+    )
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=30.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_BEST_HISTORICAL
+    assert result.selected_model == "beta"
+    assert result.calibration_row is not None
+    assert result.calibration_row.lead_hours == 28.0
+
+
+def test_analyze_event_best_historical_init_lead_length_mismatch_falls_back(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import MagicMock
+
+    from polytempo.analysis import MODEL_STRATEGY_BEST_HISTORICAL, _resolve_strategy
+
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        ["EGLC,alpha,24,40,0.0,1.0,1.0,1.0"],
+    )
+    forecast = MagicMock()
+    forecast.models = ["alpha", "beta"]
+    forecast.values_c = [24.0, 25.0]
+    forecast.init_lead_hours = [34.0]
+
+    resolution = _resolve_strategy(
+        forecast=forecast,
+        requested_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        current_lead_hours=12.0,
+        calibration_stats_path=csv_path,
+    )
+
+    assert resolution.strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert resolution.fallback_reason == "forecast_init_lead_length_mismatch"
 
 
 def test_analyze_event_rejects_unknown_model_strategy() -> None:

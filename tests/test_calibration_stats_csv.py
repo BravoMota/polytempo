@@ -261,6 +261,36 @@ def test_select_best_model_skips_unknown_models_entirely() -> None:
     assert chosen is None
 
 
+def test_select_best_model_uses_per_model_init_lead_hours() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=30.0, error_std_c=1.0),
+        _row(model="alpha", lead_hours=34.0, error_std_c=2.0),
+        _row(model="beta", lead_hours=28.0, error_std_c=0.8),
+        _row(model="beta", lead_hours=30.0, error_std_c=1.5),
+    ]
+
+    wall_clock_winner = select_best_model(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta"],
+        current_lead_hours=30.0,
+    )
+    assert wall_clock_winner is not None
+    assert wall_clock_winner[0].model == "alpha"
+    assert wall_clock_winner[0].lead_hours == 30.0
+
+    init_winner = select_best_model(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta"],
+        current_lead_hours=30.0,
+        init_lead_hours_by_model={"alpha": 34.0, "beta": 28.0},
+    )
+    assert init_winner is not None
+    assert init_winner[0].model == "beta"
+    assert init_winner[0].lead_hours == 28.0
+
+
 def test_read_calibration_stats_csv_smoke_real_file() -> None:
     # Sanity: the real generated CSV (if present) loads without error.
     from polytempo.weather.calibration_stats_csv import DEFAULT_CALIBRATION_STATS_CSV_PATH

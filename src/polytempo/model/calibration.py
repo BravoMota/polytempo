@@ -42,4 +42,14 @@ def calibrate_forecast(
         target_date=forecast.target_date,
         values_c=apply_bias_to_values(forecast.values_c, bias_c),
         models=list(forecast.models) if forecast.models is not None else None,
+        init_lead_hours=(
+            list(forecast.init_lead_hours)
+            if forecast.init_lead_hours is not None
+            else None
+        ),
+        model_run_init_utc=(
+            list(forecast.model_run_init_utc)
+            if forecast.model_run_init_utc is not None
+            else None
+        ),
     )

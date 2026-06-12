@@ -193,6 +193,14 @@ def _resolve_strategy(
     if len(forecast.models) != len(forecast.values_c):
         return _ensemble_fallback("forecast_model_value_length_mismatch")
 
+    init_lead_hours_by_model: dict[str, float] | None = None
+    if forecast.init_lead_hours is not None:
+        if len(forecast.init_lead_hours) != len(forecast.models):
+            return _ensemble_fallback("forecast_init_lead_length_mismatch")
+        init_lead_hours_by_model = dict(
+            zip(forecast.models, forecast.init_lead_hours, strict=True)
+        )
+
     rows = read_calibration_stats_csv(calibration_stats_path)
     if not rows:
         return _ensemble_fallback("no_calibration_csv")
@@ -202,6 +210,7 @@ def _resolve_strategy(
         station_id=station_id,
         available_models=list(forecast.models),
         current_lead_hours=current_lead_hours,
+        init_lead_hours_by_model=init_lead_hours_by_model,
     )
     if selection is None:
         return _ensemble_fallback("no_ceiling_row_for_any_live_model")

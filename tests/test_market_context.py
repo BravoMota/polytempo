@@ -1,68 +1,99 @@
-"""Tests for market context helpers (no network)."""
+"""Tests for paper trading market context fetch."""
+
+from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
-from polytempo.paper.market_context import (
-    resolve_target_dates,
-    settlement_date_span_days,
-    settlement_dates_for_profile,
+from polytempo.paper.market_context import fetch_market_context
+from polytempo.weather.open_meteo import (
+    DailyMaxForecast,
+    ModelRunMeta,
+    OpenMeteoLiveBundle,
 )
 
 
-def test_resolve_target_dates_today() -> None:
-    today = date(2026, 6, 7)
-    assert resolve_target_dates("today", today=today) == [today]
+def test_fetch_market_context_populates_init_lead_and_wall_clock_lead(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_date = date(2026, 6, 10)
+    now = datetime(2026, 6, 9, 12, 0, tzinfo=timezone.utc)
+    init_utc = datetime(2026, 6, 9, 10, 0, tzinfo=timezone.utc)
 
+    daily = DailyMaxForecast(
+        target_date=target_date,
+        latitude=51.5053,
+        longitude=0.0553,
+        values_c=[16.5, 17.0],
+        models=["alpha", "beta"],
+    )
+    bundle = OpenMeteoLiveBundle(
+        fetched_at_utc=now,
+        requested_lat=51.5053,
+        requested_lon=0.0553,
+        returned_lat=51.5077,
+        returned_lon=0.0424,
+        daily_by_date={target_date: daily},
+        meta_by_model={
+            "alpha": ModelRunMeta(
+                model="alpha",
+                run_init_utc=init_utc,
+                run_available_utc=init_utc,
+                run_modified_utc=init_utc,
+                update_interval_seconds=3600,
+                temporal_resolution_seconds=3600,
+                data_end_utc=None,
+            ),
+            "beta": ModelRunMeta(
+                model="beta",
+                run_init_utc=init_utc,
+                run_available_utc=init_utc,
+                run_modified_utc=init_utc,
+                update_interval_seconds=3600,
+                temporal_resolution_seconds=3600,
+                data_end_utc=None,
+            ),
+        },
+        init_lead_hours={
+            ("alpha", target_date): 38.0,
+            ("beta", target_date): 36.0,
+        },
+        wall_clock_lead_hours={
+            ("alpha", target_date): 36.0,
+            ("beta", target_date): 36.0,
+        },
+        meta_staleness_detected=False,
+    )
 
-def test_resolve_target_dates_tomorrow() -> None:
-    today = date(2026, 6, 7)
-    assert resolve_target_dates("tomorrow", today=today) == [date(2026, 6, 8)]
+    event = MagicMock()
+    event.settlement_date = target_date
+    event.event_id = "evt-1"
 
+    monkeypatch.setattr(
+        "polytempo.paper.market_context.fetch_weather_events",
+        lambda **kwargs: [event],
+    )
+    monkeypatch.setattr(
+        "polytempo.paper.market_context.first_parseable_weather_event",
+        lambda events, **kwargs: events[0],
+    )
+    monkeypatch.setattr(
+        "polytempo.paper.market_context.hydrate_prices",
+        lambda event: event,
+    )
+    monkeypatch.setattr(
+        "polytempo.paper.market_context.fetch_open_meteo_live_bundle",
+        lambda **kwargs: bundle,
+    )
 
-def test_resolve_target_dates_both() -> None:
-    today = date(2026, 6, 7)
-    assert resolve_target_dates("both", today=today) == [today, date(2026, 6, 8)]
+    ctx = fetch_market_context("london", target_date, now=now)
 
-
-def test_resolve_target_dates_rejects_unknown() -> None:
-    with pytest.raises(ValueError, match="target_day"):
-        resolve_target_dates("next_week")
-
-
-def test_settlement_date_span_days() -> None:
-    assert settlement_date_span_days(20) == 2
-    assert settlement_date_span_days(30) == 3
-    assert settlement_date_span_days(54) == 4
-
-
-def test_preview_settlement_dates_three_days() -> None:
-    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
-    from polytempo.paper.market_context import preview_settlement_dates
-
-    assert preview_settlement_dates(now=now, days=3) == [
-        date(2026, 6, 7),
-        date(2026, 6, 8),
-        date(2026, 6, 9),
+    assert ctx.lead_hours == pytest.approx(36.0)
+    assert ctx.forecast.init_lead_hours == [38.0, 36.0]
+    assert ctx.forecast.model_run_init_utc == [
+        "2026-06-09T10:00:00Z",
+        "2026-06-09T10:00:00Z",
     ]
-
-
-def test_settlement_dates_includes_gate_day_for_20h_lead() -> None:
-    """20h gate fires on settlement day at 04:00 UTC — must still fetch that date."""
-    now = datetime(2026, 6, 9, 4, 0, tzinfo=timezone.utc)
-    dates = settlement_dates_for_profile("tomorrow", 20.0, now=now)
-    assert date(2026, 6, 9) in dates
-
-
-def test_settlement_dates_includes_today_plus_two_for_54h_lead() -> None:
-    """54h gate for tomorrow's market fires two days ahead of settlement."""
-    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
-    dates = settlement_dates_for_profile("tomorrow", 54.0, now=now)
-    assert date(2026, 6, 9) in dates
-
-
-def test_settlement_dates_30h_before_midnight_on_prior_day() -> None:
-    now = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
-    dates = settlement_dates_for_profile("tomorrow", 30.0, now=now)
-    assert date(2026, 6, 9) in dates
+    assert ctx.daily is daily

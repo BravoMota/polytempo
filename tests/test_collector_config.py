@@ -21,7 +21,11 @@ def test_load_default_config_shape() -> None:
     wu = config.collectors[0]
     assert wu.name == "wunderground"
     assert wu.observations_interval_seconds == 300
-    assert wu.forecast_interval_seconds == 3600
+    assert wu.forecast_interval_seconds == 600
+    om = next(c for c in config.collectors if c.name == "open_meteo")
+    assert om.models
+    assert "ukmo_uk_deterministic_2km" in om.models
+    assert om.target_horizon_days == 2
     assert wu.observations_anchor_time_utc == "00:00"
     assert wu.forecast_anchor_time_utc == "00:00"
 
@@ -131,6 +135,32 @@ collectors:
     )
 
     with pytest.raises(ValueError, match="anchor time"):
+        load_weather_collectors_config(cfg)
+
+
+def test_load_config_open_meteo_requires_models(tmp_path: Path) -> None:
+    cfg = tmp_path / "open_meteo.yaml"
+    cfg.write_text(
+        """
+raw_base_dir: raw
+collectors:
+  - name: open_meteo
+    enabled: true
+    source: open_meteo
+    stations:
+      - station_id: EGLC
+        station_type: icao
+        name: EGLC
+        timezone: Europe/London
+        lat: 51.5
+        lon: 0.05
+        country: gb
+        city_slug: london
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="models"):
         load_weather_collectors_config(cfg)
 
 

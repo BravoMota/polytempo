@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -17,9 +18,16 @@ from polytempo.model.lead_time import (
     lead_hours_before_target,
     lead_hours_to_end_of_target_day,
 )
-from polytempo.weather.open_meteo import DailyMaxForecast, fetch_for_station
+from polytempo.weather.open_meteo import (
+    DEFAULT_MODELS,
+    DailyMaxForecast,
+    daily_to_forecast_values,
+    fetch_open_meteo_live_bundle,
+)
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station, get_station
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -135,8 +143,27 @@ def fetch_market_context(
     date_mismatch = (
         event.settlement_date is not None and event.settlement_date != target_date
     )
-    daily = fetch_for_station(station, target_date)
-    forecast = daily.to_forecast_values()
+    fetched_at = now if now is not None else datetime.now(timezone.utc)
+    bundle = fetch_open_meteo_live_bundle(
+        latitude=station.latitude,
+        longitude=station.longitude,
+        timezone=station.timezone,
+        models=DEFAULT_MODELS,
+        target_dates=[target_date],
+        fetched_at_utc=fetched_at,
+    )
+    if bundle.meta_staleness_detected:
+        logger.warning(
+            "Open-Meteo meta changed during forecast fetch for %s %s",
+            city,
+            target_date.isoformat(),
+        )
+    if target_date not in bundle.daily_by_date:
+        raise LookupError(
+            f"No Open-Meteo forecast for city={city!r}, target_date={target_date.isoformat()}"
+        )
+    daily = bundle.daily_by_date[target_date]
+    forecast = daily_to_forecast_values(bundle, target_date)
     lead_hours = lead_hours_to_end_of_target_day(target_date, now=now)
 
     return MarketContext(

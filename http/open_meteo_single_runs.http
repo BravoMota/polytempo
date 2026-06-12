@@ -7,8 +7,8 @@
 
 @latitude = 51.5053
 @longitude = 0.0553
-@model = ukmo_seamless,icon_d2,ukmo_uk_deterministic_2km,ukmo_global_deterministic_10km
-@run_time = 2026-06-08T18:00
+@model = ukmo_uk_deterministic_2km
+@run_time = 2026-06-10T12:00
 @target_date = 2026-06-10
 @timezone = Europe/London
 
