@@ -9,6 +9,7 @@ import pytest
 
 from polytempo.weather.open_meteo import (
     availability_lag_hours,
+    daily_to_forecast_values,
     fetch_open_meteo_live_bundle,
     format_run_time_utc,
     parse_rolling_meta_payload,
@@ -101,3 +102,60 @@ def test_fetch_open_meteo_live_bundle_staleness_guard(monkeypatch: pytest.Monkey
     )
     assert ("ukmo_uk_deterministic_2km", date(2026, 6, 10)) in bundle.init_lead_hours
     assert ("ukmo_uk_deterministic_2km", date(2026, 6, 10)) in bundle.wall_clock_lead_hours
+
+
+def test_fetch_open_meteo_live_bundle_skips_missing_meta(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        def __init__(self, payload: dict | None, *, status_code: int = 200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                request = httpx.Request("GET", "https://example.test/meta.json")
+                response = httpx.Response(self.status_code, request=request)
+                raise httpx.HTTPStatusError("error", request=request, response=response)
+
+        def json(self) -> dict:
+            assert self._payload is not None
+            return self._payload
+
+    class FakeClient:
+        def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+            if url.endswith("icon_eu/static/meta.json"):
+                return FakeResponse(None, status_code=404)
+            if url.endswith("meta.json"):
+                return FakeResponse(_META_UKMO)
+            return FakeResponse(_forecast_payload())
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    target = date(2026, 6, 10)
+    fetched_at = datetime(2026, 6, 10, 22, 0, tzinfo=timezone.utc)
+    bundle = fetch_open_meteo_live_bundle(
+        latitude=51.5053,
+        longitude=0.0553,
+        timezone="Europe/London",
+        models=("ukmo_uk_deterministic_2km", "icon_eu"),
+        target_dates=[target],
+        fetched_at_utc=fetched_at,
+    )
+
+    assert "icon_eu" not in bundle.meta_by_model
+    assert ("ukmo_uk_deterministic_2km", target) in bundle.init_lead_hours
+    assert ("icon_eu", target) in bundle.wall_clock_lead_hours
+    assert ("icon_eu", target) not in bundle.init_lead_hours
+
+    forecast = daily_to_forecast_values(bundle, target)
+    ukmo_index = forecast.models.index("ukmo_uk_deterministic_2km")
+    icon_index = forecast.models.index("icon_eu")
+    assert forecast.init_lead_hours[ukmo_index] == bundle.init_lead_hours[
+        ("ukmo_uk_deterministic_2km", target)
+    ]
+    assert forecast.init_lead_hours[icon_index] == bundle.wall_clock_lead_hours[
+        ("icon_eu", target)
+    ]
+    assert forecast.model_run_init_utc[icon_index] == ""

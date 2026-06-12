@@ -15,6 +15,7 @@ in :func:`fetch_open_meteo_live_bundle` and persists parsed rows via
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -33,6 +34,8 @@ from polytempo.storage.postgres import (
 from polytempo.weather.calibration_compute import compute_lead_hours
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MODELS: tuple[str, ...] = (
     "ukmo_global_deterministic_10km",
@@ -117,11 +120,20 @@ def daily_to_forecast_values(
 ) -> ForecastValues:
     """Build :class:`ForecastValues` with per-model init lead from a live bundle."""
     daily = bundle.daily_by_date[target_date]
-    init_leads = [bundle.init_lead_hours[(model, target_date)] for model in daily.models]
-    run_inits = [
-        format_run_time_utc(bundle.meta_by_model[model].run_init_utc)
-        for model in daily.models
-    ]
+    init_leads: list[float] = []
+    run_inits: list[str] = []
+    for model in daily.models:
+        key = (model, target_date)
+        if model in bundle.meta_by_model and key in bundle.init_lead_hours:
+            init_leads.append(bundle.init_lead_hours[key])
+            run_inits.append(format_run_time_utc(bundle.meta_by_model[model].run_init_utc))
+            continue
+        wall_lead = bundle.wall_clock_lead_hours.get(
+            key,
+            lead_hours_to_end_of_target_day(target_date, now=bundle.fetched_at_utc),
+        )
+        init_leads.append(wall_lead)
+        run_inits.append("")
     return ForecastValues(
         source=source,
         latitude=daily.latitude,
@@ -202,12 +214,30 @@ def fetch_rolling_meta_batch(
     models: tuple[str, ...] | list[str],
     *,
     client: httpx.Client | None = None,
+    skip_missing: bool = False,
 ) -> dict[str, ModelRunMeta]:
-    """Fetch rolling metadata for each model."""
+    """Fetch rolling metadata for each model.
+
+    When ``skip_missing`` is True, models whose ``meta.json`` returns 404 are
+    omitted (logged at WARNING) instead of failing the batch.
+    """
     own_client = client is None
     http = client or httpx.Client()
     try:
-        return {model: fetch_rolling_meta(model, client=http) for model in models}
+        result: dict[str, ModelRunMeta] = {}
+        for model in models:
+            try:
+                result[model] = fetch_rolling_meta(model, client=http)
+            except httpx.HTTPStatusError as exc:
+                if skip_missing and exc.response.status_code == 404:
+                    logger.warning(
+                        "rolling meta.json missing for model %s (404); "
+                        "init lead will fall back to wall-clock",
+                        model,
+                    )
+                    continue
+                raise
+        return result
     finally:
         if own_client:
             http.close()
@@ -391,6 +421,11 @@ def _build_lead_maps(
     for target_date in target_dates:
         daily = parse_forecast_payload(forecast_payload, target_date)
         daily_by_date[target_date] = daily
+        for model in daily.models:
+            wall_clock_lead_hours[(model, target_date)] = lead_hours_to_end_of_target_day(
+                target_date,
+                now=fetched_at,
+            )
         for model in meta_by_model:
             value = _parse_forecast_value_for_model(
                 forecast_payload,
@@ -402,10 +437,6 @@ def _build_lead_maps(
             init_lead_hours[(model, target_date)] = compute_lead_hours(
                 meta_by_model[model].run_init_utc,
                 target_date,
-            )
-            wall_clock_lead_hours[(model, target_date)] = lead_hours_to_end_of_target_day(
-                target_date,
-                now=fetched_at,
             )
 
     return daily_by_date, init_lead_hours, wall_clock_lead_hours
@@ -434,7 +465,7 @@ def fetch_open_meteo_live_bundle(
     own_client = client is None
     http = client or httpx.Client()
     try:
-        meta_before = fetch_rolling_meta_batch(models, client=http)
+        meta_before = fetch_rolling_meta_batch(models, client=http, skip_missing=True)
         forecast_payload = fetch_forecast_payload(
             latitude,
             longitude,
@@ -443,13 +474,14 @@ def fetch_open_meteo_live_bundle(
             models,
             client=http,
         )
-        meta_after = fetch_rolling_meta_batch(models, client=http)
+        meta_after = fetch_rolling_meta_batch(models, client=http, skip_missing=True)
     finally:
         if own_client:
             http.close()
 
+    shared_models = meta_before.keys() & meta_after.keys()
     meta_staleness_detected = any(
-        meta_before[m].run_init_utc != meta_after[m].run_init_utc for m in models
+        meta_before[m].run_init_utc != meta_after[m].run_init_utc for m in shared_models
     )
     meta_by_model = meta_after
 
