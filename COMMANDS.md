@@ -415,7 +415,7 @@ Nightly automation for `best_historical_updated`. Does **not** modify frozen `sc
 | --- | --- | --- |
 | `scripts/bootstrap_calibration_store.py` | Once on prod | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_*` Postgres tables; write `calibration_stats_updated.csv` |
 | `scripts/run_daily_calibration.py` | Cron **02:00 UTC** | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv` |
-| `scripts/backup_databases.py` | Manual / TBD scheduler (**03:00 UTC** target) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md)) |
+| `scripts/backup_databases.py` | Daemon **03:00 UTC** (`--once` for manual) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md)) |
 
 Config: `config/calibration.yaml` (stations from `config/weather_collectors.yaml`, models + cadence baked in — no `capabilities_csv` at runtime).
 
@@ -433,7 +433,8 @@ python scripts/run_daily_calibration.py --once
 python scripts/run_daily_calibration.py
 
 # database backups (see docs/database-backups.md):
-python scripts/backup_databases.py --all
+python scripts/backup_databases.py
+python scripts/backup_databases.py --once
 ```
 
 Model strategies:
