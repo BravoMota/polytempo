@@ -41,7 +41,6 @@ from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
 )
-from polytempo.model.distribution import format_distribution_build_markdown
 from polytempo.model.lead_time import lead_hours_to_end_of_target_day
 from polytempo.markets.buckets import bucket_label_for_value, parse_temperature_bucket
 from polytempo.markets.polymarket import (
@@ -55,9 +54,19 @@ from polytempo.markets.polymarket import (
 )
 from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
 from polytempo.reports.writer import RunReporter
+from polytempo.reports.live_report import (
+    format_calibration_per_model_md,
+    format_calibration_selection_md,
+    format_distribution_md,
+    format_lead_hours_md,
+    format_open_meteo_md,
+    format_strategy_analysis_md,
+    resolve_calibration_selection,
+)
 from polytempo.paper.ledger import PostgresLedgerStore, default_ledger_store
-from polytempo.paper.run import RunSummary, open_event_ids, run_profiles
 from polytempo.paper.bot_log import format_run_summary
+from polytempo.paper.run import ProfileRunResult, RunSummary, open_event_ids, run_profile, run_profiles
+from polytempo.profiles.registry import known_trade_strategies, trade_strategy_for_name
 from polytempo.paper.market_context import fetch_market_context
 from polytempo.profiles import DEFAULT_PROFILES_PATH, load_paper_profiles
 from polytempo.strategy.edge import MarketPrice
@@ -79,8 +88,11 @@ from polytempo.weather.historical_forecasts import (
     resolve_raw_fetch_run_times,
 )
 from polytempo.weather.observations import DEFAULT_OBSERVATIONS_PATH, read_observations_jsonl
-from polytempo.weather.open_meteo import DailyMaxForecast, fetch_for_station
-from polytempo.weather.schema import ForecastValues
+from polytempo.weather.open_meteo import (
+    DEFAULT_MODELS,
+    daily_to_forecast_values,
+    fetch_open_meteo_live_bundle,
+)
 from polytempo.weather.stations import STATIONS, Station, get_station
 
 app = typer.Typer()
@@ -231,12 +243,32 @@ def live(
             "stats are missing. 'ensemble_spread' averages live models with spread sigma."
         ),
     ),
+    strategy: str | None = typer.Option(
+        None,
+        "--strategy",
+        help=(
+            "Optional trade strategy name (e.g. dist_arb). When set, runs one decision "
+            "at the current lead time (no entry gate). Omit to skip strategy output."
+        ),
+    ),
 ) -> None:
-    """Fetch Polymarket + Open-Meteo data, run all strategies, optionally open paper trades.
+    """Fetch Polymarket + Open-Meteo data, write a concise markdown report.
 
     Interactive on a TTY: prompts for mode (preview/trade) and day (today/tomorrow/both)
     when those flags are omitted. Non-TTY defaults: ``--mode preview --day tomorrow``.
+
+    Pass ``--strategy`` to include one trade-strategy decision in the report (and open
+    a paper trade when ``--mode trade``). Without it, the report covers forecast,
+    metadata, lead hours, and calibration only.
     """
+    if strategy is not None:
+        known = set(known_trade_strategies())
+        if strategy not in known:
+            typer.echo(
+                f"Unknown --strategy {strategy!r}. Known: {', '.join(sorted(known))}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
     try:
         station = get_station(city)
     except KeyError:
@@ -252,6 +284,13 @@ def live(
             mode = LiveMode.TRADE if typer.confirm("Open paper trades?", default=False) else LiveMode.PREVIEW
         else:
             mode = LiveMode.PREVIEW
+
+    if mode is LiveMode.TRADE and strategy is None:
+        typer.echo(
+            "note: --mode trade requires --strategy; staying in preview (no paper trades).",
+            err=True,
+        )
+        mode = LiveMode.PREVIEW
 
     today = date.today()
 
@@ -299,6 +338,7 @@ def live(
             event_id=event_id,
             mode=mode,
             model_strategy=model_strategy,
+            trade_strategy=strategy,
         )
 
 
@@ -311,9 +351,11 @@ def _run_live_one_day(
     event_id: str | None,
     mode: LiveMode,
     model_strategy: ModelStrategy,
+    trade_strategy: str | None,
 ) -> None:
     reporter = RunReporter()
     days_ahead = (target_date - date.today()).days
+    run_at = datetime.now(timezone.utc)
     try:
         with reporter:
             reporter.section(
@@ -325,6 +367,7 @@ def _run_live_one_day(
                         f"- mode: `{mode.value}`",
                         f"- event mode: {'explicit (--event-id)' if event_id else f'scan (limit={limit})'}",
                         f"- model_strategy: `{model_strategy.value}`",
+                        f"- trade_strategy: `{trade_strategy}`" if trade_strategy else "- trade_strategy: _(none)_",
                     ]
                 ),
             )
@@ -354,23 +397,82 @@ def _run_live_one_day(
             event = hydrate_prices(event)
             reporter.section("Event", _md_event(event))
 
-            daily = fetch_for_station(station, target_date)
-            forecast = daily.to_forecast_values()
+            bundle = fetch_open_meteo_live_bundle(
+                latitude=station.latitude,
+                longitude=station.longitude,
+                timezone=station.timezone,
+                models=DEFAULT_MODELS,
+                target_dates=[target_date],
+                fetched_at_utc=run_at,
+            )
+            if bundle.meta_staleness_detected:
+                typer.echo(
+                    "warning: Open-Meteo rolling meta changed during forecast fetch.",
+                    err=True,
+                )
+            daily = bundle.daily_by_date[target_date]
+            forecast = daily_to_forecast_values(bundle, target_date)
+
             reporter.section(
-                "Forecast",
-                _md_forecast(station, target_date, daily, forecast),
+                "Open-Meteo",
+                format_open_meteo_md(
+                    station=station,
+                    target_date=target_date,
+                    bundle=bundle,
+                    forecast=forecast,
+                ),
             )
 
-            lead_hours = lead_hours_to_end_of_target_day(target_date)
+            lead_hours = lead_hours_to_end_of_target_day(target_date, now=run_at)
+            reporter.section(
+                "Lead hours",
+                format_lead_hours_md(wall_lead_hours=lead_hours, run_at=run_at),
+            )
             if lead_hours < 6.0:
                 typer.echo(
                     f"warning: lead_hours={lead_hours:.1f} < 6 — near settle, forecast value drops and edges sharpen.",
                     err=True,
                 )
 
+            static_selection = resolve_calibration_selection(
+                csv_path=DEFAULT_CALIBRATION_STATS_CSV_PATH,
+                label="best_historical (calibration_stats.csv)",
+                station_id=station.icao,
+                forecast=forecast,
+                wall_lead_hours=lead_hours,
+            )
+            updated_selection = resolve_calibration_selection(
+                csv_path=DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+                label="best_historical_updated (calibration_stats_updated.csv)",
+                station_id=station.icao,
+                forecast=forecast,
+                wall_lead_hours=lead_hours,
+            )
             cal_path = DEFAULT_CALIBRATION_STATS_CSV_PATH
             if model_strategy is ModelStrategy.BEST_HISTORICAL_UPDATED:
                 cal_path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+
+            calibration_body = "\n\n".join(
+                [
+                    format_calibration_selection_md(static_selection),
+                    format_calibration_selection_md(updated_selection),
+                    "#### Per-model ceiling rows (static csv)",
+                    format_calibration_per_model_md(
+                        csv_path=DEFAULT_CALIBRATION_STATS_CSV_PATH,
+                        station_id=station.icao,
+                        forecast=forecast,
+                        wall_lead_hours=lead_hours,
+                    ),
+                    "#### Per-model ceiling rows (updated csv)",
+                    format_calibration_per_model_md(
+                        csv_path=DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+                        station_id=station.icao,
+                        forecast=forecast,
+                        wall_lead_hours=lead_hours,
+                    ),
+                ]
+            )
+            reporter.section("Calibration", calibration_body)
 
             preview_result = analyze_event(
                 forecast,
@@ -392,80 +494,148 @@ def _run_live_one_day(
                 )
             reporter.section(
                 "Distribution",
-                format_distribution_build_markdown(preview_result.distribution_build),
+                format_distribution_md(
+                    preview_result.distribution_build,
+                    model_strategy=model_strategy.value,
+                    result=preview_result,
+                    forecast=forecast,
+                ),
             )
 
-            profiles = _load_profiles()
-            store = default_ledger_store()
-            pipeline_mode = "preview" if mode is LiveMode.PREVIEW else "trade"
-            summary = run_profiles(
-                store,
-                profiles,
-                forecast,
-                event,
-                lead_hours=lead_hours,
-                dedupe=True,
-                enforce_gate=False,
-                mode=pipeline_mode,
-            )
+            profile_result: ProfileRunResult | None = None
+            traded_profile_id: str | None = None
+            if trade_strategy is not None:
+                if mode is LiveMode.TRADE:
+                    profiles = _load_profiles()
+                    profile = _profile_for_strategy(
+                        profiles,
+                        model_strategy=model_strategy.value,
+                        trade_strategy=trade_strategy,
+                    )
+                    if profile is None:
+                        typer.echo(
+                            f"No paper profile for model_strategy={model_strategy.value!r} "
+                            f"trade_strategy={trade_strategy!r}.",
+                            err=True,
+                        )
+                    else:
+                        store = default_ledger_store()
+                        traded_profile_id = profile.id
+                        profile_result = run_profile(
+                            store,
+                            profile,
+                            forecast,
+                            event,
+                            lead_hours=lead_hours,
+                            dedupe=True,
+                            enforce_gate=False,
+                        )
+                else:
+                    analysis = analyze_event(
+                        forecast,
+                        event,
+                        strategy=trade_strategy_for_name(trade_strategy),
+                        lead_hours=lead_hours,
+                        model_strategy=model_strategy.value,
+                        station_id=station.icao,
+                        calibration_stats_path=cal_path,
+                    )
+                    profile_result = ProfileRunResult(
+                        profile_id=f"live_{trade_strategy}",
+                        action="PREVIEW",
+                        lead_hours=lead_hours,
+                        analysis=analysis,
+                    )
 
-            reporter.section(
-                "Run outcome",
-                _md_run_summary(summary),
-            )
+                if profile_result.action in (
+                    "SETTLED",
+                    "NOTHING_TO_SETTLE",
+                    "RESOLVED_NO_WINNER",
+                ):
+                    strategy_body = f"- action: `{profile_result.action}`"
+                elif profile_result.analysis is not None:
+                    strategy_body = format_strategy_analysis_md(
+                        profile_result.analysis,
+                        trade_strategy=trade_strategy,
+                    )
+                else:
+                    strategy_body = format_strategy_analysis_md(
+                        preview_result,
+                        trade_strategy=trade_strategy,
+                    )
+                reporter.section(f"Strategy ({trade_strategy})", strategy_body)
+                if profile_result.opened or profile_result.settled:
+                    trade_lines = []
+                    for t in profile_result.opened:
+                        trade_lines.append(
+                            f"- OPEN {t.bucket_label} side={t.side} entry={t.entry_price:.2f} "
+                            f"stake=${t.stake_usd:.2f} edge={t.edge_pp:.2f}pp"
+                        )
+                    for t in profile_result.settled:
+                        trade_lines.append(
+                            f"- SETTLE {t.bucket_label} side={t.side} stake=${t.stake_usd:.2f}"
+                        )
+                    reporter.section("Trades", "\n".join(trade_lines))
 
             typer.echo(f"event: {event.title} ({event.event_id})")
             end_s = event.settlement_date.isoformat() if event.settlement_date else "unknown"
             typer.echo(f"event Gamma end date (UTC day): {end_s}")
             typer.echo(
                 f"forecast: {station.city} ({station.icao}) "
-                f"date={target_date.isoformat()} lead_hours={lead_hours:.1f} -> {forecast.values_c}"
+                f"date={target_date.isoformat()} wall_lead={lead_hours:.1f}h -> {forecast.values_c}"
             )
-            typer.echo("")
-            typer.echo(_render_run_summary(summary))
-            if mode is LiveMode.TRADE:
-                typer.echo("")
-                for p in summary.profiles:
-                    state = store.read_state(p.profile_id)
+            if static_selection.row is not None:
+                typer.echo(
+                    f"calibration (static): {static_selection.row.model} "
+                    f"@ {static_selection.row.lead_hours:g}h"
+                )
+            if updated_selection.row is not None:
+                typer.echo(
+                    f"calibration (updated): {updated_selection.row.model} "
+                    f"@ {updated_selection.row.lead_hours:g}h"
+                )
+            typer.echo(
+                f"distribution ({preview_result.model_strategy}): "
+                f"mean={preview_result.distribution_mean_c:.2f}°C "
+                f"sigma={preview_result.distribution_sigma_c:.2f}°C"
+            )
+            if profile_result is not None and profile_result.analysis is not None:
+                buys = [
+                    row
+                    for row in profile_result.analysis.rows
+                    if row.action.startswith("BUY")
+                ]
+                if buys:
+                    pick = max(buys, key=lambda r: r.stake_usd or 0.0)
+                    stake = f"${pick.stake_usd:.2f}" if pick.stake_usd is not None else "—"
                     typer.echo(
-                        f"  {p.profile_id:<24} balance=${state.balance_usd:>8.2f} "
-                        f"open={len(state.open_trades):>2} settled={state.settled_count:>3} "
-                        f"realized=${state.realized_pnl_usd:>+8.2f}"
+                        f"strategy {trade_strategy}: {pick.action} {pick.label} stake={stake} "
+                        f"({profile_result.action})"
                     )
+                else:
+                    typer.echo(f"strategy {trade_strategy}: SKIP ({profile_result.action})")
+            if mode is LiveMode.TRADE and traded_profile_id is not None:
+                store = default_ledger_store()
+                state = store.read_state(traded_profile_id)
+                typer.echo(
+                    f"  {traded_profile_id}: balance=${state.balance_usd:.2f} "
+                    f"open={len(state.open_trades)}"
+                )
     finally:
         path = reporter.write()
         typer.echo(f"report written: {path}")
 
 
-def _md_run_summary(summary: RunSummary) -> str:
-    lines = [
-        f"- mode: `{summary.mode}`",
-        f"- resolved: `{summary.resolved}`",
-        f"- winning_label: `{summary.winning_label}`" if summary.winning_label else "- winning_label: `-`",
-        "",
-    ]
-    for p in summary.profiles:
-        lines.append(f"### {p.profile_id} — {p.action}")
-        if p.analysis is not None:
-            lines.append("")
-            lines.append(_md_result(p.analysis))
-        if p.opened:
-            lines.append("")
-            lines.append("opened:")
-            for t in p.opened:
-                lines.append(
-                    f"- {t.bucket_label} side={t.side} entry={t.entry_price:.2f} "
-                    f"stake=${t.stake_usd:.2f} shares={t.shares:.2f} edge={t.edge_pp:.2f}pp"
-                )
-        if p.settled:
-            lines.append("")
-            lines.append("settled:")
-            for t in p.settled:
-                lines.append(
-                    f"- {t.bucket_label} side={t.side} stake=${t.stake_usd:.2f} shares={t.shares:.2f}"
-                )
-        lines.append("")
-    return "\n".join(lines)
+def _profile_for_strategy(
+    profiles: list,
+    *,
+    model_strategy: str,
+    trade_strategy: str,
+):
+    for profile in profiles:
+        if profile.model_strategy == model_strategy and profile.trade_strategy == trade_strategy:
+            return profile
+    return None
 
 
 def _md_event(event: PolymarketEvent) -> str:
@@ -487,63 +657,6 @@ def _md_event(event: PolymarketEvent) -> str:
             f"{_format_optional(bucket.yes_ask, '.4f')} | "
             f"{_format_optional(bucket.liquidity_usd, '.2f')} | "
             f"{_format_optional(bucket.spread, '.4f')} |"
-        )
-    return "\n".join(lines)
-
-
-def _md_forecast(
-    station: Station,
-    target_date: date,
-    daily: DailyMaxForecast,
-    forecast: ForecastValues,
-) -> str:
-    return "\n".join(
-        [
-            f"- station: {station.city} ({station.icao})",
-            f"- coordinates: lat={station.latitude} lon={station.longitude} tz={station.timezone}",
-            f"- target_date: `{target_date.isoformat()}`",
-            f"- models: {', '.join(daily.models) if daily.models else '-'}",
-            f"- raw values_c: {daily.values_c}",
-            f"- normalized ForecastValues.values_c: {forecast.values_c}",
-        ]
-    )
-
-
-def _md_result(result: AnalysisResult) -> str:
-    lines: list[str] = []
-    lines.append(f"- model_strategy: `{result.model_strategy}`")
-    if result.selected_model is not None:
-        lines.append(f"- selected_model: `{result.selected_model}`")
-    if result.calibration_sigma_source is not None:
-        lines.append(f"- sigma_source: `{result.calibration_sigma_source}`")
-    if result.fallback_reason is not None:
-        lines.append(f"- fallback_reason: `{result.fallback_reason}`")
-    if result.calibration_row is not None:
-        row = result.calibration_row
-        lines.append(
-            "- calibration_row: "
-            f"lead_hours={row.lead_hours:g} n_samples={row.n_samples} "
-            f"bias_c={row.bias_c:.4f} mae_c={row.mae_c:.4f} "
-            f"rmse_c={row.rmse_c:.4f} error_std_c={row.error_std_c:.4f}"
-        )
-    lines.append(
-        f"- distribution: mean={result.distribution_mean_c:.2f}°C "
-        f"sigma={result.distribution_sigma_c:.2f}°C"
-    )
-    lines.append("")
-    lines.append("| bucket | prob | ask | edge_pp | action | confidence | reason | warnings |")
-    lines.append("| --- | ---: | ---: | ---: | --- | --- | --- | --- |")
-    for row in result.rows:
-        warns = ", ".join(row.warnings) if row.warnings else ""
-        lines.append(
-            f"| {row.label} | "
-            f"{row.probability:.3f} | "
-            f"{_format_optional(row.yes_ask, '.4f')} | "
-            f"{_format_optional(row.edge_yes_pp, '.2f')} | "
-            f"{row.action} | "
-            f"{row.confidence} | "
-            f"{row.reason} | "
-            f"{warns} |"
         )
     return "\n".join(lines)
 

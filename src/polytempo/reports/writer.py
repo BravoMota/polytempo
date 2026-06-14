@@ -191,6 +191,53 @@ def _summarize_gamma_events_list(payload: Any) -> str:
     return "\n".join(lines)
 
 
+def _is_open_meteo_forecast(url: str) -> bool:
+    return "api.open-meteo.com" in url and "/forecast" in url
+
+
+def _is_open_meteo_meta(url: str) -> bool:
+    return "openmeteo.s3.amazonaws.com" in url and url.rstrip("/").endswith("meta.json")
+
+
+def _summarize_open_meteo_forecast(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "not a JSON object"
+    daily = payload.get("daily")
+    if not isinstance(daily, dict):
+        return "missing daily block"
+    times = daily.get("time") or []
+    lines = [
+        f"returned lat/lon: {payload.get('latitude')}, {payload.get('longitude')}",
+        f"daily dates: {', '.join(str(t) for t in times)}",
+    ]
+    for key, values in sorted(daily.items()):
+        if key == "time" or not key.startswith("temperature_2m_max"):
+            continue
+        model = key.removeprefix("temperature_2m_max_") or "(default)"
+        sample = values[0] if isinstance(values, list) and values else "—"
+        lines.append(f"- `{model}`: {sample}°C")
+    return "\n".join(lines)
+
+
+def _summarize_open_meteo_meta(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "not a JSON object"
+    keys = (
+        "last_run_initialisation_time",
+        "last_run_availability_time",
+        "last_run_modification_time",
+        "update_interval_seconds",
+        "temporal_resolution_seconds",
+    )
+    lines: list[str] = []
+    for key in keys:
+        if key in payload:
+            lines.append(f"- {key}: `{payload[key]}`")
+    if "data_end_time" in payload:
+        lines.append(f"- data_end_time: `{payload['data_end_time']}`")
+    return "\n".join(lines) if lines else "empty meta object"
+
+
 def _format_response_body(call: HttpCall) -> list[str]:
     if call.response_json is None:
         return []
@@ -198,6 +245,16 @@ def _format_response_body(call: HttpCall) -> list[str]:
         lines = ["- response (summary):"]
         lines.append("")
         lines.append(_summarize_gamma_events_list(call.response_json))
+        return lines
+    if _is_open_meteo_forecast(call.url):
+        lines = ["- response (summary):"]
+        lines.append("")
+        lines.append(_summarize_open_meteo_forecast(call.response_json))
+        return lines
+    if _is_open_meteo_meta(call.url):
+        lines = ["- response (summary):"]
+        lines.append("")
+        lines.append(_summarize_open_meteo_meta(call.response_json))
         return lines
     lines = ["- response (JSON):", ""]
     lines.append("```json")

@@ -580,6 +580,76 @@ def test_analyze_event_best_historical_uses_init_lead_hours(tmp_path: Path) -> N
     assert result.calibration_row.lead_hours == 28.0
 
 
+def test_analyze_event_best_historical_excludes_models_without_init_meta(
+    tmp_path: Path,
+) -> None:
+    """Models without run_init must not win via wall-clock lead (unfair low σ)."""
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,24,40,0.0,1.0,1.0,1.0",
+            "EGLC,beta,12,40,0.0,1.0,1.0,0.8",
+        ],
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 14),
+        values_c=[23.0, 25.0],
+        models=["alpha", "beta"],
+        init_lead_hours=[24.0, 11.0],
+        model_run_init_utc=["2026-06-14T00:00:00Z", ""],
+    )
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=11.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_BEST_HISTORICAL
+    assert result.selected_model == "alpha"
+    assert result.calibration_row is not None
+    assert result.calibration_row.lead_hours == 24.0
+
+
+def test_analyze_event_best_historical_no_models_with_init_meta_falls_back(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "calibration_stats.csv"
+    _write_calibration_csv(
+        csv_path,
+        ["EGLC,beta,12,40,0.0,1.0,1.0,0.8"],
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 14),
+        values_c=[25.0],
+        models=["beta"],
+        init_lead_hours=[11.0],
+        model_run_init_utc=[""],
+    )
+
+    result = analyze_event(
+        forecast,
+        _event(["24°C"]),
+        lead_hours=11.0,
+        model_strategy=MODEL_STRATEGY_BEST_HISTORICAL,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
+    assert result.fallback_reason == "no_models_with_init_meta"
+
+
 def test_analyze_event_best_historical_init_lead_length_mismatch_falls_back(
     tmp_path: Path,
 ) -> None:

@@ -84,6 +84,14 @@ Canonical for forecast records, error joins, and `calibration_stats*.csv`:
 - **Entry gates / ledger:** wall-clock lead from `now` to end of target day (`lead_hours_to_end_of_target_day`).
 - **`best_historical` CSV lookup:** per-model init lead from rolling `meta.json` (`compute_lead_hours(run_init_utc, target_date)`), carried on `ForecastValues.init_lead_hours`.
 
+### `best_historical` and models without rolling meta
+
+Open-Meteo publishes rolling `data/{model}/static/meta.json` for some models only (e.g. UKMO deterministic, ECMWF). Others (`icon_eu`, `gfs_seamless`, seamless blends) return **404** — there is no auditable `run_init_utc`.
+
+**Decision (Option 1):** models without verified rolling meta are **excluded from `best_historical` competition**. They are not assigned wall-clock lead for calibration lookup (that would understate lead vs init-based peers and bias selection toward artificially low σ buckets). Forecast values from those models may still appear in the live bundle and in `ensemble_spread`; only the calibrated single-model picker skips them.
+
+Eligibility signal: non-empty `ForecastValues.model_run_init_utc` for that model. If no live model has meta, `best_historical` falls back to `ensemble_spread` with reason `no_models_with_init_meta`.
+
 Tmax is aggregated over the **station-local** calendar day by Open-Meteo; the lead anchor is UTC midnight on both sides.
 
 `polytempo live` still uses wall-clock lead only (not wired to init metadata).

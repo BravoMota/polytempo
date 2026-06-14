@@ -128,11 +128,8 @@ def daily_to_forecast_values(
             init_leads.append(bundle.init_lead_hours[key])
             run_inits.append(format_run_time_utc(bundle.meta_by_model[model].run_init_utc))
             continue
-        wall_lead = bundle.wall_clock_lead_hours.get(
-            key,
-            lead_hours_to_end_of_target_day(target_date, now=bundle.fetched_at_utc),
-        )
-        init_leads.append(wall_lead)
+        # Placeholder init lead; empty run_init marks model ineligible for best_historical.
+        init_leads.append(0.0)
         run_inits.append("")
     return ForecastValues(
         source=source,
@@ -232,7 +229,7 @@ def fetch_rolling_meta_batch(
                 if skip_missing and exc.response.status_code == 404:
                     logger.warning(
                         "rolling meta.json missing for model %s (404); "
-                        "init lead will fall back to wall-clock",
+                        "model excluded from best_historical calibration lookup",
                         model,
                     )
                     continue

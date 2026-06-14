@@ -291,6 +291,25 @@ def test_select_best_model_uses_per_model_init_lead_hours() -> None:
     assert init_winner[0].lead_hours == 28.0
 
 
+def test_select_best_model_excludes_models_missing_from_init_lead_map() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=1.0),
+        _row(model="beta", lead_hours=12.0, error_std_c=0.8),
+    ]
+
+    chosen = select_best_model(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta"],
+        current_lead_hours=11.0,
+        init_lead_hours_by_model={"alpha": 24.0},
+    )
+
+    assert chosen is not None
+    assert chosen[0].model == "alpha"
+    assert chosen[0].lead_hours == 24.0
+
+
 def test_read_calibration_stats_csv_smoke_real_file() -> None:
     # Sanity: the real generated CSV (if present) loads without error.
     from polytempo.weather.calibration_stats_csv import DEFAULT_CALIBRATION_STATS_CSV_PATH

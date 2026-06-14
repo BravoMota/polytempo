@@ -155,7 +155,5 @@ def test_fetch_open_meteo_live_bundle_skips_missing_meta(monkeypatch: pytest.Mon
     assert forecast.init_lead_hours[ukmo_index] == bundle.init_lead_hours[
         ("ukmo_uk_deterministic_2km", target)
     ]
-    assert forecast.init_lead_hours[icon_index] == bundle.wall_clock_lead_hours[
-        ("icon_eu", target)
-    ]
+    assert forecast.init_lead_hours[icon_index] == 0.0
     assert forecast.model_run_init_utc[icon_index] == ""

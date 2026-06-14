@@ -27,6 +27,7 @@ from polytempo.weather.calibration_stats_csv import (
     CalibrationStatRow,
     read_calibration_stats_csv,
     select_best_model,
+    verified_init_lead_hours_by_model,
 )
 from polytempo.weather.schema import ForecastValues
 
@@ -197,9 +198,11 @@ def _resolve_strategy(
     if forecast.init_lead_hours is not None:
         if len(forecast.init_lead_hours) != len(forecast.models):
             return _ensemble_fallback("forecast_init_lead_length_mismatch")
-        init_lead_hours_by_model = dict(
-            zip(forecast.models, forecast.init_lead_hours, strict=True)
-        )
+        init_lead_hours_by_model = verified_init_lead_hours_by_model(forecast)
+        if init_lead_hours_by_model is None:
+            return _ensemble_fallback("forecast_init_lead_length_mismatch")
+        if not init_lead_hours_by_model:
+            return _ensemble_fallback("no_models_with_init_meta")
 
     rows = read_calibration_stats_csv(calibration_stats_path)
     if not rows:
