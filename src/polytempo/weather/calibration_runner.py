@@ -211,9 +211,24 @@ def _join_diagnostics(
     }
 
 
+def _snap_observations_to_integer_c(
+    observations: dict[tuple[str, date], float],
+) -> dict[tuple[str, date], float]:
+    """Recover the true whole-°C observation from Weather.com's °F round-trip.
+
+    WU reports whole °F (its source is whole-°C METAR rounded to integer °F);
+    converting back to °C fabricates a deterministic ±0.1-0.2°C sawtooth
+    (e.g. 17°C -> 63°F -> 17.22°C). Markets resolve on whole °C, so snapping to
+    the nearest integer recovers the truth (the round trip is lossless) and
+    de-noises bias_c / error_std_c. Applied only on the updated-CSV recompute
+    path; the frozen Calibrator_V1 calibration_stats.csv is never regenerated.
+    """
+    return {key: float(round(value)) for key, value in observations.items()}
+
+
 def recompute_stats(conn, output_path: Path) -> tuple[int, int, dict[str, object]]:
     """Join forecasts with observations, aggregate, and write calibration CSV."""
-    observations = load_observations_map(conn)
+    observations = _snap_observations_to_integer_c(load_observations_map(conn))
     forecasts = load_forecast_records(conn)
     joined = join_with_observations(forecasts, observations)
     diag = _join_diagnostics(forecasts, observations, joined)

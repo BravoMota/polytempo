@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the nightly calibration daemon (best_historical_updated / es).
+
+  WHY THIS EXISTS: run_daily_calibration.py was started by hand during the
+  2026-06-09 bootstrap and never came back after the Mac restarted, so the
+  updated calibration CSV froze at 06-08 (collectors kept running; only the
+  aggregation job died). The collectors survive restarts; this job did not,
+  because it was never supervised. This agent fixes that.
+
+  HOW IT WORKS: the script run WITHOUT --once is a long-lived daemon that wakes
+  every 60s and fires one recompute at the 02:00 UTC anchor (see
+  config.schedule_anchor_time_utc). launchd does not need to schedule the time —
+  it only needs to keep the process alive. KeepAlive restarts it if it crashes;
+  RunAtLoad starts it at login/boot.
+
+  BEFORE INSTALLING, edit the three __PLACEHOLDER__ values below to match the Mac:
+    __REPO__   absolute path to the polytempo checkout (e.g. /Users/joao/polytempo)
+    __PYTHON__ absolute path to the venv python (e.g. /Users/joao/polytempo/.venv/bin/python)
+    __DSN__    POLYTEMPO_DATABASE_URL — launchd agents do NOT inherit your shell
+               env, so it must be set here. Current value:
+               postgresql://jnlow@100.76.158.32:5432/polytempo
+               NOTE: 100.76.158.32 is the Tailscale IP as of 2026-06-17; if the
+               Mac re-shares it changes — check `tailscale status`.
+  See README.md in this directory for full install / verify steps.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.calibration</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>__REPO__/scripts/run_daily_calibration.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>POLYTEMPO_DATABASE_URL</key>
+        <string>__DSN__</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/calibration.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/calibration.err.log</string>
+</dict>
+</plist>
