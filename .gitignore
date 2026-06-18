@@ -20,6 +20,7 @@ env/
 # Local env files
 .env
 .env.*
+!.env.example
 
 # Local generated data (track calibration stats used by `polytempo live --model-strategy best_historical`)
 data/*
