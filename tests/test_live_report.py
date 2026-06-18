@@ -5,8 +5,11 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from polytempo.analysis import AnalysisResult, AnalysisRow
+from polytempo.model.distribution import DistributionBuildInfo
 from polytempo.reports.live_report import (
     format_calibration_selection_md,
+    format_distribution_md,
     format_open_meteo_md,
     resolve_calibration_selection,
 )
@@ -153,3 +156,52 @@ def test_format_open_meteo_md_includes_init_and_wall_leads() -> None:
     assert "36.0" in md
     assert "48.0" in md
     assert "Rolling metadata" in md
+
+
+def test_format_distribution_md_includes_signed_edge_table() -> None:
+    result = AnalysisResult(
+        distribution_mean_c=22.0,
+        distribution_sigma_c=1.0,
+        distribution_build=DistributionBuildInfo(
+            values_used_c=[22.0],
+            default_sigma_c=1.0,
+            lead_hours=None,
+            lead_hours_sigma_floor_c=None,
+            ensemble_stdev_c=None,
+            mean_c=22.0,
+            sigma_c=1.0,
+            method="calibrated_single_model",
+        ),
+        rows=[
+            AnalysisRow(
+                label="21°C",
+                probability=0.35,
+                yes_ask=0.20,
+                edge_yes_pp=15.0,
+                action="SKIP",
+                reason="",
+                confidence="",
+                warnings=[],
+            ),
+            AnalysisRow(
+                label="22°C",
+                probability=0.10,
+                yes_ask=0.33,
+                edge_yes_pp=-23.0,
+                action="SKIP",
+                reason="",
+                confidence="",
+                warnings=[],
+            ),
+        ],
+        model_strategy="best_historical",
+    )
+    md = format_distribution_md(
+        result.distribution_build,
+        model_strategy="best_historical",
+        result=result,
+    )
+    assert "| bucket | yes_ask | dist_prob | edge |" in md
+    assert "0.3500" in md
+    assert "+0.1500" in md
+    assert "-0.2300" in md

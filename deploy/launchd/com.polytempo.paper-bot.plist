@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.paper-bot</string>
+
+    <key>UserName</key>
+    <string>jnlow</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
+        <string>scripts/run_paper_bot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jnlow/projects/PolyTempo</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/paper-bot.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/paper-bot.err.log</string>
+</dict>
+</plist>

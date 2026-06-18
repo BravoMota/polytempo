@@ -1,0 +1,6 @@
+# Allow jnlow to control PolyTempo LaunchDaemons without a password.
+# Install on mac0:
+#   sudo visudo -f /etc/sudoers.d/polytempo
+# Paste this file's contents (adjust paths if POLYTEMPO_REPO differs).
+
+jnlow ALL=(root) NOPASSWD: /Users/jnlow/projects/PolyTempo/deploy/bin/polytempo-service *

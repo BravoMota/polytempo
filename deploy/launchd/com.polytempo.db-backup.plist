@@ -2,14 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  LaunchDaemon: nightly calibration (--once) at 01:00 mac0 local time.
-  Env from /Users/jnlow/projects/PolyTempo/.env via run-with-env.sh.
+  LaunchDaemon: database backups (--once) at 02:00 mac0 local time.
+  Requires pg_dump on PATH (run-with-env.sh prepends Homebrew prefixes).
   Full install: docs/mac0-setup.md
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.polytempo.calibration</string>
+    <string>com.polytempo.db-backup</string>
 
     <key>UserName</key>
     <string>jnlow</string>
@@ -19,7 +19,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
-        <string>scripts/run_daily_calibration.py</string>
+        <string>scripts/backup_databases.py</string>
         <string>--once</string>
     </array>
 
@@ -29,14 +29,14 @@
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
-        <integer>1</integer>
+        <integer>2</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>
 
     <key>StandardOutPath</key>
-    <string>/Users/jnlow/projects/PolyTempo/logs/calibration.out.log</string>
+    <string>/Users/jnlow/projects/PolyTempo/logs/db-backup.out.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jnlow/projects/PolyTempo/logs/calibration.err.log</string>
+    <string>/Users/jnlow/projects/PolyTempo/logs/db-backup.err.log</string>
 </dict>
 </plist>

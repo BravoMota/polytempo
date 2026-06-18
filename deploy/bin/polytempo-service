@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# Control PolyTempo LaunchDaemons on mac0 (typically via sudo).
+set -euo pipefail
+
+DOMAIN="system"
+
+declare -A LONG_LIVED=(
+  [collector]=com.polytempo.collector
+  [paper-bot]=com.polytempo.paper-bot
+)
+
+declare -A CALENDAR=(
+  [calibration]=com.polytempo.calibration
+  [db-backup]=com.polytempo.db-backup
+)
+
+ALL_JOBS=(collector paper-bot calibration db-backup)
+
+usage() {
+  cat <<EOF
+Usage: polytempo-service <command> [job]
+
+Commands:
+  status [job|all]              launchctl print for one or all jobs
+  restart collector|paper-bot|all   kickstart -k long-lived jobs
+  run calibration|db-backup     kickstart calendar jobs (--once via plist)
+
+Jobs: ${ALL_JOBS[*]}
+EOF
+}
+
+resolve_label() {
+  local job="$1"
+  if [[ -n "${LONG_LIVED[$job]+x}" ]]; then
+    echo "${LONG_LIVED[$job]}"
+  elif [[ -n "${CALENDAR[$job]+x}" ]]; then
+    echo "${CALENDAR[$job]}"
+  else
+    echo "Unknown job: $job" >&2
+    exit 1
+  fi
+}
+
+cmd_status() {
+  local target="${1:-all}"
+  if [[ "$target" == "all" ]]; then
+    for job in "${ALL_JOBS[@]}"; do
+      echo "=== $job ==="
+      cmd_status "$job"
+      echo
+    done
+    return
+  fi
+  local label
+  label="$(resolve_label "$target")"
+  launchctl print "${DOMAIN}/${label}"
+}
+
+cmd_restart() {
+  local target="${1:-}"
+  if [[ -z "$target" ]]; then
+    usage
+    exit 1
+  fi
+  if [[ "$target" == "all" ]]; then
+    for job in collector paper-bot; do
+      cmd_restart "$job"
+    done
+    return
+  fi
+  if [[ -z "${LONG_LIVED[$target]+x}" ]]; then
+    echo "restart applies only to long-lived jobs: collector, paper-bot, all" >&2
+    exit 1
+  fi
+  local label="${LONG_LIVED[$target]}"
+  launchctl kickstart -k "${DOMAIN}/${label}"
+  echo "Restarted ${DOMAIN}/${label}"
+}
+
+cmd_run() {
+  local target="${1:-}"
+  if [[ -z "$target" ]]; then
+    usage
+    exit 1
+  fi
+  if [[ -z "${CALENDAR[$target]+x}" ]]; then
+    echo "run applies only to calendar jobs: calibration, db-backup" >&2
+    exit 1
+  fi
+  local label="${CALENDAR[$target]}"
+  launchctl kickstart "${DOMAIN}/${label}"
+  echo "Triggered ${DOMAIN}/${label}"
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    status) cmd_status "${1:-all}" ;;
+    restart) cmd_restart "${1:-}" ;;
+    run) cmd_run "${1:-}" ;;
+    ""|-h|--help) usage ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

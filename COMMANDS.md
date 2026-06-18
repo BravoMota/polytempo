@@ -407,6 +407,30 @@ psql "$POLYTEMPO_DATABASE_URL" -c "SELECT COUNT(*) FROM open_meteo_fetch_cycles;
 
 To debug open_meteo only, temporarily set `wunderground.enabled: false` in YAML.
 
+## Production supervision (mac0)
+
+Four jobs on mac0 run as user `jnlow` from `/Users/jnlow/projects/PolyTempo`, supervised by LaunchDaemons. Full runbook: [docs/mac0-setup.md](docs/mac0-setup.md).
+
+| Label | Schedule |
+| --- | --- |
+| `com.polytempo.collector` | long-lived (internal UTC slots) |
+| `com.polytempo.paper-bot` | long-lived |
+| `com.polytempo.calibration` | **01:00 mac0 local** (`--once`) |
+| `com.polytempo.db-backup` | **02:00 mac0 local** (`--once`) |
+
+```bash
+# one-time install (on mac0, as admin):
+sudo deploy/bin/install-launchd.sh
+
+# day-to-day (as jnlow, optional NOPASSWD sudo — see deploy/sudoers.d/polytempo.example):
+sudo deploy/bin/polytempo-service status all
+sudo deploy/bin/polytempo-service restart collector
+sudo deploy/bin/polytempo-service run calibration
+sudo deploy/bin/polytempo-service run db-backup
+```
+
+Smoke before install uses `deploy/bin/run-with-env.sh` (sources `.env`, prepends Homebrew to PATH for `pg_dump`).
+
 ## Automated calibration (updated store)
 
 Nightly automation for `best_historical_updated`. Does **not** modify frozen `scripts/Calibrator_V1/` or `data/weather/statistical/calibration_stats.csv`.
@@ -414,8 +438,8 @@ Nightly automation for `best_historical_updated`. Does **not** modify frozen `sc
 | Script | When | Purpose |
 | --- | --- | --- |
 | `scripts/bootstrap_calibration_store.py` | Once on prod | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_*` Postgres tables; write `calibration_stats_updated.csv` |
-| `scripts/run_daily_calibration.py` | Cron **02:00 UTC** | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv` |
-| `scripts/backup_databases.py` | Daemon **03:00 UTC** (`--once` for manual) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md)) |
+| `scripts/run_daily_calibration.py` | mac0 **01:00 local** via launchd (`--once`) | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv` |
+| `scripts/backup_databases.py` | mac0 **02:00 local** via launchd (`--once`) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md)) |
 
 Config: `config/calibration.yaml` (stations from `config/weather_collectors.yaml`, models + cadence baked in — no `capabilities_csv` at runtime).
 
