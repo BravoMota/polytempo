@@ -24,6 +24,30 @@ class EntryGate:
 
 
 @dataclass(frozen=True)
+class ExitPolicy:
+    """Active-sell bracket evaluated against a position's live mark-to-market.
+
+    The mark is the sellable price (YES: ``yes_bid``; NO: ``1 - yes_ask``). A
+    position closes when ``mark / entry_price`` reaches ``take_profit_ratio``
+    (take profit) or falls to ``stop_loss_ratio`` (stop loss). ``None`` exit
+    policy means hold to resolution (the default for all legacy profiles).
+    """
+
+    take_profit_ratio: float = 1.5
+    stop_loss_ratio: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not 0.0 < self.stop_loss_ratio < 1.0:
+            raise ValueError(
+                f"stop_loss_ratio must be in (0, 1), got {self.stop_loss_ratio}"
+            )
+        if self.take_profit_ratio <= 1.0:
+            raise ValueError(
+                f"take_profit_ratio must be > 1, got {self.take_profit_ratio}"
+            )
+
+
+@dataclass(frozen=True)
 class TradingProfile:
     """One global paper-trading profile (model + action + entry timing)."""
 
@@ -35,6 +59,7 @@ class TradingProfile:
     city: str = "london"
     target_day: str = "tomorrow"
     enabled: bool = True
+    exit_policy: ExitPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.id or "/" in self.id or "\\" in self.id:

@@ -6,8 +6,16 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from polytempo.markets.polymarket import fetch_event, is_event_resolved, winning_label_from_event
+from polytempo.markets.polymarket import (
+    PolymarketBucket,
+    PolymarketEvent,
+    fetch_event,
+    hydrate_prices,
+    is_event_resolved,
+    winning_label_from_event,
+)
 from polytempo.model.lead_time import (
     gate_target_utc,
     lead_hours_at_target,
@@ -16,7 +24,7 @@ from polytempo.model.lead_time import (
     lead_hours_to_end_of_target_day,
 )
 from polytempo.paper.bot_log import format_profile_line, format_preview_report, format_tick_box, PreviewDateSection
-from polytempo.paper.ledger import LedgerStore, PostgresLedgerStore
+from polytempo.paper.ledger import LedgerStore, OpenTrade, PostgresLedgerStore
 from polytempo.paper.market_context import (
     fetch_market_context,
     preview_settlement_dates,
@@ -32,6 +40,15 @@ logger = logging.getLogger(__name__)
 SETTLE_SWEEP_INTERVAL = timedelta(minutes=15)
 GATE_RETRY_INTERVAL = timedelta(seconds=30)
 PREVIEW_DAYS = 3
+
+# Active-sell exit monitoring. Resolution-day price convergence is fast (tens of
+# cents in under an hour around the afternoon peak), so when an active-sell
+# position is open on an event settling today we poll well below the entry-gate
+# lead floor at this cadence instead of the 15-minute settle sweep.
+ACTIVE_EXIT_POLL_INTERVAL = timedelta(minutes=3)
+LONDON_TZ = ZoneInfo("Europe/London")
+# Local hour from which the peak window opens (covers ~12:00-14:00 peak + settle).
+ACTIVE_EXIT_WINDOW_START_HOUR = 10
 
 
 @dataclass
@@ -51,6 +68,15 @@ class WorkUnit:
 class TickResult:
     box: str
     gate_retry_at: datetime | None = None
+    active_exit_poll_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class ActiveExitResult:
+    """Outcome of one active-sell sweep."""
+
+    closed: int = 0
+    fast_poll: bool = False
 
 
 def reload_profiles(config_path: Path) -> list[TradingProfile]:
@@ -150,6 +176,87 @@ def settle_resolved_open_events(store: LedgerStore, profiles: list[TradingProfil
     return total
 
 
+def _mark_to_market(trade: OpenTrade, bucket: PolymarketBucket) -> float | None:
+    """Sellable price for an open position given the live book, or None if unmarkable."""
+    if trade.side == "NO":
+        return None if bucket.yes_ask is None else 1.0 - bucket.yes_ask
+    return bucket.yes_bid
+
+
+def _bucket_by_label(event: PolymarketEvent, label: str) -> PolymarketBucket | None:
+    for bucket in event.buckets:
+        if bucket.label == label:
+            return bucket
+    return None
+
+
+def _in_active_exit_window(now: datetime, settlement_date: date | None) -> bool:
+    """True when ``now`` is on the event's resolution day (London local) in the peak window."""
+    if settlement_date is None:
+        return False
+    local = now.astimezone(LONDON_TZ)
+    return local.date() == settlement_date and local.hour >= ACTIVE_EXIT_WINDOW_START_HOUR
+
+
+def _fetch_live_event(event_id: str) -> PolymarketEvent | None:
+    try:
+        return hydrate_prices(fetch_event(event_id))
+    except Exception:
+        logger.exception("active-exit fetch failed for %s", event_id)
+        return None
+
+
+def sweep_active_exits(
+    store: LedgerStore,
+    profiles: list[TradingProfile],
+    *,
+    now: datetime | None = None,
+) -> ActiveExitResult:
+    """Mark active-sell positions to the live book and close any that hit the bracket.
+
+    Acts only on profiles with an ``exit_policy``; closes a position when its live
+    mark / entry reaches ``take_profit_ratio`` (TP) or falls to ``stop_loss_ratio``
+    (SL). Reports ``fast_poll`` when an active-sell position is still open on an
+    event resolving today within the peak window, so the runner polls fast.
+    """
+    now = now if now is not None else datetime.now(timezone.utc)
+    active = [p for p in profiles if p.exit_policy is not None]
+    if not active:
+        return ActiveExitResult()
+
+    events: dict[str, PolymarketEvent | None] = {}
+    closed = 0
+    fast_poll = False
+    for profile in active:
+        policy = profile.exit_policy
+        assert policy is not None  # narrowed by the filter above
+        for trade in store.read_state(profile.id).open_trades:
+            eid = trade.event_id
+            if eid not in events:
+                events[eid] = _fetch_live_event(eid)
+            event = events[eid]
+            if event is None or is_event_resolved(event):
+                continue
+            if _in_active_exit_window(now, event.settlement_date):
+                fast_poll = True
+            bucket = _bucket_by_label(event, trade.bucket_label)
+            if bucket is None or trade.entry_price in (None, 0):
+                continue
+            mark = _mark_to_market(trade, bucket)
+            if mark is None:
+                continue
+            ratio = mark / trade.entry_price
+            if ratio >= policy.take_profit_ratio:
+                reason = "TP"
+            elif ratio <= policy.stop_loss_ratio:
+                reason = "SL"
+            else:
+                continue
+            if store.close_position(profile.id, trade.trade_id, mark, reason=reason):
+                closed += 1
+    return ActiveExitResult(closed=closed, fast_poll=fast_poll)
+
+
 def run_preview(
     profiles: list[TradingProfile],
     *,
@@ -235,8 +342,11 @@ def run_tick(
     """One bot iteration: settle, then attempt opens for gated profiles."""
     now = datetime.now(timezone.utc)
     settle_count = settle_resolved_open_events(store, profiles)
+    exit_result = sweep_active_exits(store, profiles, now=now)
 
     profile_lines: list[str] = []
+    if exit_result.closed:
+        profile_lines.append(f"active-sell: closed {exit_result.closed} position(s)")
     no_event_dates: list[date] = []
     gate_retry_at: datetime | None = None
     units = work_units_for_profiles(profiles, now=now)
@@ -328,10 +438,18 @@ def run_tick(
             {
                 "ts": ts,
                 "settle_count": settle_count,
+                "exit_close_count": exit_result.closed,
                 "profile_count": len(profiles),
             },
             ts,
         )
         conn.commit()
 
-    return TickResult(box=box, gate_retry_at=gate_retry_at)
+    active_exit_poll_at = (
+        now + ACTIVE_EXIT_POLL_INTERVAL if exit_result.fast_poll else None
+    )
+    return TickResult(
+        box=box,
+        gate_retry_at=gate_retry_at,
+        active_exit_poll_at=active_exit_poll_at,
+    )

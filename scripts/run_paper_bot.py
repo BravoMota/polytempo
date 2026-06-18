@@ -121,6 +121,16 @@ def main() -> int:
                 "gate fetch failed at entry window; retrying at %s",
                 tick.gate_retry_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
+        if (
+            tick is not None
+            and tick.active_exit_poll_at is not None
+            and tick.active_exit_poll_at > now
+        ):
+            wake_at = min(wake_at, tick.active_exit_poll_at)
+            logger.info(
+                "active-sell positions open on resolution day; polling at %s",
+                tick.active_exit_poll_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
         logger.info(
             "sleeping until %s (%d profiles active)",
             wake_at.strftime("%Y-%m-%dT%H:%M:%SZ"),

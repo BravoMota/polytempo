@@ -98,9 +98,8 @@ def test_buy_no_entry_price(store: PostgresLedgerStore) -> None:
     assert opened[0].entry_price == pytest.approx(0.70)
 
 
-def test_append_close_not_implemented(store: PostgresLedgerStore) -> None:
-    with pytest.raises(NotImplementedError):
-        store.append_close(PROFILE, "t1")
+def test_close_position_unknown_trade_returns_none(store: PostgresLedgerStore) -> None:
+    assert store.close_position(PROFILE, "missing", 0.5, reason="TP") is None
 
 
 def _row(

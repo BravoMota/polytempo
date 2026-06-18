@@ -55,3 +55,26 @@ trade_strategies:
 
 # Profile ids generated as: {bh|bhu|es}_{trade}_{leadN}
 # e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, es_mid_band_lead24
+
+# Active-sell experiment (Phase D). The TP/SL exit bracket is an orthogonal
+# layer bolted onto existing entry strategies: each combo below becomes a
+# separate $1000 wallet with id {base}_xsell (e.g. bh_max_edge_lead42_xsell)
+# that sells early on the bracket instead of holding to resolution, and is
+# A/B-compared against its hold-to-settle twin (bh_max_edge_lead42).
+# Goal: find which entry strategy x model consistently captures +20-50%
+# intraday on resolution day without waiting for settlement.
+xsell_wallets:
+  exit_policy:
+    take_profit_ratio: 1.5   # sell when live mark >= 1.5x entry (+50%)
+    stop_loss_ratio: 0.5     # sell when live mark <= 0.5x entry (-50%)
+  models:
+    - best_historical
+    - best_historical_updated
+  trade_strategies:
+    - max_edge
+    - dist_arb
+    - edge_band
+    - topk_yes
+  lead_gates:
+    - lead42
+    - lead48

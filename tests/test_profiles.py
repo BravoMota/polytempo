@@ -53,8 +53,12 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 14 trade strategies × 3 model strategies
-    assert len(profiles) == 378
+    # 9 lead gates × 14 trade strategies × 3 model strategies hold-to-settle,
+    # plus the active-sell experiment wallets (exit_policy set).
+    hold = [p for p in profiles if p.exit_policy is None]
+    xsell = [p for p in profiles if p.exit_policy is not None]
+    assert len(hold) == 378
+    assert len(xsell) == 16
 
 
 def test_config_trade_strategies_are_registered() -> None:

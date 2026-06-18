@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from polytempo.analysis import MODEL_STRATEGIES
-from polytempo.profiles.models import EntryGate, TradingProfile
+from polytempo.profiles.models import EntryGate, ExitPolicy, TradingProfile
 from polytempo.profiles.registry import known_trade_strategies
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
@@ -97,6 +97,64 @@ def generate_all_twelve_profiles(
     return profiles
 
 
+def generate_xsell_profiles(
+    spec: dict | None,
+    *,
+    lead_gates: dict[str, dict[str, float]],
+    calibration_stats_path: Path = DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    updated_calibration_stats_path: Path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+    city: str = "london",
+    target_day: str = "tomorrow",
+) -> list[TradingProfile]:
+    """Expand the ``xsell_wallets`` block into active-sell profile variants.
+
+    Each variant duplicates an existing ``{model} x {trade} x {gate}`` combo with
+    an id suffixed ``_xsell`` and an attached ``ExitPolicy``, so it A/B's against
+    its hold-to-settle twin.
+    """
+    if not spec:
+        return []
+    policy_raw = spec.get("exit_policy") or {}
+    exit_policy = ExitPolicy(
+        take_profit_ratio=float(policy_raw.get("take_profit_ratio", 1.5)),
+        stop_loss_ratio=float(policy_raw.get("stop_loss_ratio", 0.5)),
+    )
+    models = list(spec.get("models") or [])
+    trades = list(spec.get("trade_strategies") or [])
+    gate_keys = list(spec.get("lead_gates") or [])
+    _validate_trade_strategy_names(trades)
+
+    profiles: list[TradingProfile] = []
+    for model in models:
+        for trade in trades:
+            for lead_key in gate_keys:
+                gate = lead_gates.get(lead_key)
+                if gate is None:
+                    raise ValueError(
+                        f"xsell_wallets references unknown lead gate {lead_key!r}"
+                    )
+                profiles.append(
+                    TradingProfile(
+                        id=f"{_profile_id(model, trade, lead_key)}_xsell",
+                        model_strategy=model,
+                        trade_strategy=trade,
+                        entry_gate=EntryGate(
+                            target_lead_hours=_target_lead_hours_from_gate(gate),
+                            tolerance_seconds=float(gate.get("tolerance_seconds", 90.0)),
+                        ),
+                        calibration_stats_path=_calibration_path_for_strategy(
+                            model,
+                            static_path=calibration_stats_path,
+                            updated_path=updated_calibration_stats_path,
+                        ),
+                        city=city,
+                        target_day=target_day,
+                        exit_policy=exit_policy,
+                    )
+                )
+    return profiles
+
+
 def load_paper_profiles(
     path: Path = DEFAULT_PROFILES_PATH,
 ) -> list[TradingProfile]:
@@ -139,9 +197,19 @@ def load_paper_profiles(
     )
     by_id = {p.id: p for p in all_profiles}
 
+    # Active-sell experiment wallets are declared explicitly and always active.
+    xsell = generate_xsell_profiles(
+        raw.get("xsell_wallets"),
+        lead_gates=lead_gates,
+        calibration_stats_path=cal_path,
+        updated_calibration_stats_path=updated_cal_path,
+        city=city,
+        target_day=target_day,
+    )
+
     active = raw.get("active_profiles")
     if active == "all_twelve" or active is None:
-        return [p for p in all_profiles if p.enabled]
+        return [p for p in all_profiles if p.enabled] + xsell
 
     if isinstance(active, list):
         out: list[TradingProfile] = []
@@ -149,6 +217,6 @@ def load_paper_profiles(
             if pid not in by_id:
                 raise ValueError(f"unknown profile id in active_profiles: {pid!r}")
             out.append(by_id[pid])
-        return out
+        return out + xsell
 
     raise ValueError(f"invalid active_profiles: {active!r}")

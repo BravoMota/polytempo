@@ -1,10 +1,10 @@
 """Paper trading ledger (PostgreSQL-backed).
 
-Append-only OPEN and SETTLE events in ``paper_events``. Demo account starts at
-$1000 per profile. Stake per BUY is 2-5% of current balance, scaled linearly
-by model edge; a decision's ``stake_usd`` (flat ticket) or ``stake_fraction``
-(fraction of current balance) overrides the ramp. CLOSE is reserved for
-future early-exit support.
+Append-only OPEN, SETTLE and CLOSE events in ``paper_events``. Demo account
+starts at $1000 per profile. Stake per BUY is 2-5% of current balance, scaled
+linearly by model edge; a decision's ``stake_usd`` (flat ticket) or
+``stake_fraction`` (fraction of current balance) overrides the ramp. CLOSE is
+an early exit (active-sell) at the live mark, written by ``close_position``.
 """
 
 from __future__ import annotations
@@ -79,8 +79,15 @@ class LedgerStore(Protocol):
         winning_label: str,
     ) -> list[OpenTrade]: ...
 
-    def append_close(self, profile_id: str, trade_id: str) -> None:
-        """Reserved for future early-exit; not implemented in v1."""
+    def close_position(
+        self,
+        profile_id: str,
+        trade_id: str,
+        sell_price: float,
+        *,
+        reason: str,
+    ) -> OpenTrade | None:
+        """Early-exit one open position at ``sell_price`` (CLOSE event)."""
         ...
 
 
@@ -261,8 +268,46 @@ class PostgresLedgerStore:
             conn.commit()
         return settled
 
-    def append_close(self, profile_id: str, trade_id: str) -> None:
-        raise NotImplementedError("position close is reserved for a future phase")
+    def close_position(
+        self,
+        profile_id: str,
+        trade_id: str,
+        sell_price: float,
+        *,
+        reason: str,
+    ) -> OpenTrade | None:
+        """Early-exit one open position at ``sell_price`` (writes a CLOSE event).
+
+        Payout is ``shares * sell_price``. ``reason`` (e.g. ``"TP"``/``"SL"``) is
+        stored as ``outcome`` and in ``metadata``. Returns the closed trade, or
+        ``None`` if the profile has no matching open position.
+        """
+        state = self.read_state(profile_id)
+        trade = next(
+            (t for t in state.open_trades if t.trade_id == trade_id), None
+        )
+        if trade is None:
+            return None
+        payout = round(trade.shares * sell_price, 4)
+        ts = _now_iso()
+        with get_paper_connection(self._database_url) as conn:
+            insert_paper_event(
+                conn,
+                PaperEventRow(
+                    profile_id=profile_id,
+                    event_type="CLOSE",
+                    trade_id=trade_id,
+                    ts_utc=ts,
+                    polymarket_event_id=trade.event_id,
+                    bucket_label=trade.bucket_label,
+                    side=trade.side,
+                    payout_usd=payout,
+                    outcome=reason,
+                    metadata={"reason": reason, "sell_price": sell_price},
+                ),
+            )
+            conn.commit()
+        return trade
 
     def log_tick(
         self,
