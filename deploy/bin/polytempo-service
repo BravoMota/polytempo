@@ -3,17 +3,6 @@
 set -euo pipefail
 
 DOMAIN="system"
-
-declare -A LONG_LIVED=(
-  [collector]=com.polytempo.collector
-  [paper-bot]=com.polytempo.paper-bot
-)
-
-declare -A CALENDAR=(
-  [calibration]=com.polytempo.calibration
-  [db-backup]=com.polytempo.db-backup
-)
-
 ALL_JOBS=(collector paper-bot calibration db-backup)
 
 usage() {
@@ -30,20 +19,36 @@ EOF
 }
 
 resolve_label() {
-  local job="$1"
-  if [[ -n "${LONG_LIVED[$job]+x}" ]]; then
-    echo "${LONG_LIVED[$job]}"
-  elif [[ -n "${CALENDAR[$job]+x}" ]]; then
-    echo "${CALENDAR[$job]}"
-  else
-    echo "Unknown job: $job" >&2
-    exit 1
-  fi
+  case "$1" in
+    collector) echo com.polytempo.collector ;;
+    paper-bot) echo com.polytempo.paper-bot ;;
+    calibration) echo com.polytempo.calibration ;;
+    db-backup) echo com.polytempo.db-backup ;;
+    *)
+      echo "Unknown job: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+is_long_lived() {
+  case "$1" in
+    collector | paper-bot) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_calendar() {
+  case "$1" in
+    calibration | db-backup) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 cmd_status() {
   local target="${1:-all}"
   if [[ "$target" == "all" ]]; then
+    local job
     for job in "${ALL_JOBS[@]}"; do
       echo "=== $job ==="
       cmd_status "$job"
@@ -63,16 +68,16 @@ cmd_restart() {
     exit 1
   fi
   if [[ "$target" == "all" ]]; then
-    for job in collector paper-bot; do
-      cmd_restart "$job"
-    done
+    cmd_restart collector
+    cmd_restart paper-bot
     return
   fi
-  if [[ -z "${LONG_LIVED[$target]+x}" ]]; then
+  if ! is_long_lived "$target"; then
     echo "restart applies only to long-lived jobs: collector, paper-bot, all" >&2
     exit 1
   fi
-  local label="${LONG_LIVED[$target]}"
+  local label
+  label="$(resolve_label "$target")"
   launchctl kickstart -k "${DOMAIN}/${label}"
   echo "Restarted ${DOMAIN}/${label}"
 }
@@ -83,11 +88,12 @@ cmd_run() {
     usage
     exit 1
   fi
-  if [[ -z "${CALENDAR[$target]+x}" ]]; then
+  if ! is_calendar "$target"; then
     echo "run applies only to calendar jobs: calibration, db-backup" >&2
     exit 1
   fi
-  local label="${CALENDAR[$target]}"
+  local label
+  label="$(resolve_label "$target")"
   launchctl kickstart "${DOMAIN}/${label}"
   echo "Triggered ${DOMAIN}/${label}"
 }
@@ -100,7 +106,7 @@ main() {
     status) cmd_status "${1:-all}" ;;
     restart) cmd_restart "${1:-}" ;;
     run) cmd_run "${1:-}" ;;
-    ""|-h|--help) usage ;;
+    "" | -h | --help) usage ;;
     *)
       echo "Unknown command: $cmd" >&2
       usage
