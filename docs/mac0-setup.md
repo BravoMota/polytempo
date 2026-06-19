@@ -220,10 +220,22 @@ sudo deploy/bin/polytempo-service run db-backup
 
 ## 12. Deploy code updates
 
-As `jnlow`:
+As `jnlow`, run the deploy script (pull only when `origin/main` moved, then restart):
 
 ```bash
-cd /Users/jnlow/projects/PolyTempo
+deploy/bin/polytempo-deploy.sh
+```
+
+Optional auto-deploy on mac0 — add to `jnlow` crontab (every 10 minutes):
+
+```cron
+*/10 * * * * /Users/jnlow/projects/polytempo/deploy/bin/polytempo-deploy.sh >> /Users/jnlow/projects/polytempo/logs/deploy.log 2>&1
+```
+
+Requires passwordless sudo for `polytempo-service` (see step 11). Manual equivalent:
+
+```bash
+cd /Users/jnlow/projects/polytempo
 git pull
 pip install -e ".[dev]"   # if dependencies changed
 sudo deploy/bin/polytempo-service restart all
