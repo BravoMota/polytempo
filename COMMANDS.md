@@ -37,37 +37,39 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run **all ac
 2. **Resolve `--mode`** — `preview` (model only) or `trade` (also open paper trades). If TTY and flag omitted, prompts `Open paper trades? [y/N]`. Non-TTY default: `preview`.
 3. **Resolve `--day`** — `today` (T+0), `tomorrow` (T+1), or `both`. If TTY and trade mode chosen, prompts `1=today  2=tomorrow  3=both`. Non-TTY default: `tomorrow`. `--days-ahead N` overrides this: it targets a single day = `today + N` and skips the prompt.
 4. **For each target day** (loop runs once or twice):
-   1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches. The event is then run through `hydrate_prices`, which replaces each bucket's `yes_bid`/`yes_ask`/`spread`/`liquidity_usd` with the live **CLOB** order book (`POST /books`); Gamma's cached price fields are discovery-only and are never used for edge.
-   2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
-   3. **Lead-hours check.** `lead_hours = hours from now to UTC midnight at the END of the target day` (i.e. UTC midnight of the day after `target_date`). This matches the offline anchor in step 6 / `compute_lead_hours`, so live lead values index `calibration_stats.csv` row-for-row. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
-   4. **Distribution build** per `--model-strategy`:
+  1. **Event lookup.** Explicit `--event-id` calls `fetch_event(id)` (warns if `settlement_date != target_day`). Otherwise scans Polymarket weather events filtered by `--city` + `end_on_date=target_day` and picks the first parseable Celsius-bucket event. Aborts the day if nothing matches. The event is then run through `hydrate_prices`, which replaces each bucket's `yes_bid`/`yes_ask`/`spread`/`liquidity_usd` with the live **CLOB** order book (`POST /books`); Gamma's cached price fields are discovery-only and are never used for edge.
+  2. **Forecast fetch.** `fetch_for_station(station, target_day)` calls Open-Meteo across the live model set and normalizes to `ForecastValues`.
+  3. **Lead-hours check.** `lead_hours = hours from now to UTC midnight at the END of the target day` (i.e. UTC midnight of the day after `target_date`). This matches the offline anchor in step 6 / `compute_lead_hours`, so live lead values index `calibration_stats.csv` row-for-row. If `< 6`, prints a stderr warning (forecast value drops, edges sharpen near settle). No hard block.
+  4. **Distribution build** per `--model-strategy`:
 
-      | Strategy | mean | sigma |
-      | --- | --- | --- |
-      | `best_historical` (default) | selected model's prediction `- bias_c` | selected model's `error_std_c`, falling back to `rmse_c` |
-      | `best_historical_updated` | same as `best_historical`, but reads the nightly `calibration_stats_updated.csv` | same |
-      | `ensemble_spread` | mean across live models | spread across live models, combined in quadrature with the lead-time floor |
+    | Strategy                    | mean                                                                             | sigma                                                                      |
+    | --------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+    | `best_historical` (default) | selected model's prediction `- bias_c`                                           | selected model's `error_std_c`, falling back to `rmse_c`                   |
+    | `best_historical_updated`   | same as `best_historical`, but reads the nightly `calibration_stats_updated.csv` | same                                                                       |
+    | `ensemble_spread`           | mean across live models                                                          | spread across live models, combined in quadrature with the lead-time floor |
 
-      `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. Live and calibration `lead_hours` share the same end-of-target-date UTC anchor, so the ceiling lookup is exact. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
-   5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
-   6. **Per-profile decisions** — `run_profiles` produces one `AnalysisResult` per active profile from `config/paper_profiles.yaml`. Each profile combines its **own** model strategy × trade strategy (the `--model-strategy` flag only controls the report's Distribution section, not the profiles). Lead-time entry gates are **not** enforced by `live` (`enforce_gate=False`) — only the always-on bot enforces them.
-   7. **Mode branch:**
-      - **`preview`**: analysis only — no trades opened. (Resolved events are still settled against the Postgres store.)
-      - **`trade`**: per-profile **dedupe** — a profile that already has an open trade on `event_id` returns `DEDUPED_OPEN_TRADES_EXIST`; otherwise OPEN rows are written to the paper Postgres database (`POLYTEMPO_PAPER_DATABASE_URL`).
-   8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-profile result tables + opened/settled trades).
-   9. **Stdout summary** — per-profile actions; in trade mode, per-profile balances after writes.
+     `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. Live and calibration `lead_hours` share the same end-of-target-date UTC anchor, so the ceiling lookup is exact. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
+  5. **Per-bucket probabilities** — each bucket label → `TemperatureBucket` via `parse_temperature_bucket`; `probabilities_for_buckets` integrates `Normal(mean, sigma)` over each half-open interval.
+  6. **Per-profile decisions** — `run_profiles` produces one `AnalysisResult` per active profile from `config/paper_profiles.yaml`. Each profile combines its **own** model strategy × trade strategy (the `--model-strategy` flag only controls the report's Distribution section, not the profiles). Lead-time entry gates are **not** enforced by `live` (`enforce_gate=False`) — only the always-on bot enforces them.
+  7. **Mode branch:**
+    - `**preview`**: analysis only — no trades opened. (Resolved events are still settled against the Postgres store.)
+    - `**trade**`: per-profile **dedupe** — a profile that already has an open trade on `event_id` returns `DEDUPED_OPEN_TRADES_EXIST`; otherwise OPEN rows are written to the paper Postgres database (`POLYTEMPO_PAPER_DATABASE_URL`).
+  8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-profile result tables + opened/settled trades).
+  9. **Stdout summary** — per-profile actions; in trade mode, per-profile balances after writes.
 
 ### Flags
 
-| Flag | Meaning |
-| --- | --- |
-| `--mode {preview,trade}` | Preview = model only. Trade = also opens paper trades. Prompted on TTY when omitted. |
-| `--day {today,tomorrow,both}` | Target day(s). Prompted on TTY when `--mode trade`. Default `tomorrow`. |
-| `--days-ahead N` | Target a single day = today + N (e.g. `0`=today, `3`=T+3). Overrides `--day` and its prompt. |
-| `--event-id` | Pin a specific Gamma event id (one day only; not compatible with `--day both`). |
-| `--city` | Contract station registry key (default `london`). |
-| `--limit` | Max events to scan when `--event-id` is not set (default `20`). |
-| `--model-strategy` | `best_historical` (default), `best_historical_updated`, or `ensemble_spread`. Affects the report's Distribution section only; profiles use their own model strategy. |
+
+| Flag                          | Meaning                                                                                                                                                              |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--mode {preview,trade}`      | Preview = model only. Trade = also opens paper trades. Prompted on TTY when omitted.                                                                                 |
+| `--day {today,tomorrow,both}` | Target day(s). Prompted on TTY when `--mode trade`. Default `tomorrow`.                                                                                              |
+| `--days-ahead N`              | Target a single day = today + N (e.g. `0`=today, `3`=T+3). Overrides `--day` and its prompt.                                                                         |
+| `--event-id`                  | Pin a specific Gamma event id (one day only; not compatible with `--day both`).                                                                                      |
+| `--city`                      | Contract station registry key (default `london`).                                                                                                                    |
+| `--limit`                     | Max events to scan when `--event-id` is not set (default `20`).                                                                                                      |
+| `--model-strategy`            | `best_historical` (default), `best_historical_updated`, or `ensemble_spread`. Affects the report's Distribution section only; profiles use their own model strategy. |
+
 
 ### Examples
 
@@ -122,7 +124,7 @@ python scripts/run_paper_bot.py --config config/paper_profiles.yaml
 
 Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need the paper DB.
 
-**Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` uses **per-model init lead** only for models with rolling `meta.json` (others are excluded from selection — see [`docs/calibration-data.md`](docs/calibration-data.md)). **Restart `run_paper_bot.py` after deploying this change.**
+**Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` uses **per-model init lead** only for models with rolling `meta.json` (others are excluded from selection — see `[docs/calibration-data.md](docs/calibration-data.md)`). **Restart `run_paper_bot.py` after deploying this change.**
 
 No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).
 
@@ -142,12 +144,14 @@ python scripts/probe_open_meteo_schedule.py --city london
 
 Fetch event + forecast for the settlement date, run all active profiles, open trades. Auto-settles if resolved. Per-profile dedupe (not global across profiles).
 
-| Flag | Meaning |
-| --- | --- |
-| `--event-id` | Polymarket Gamma event id |
-| `--date` | Settlement date `YYYY-MM-DD` |
-| `--city` | Contract station (default `london`) |
-| `--config` | Path to `paper_profiles.yaml` |
+
+| Flag         | Meaning                             |
+| ------------ | ----------------------------------- |
+| `--event-id` | Polymarket Gamma event id           |
+| `--date`     | Settlement date `YYYY-MM-DD`        |
+| `--city`     | Contract station (default `london`) |
+| `--config`   | Path to `paper_profiles.yaml`       |
+
 
 ```bash
 polytempo paper open --event-id 509200 --date 2026-05-23 --city london
@@ -168,10 +172,12 @@ Per-event scenario PnL table for every event with open trades. For each possible
 
 Unlikely tails are rolled into one row each (`X°C or lower` / `Y°C or higher`); the rolled row's PnL is the **worst case** across the collapsed buckets. Any bucket with a YES position is always kept individual so jackpot/conviction scenarios stay visible.
 
-| Flag | Meaning |
-| --- | --- |
-| `--event-id` | Restrict to one event id. Default: every event with open trades. |
+
+| Flag         | Meaning                                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `--event-id` | Restrict to one event id. Default: every event with open trades.                                                        |
 | `--min-prob` | Rollup threshold on current `yes_ask` (default `0.05`). Buckets below this and with no YES position fold into the tail. |
+
 
 ```bash
 polytempo paper scenarios
@@ -182,10 +188,12 @@ polytempo paper scenarios --event-id 529428 --min-prob 0.10
 
 Settle every open trade on an event against the winning bucket. Use when you want to force-resolve before Polymarket's own resolution flows through.
 
-| Flag | Meaning |
-| --- | --- |
-| `--event-id` | Polymarket event id |
-| `--winner` | Winning bucket label, e.g. `"23°C"` |
+
+| Flag         | Meaning                             |
+| ------------ | ----------------------------------- |
+| `--event-id` | Polymarket event id                 |
+| `--winner`   | Winning bucket label, e.g. `"23°C"` |
+
 
 ```bash
 polytempo paper settle --event-id 509200 --winner "29°C"
@@ -234,7 +242,7 @@ Example: `EGLC_ukmo_uk_deterministic_2km_2026-05-01T120000Z.json`
 | `--max-lead-hours`     | Maximum lead time before target day (default `72`)                                         |
 | `--lead-step-hours`    | Lead-time step in hours (default `6`)                                                      |
 | `--timezone`           | IANA timezone for target-day midnight anchor (default `UTC`; use `Europe/London` for EGLC) |
-| `--raw-dir`            | Raw Single-Runs JSON directory (default `data/weather/raw/single-runs/`)                               |
+| `--raw-dir`            | Raw Single-Runs JSON directory (default `data/weather/raw/single-runs/`)                   |
 | `--out`                | Parsed JSONL path (default `data/weather/historical_forecasts.jsonl`)                      |
 | `--base-url`           | Single-Runs API base (default `https://single-runs-api.open-meteo.com/v1/forecast`)        |
 | `--dry-run`            | Print planned request count; do not call API                                               |
@@ -306,7 +314,7 @@ pytest tests/test_historical_forecasts.py tests/test_http_open_meteo.py \
 
 ## Weather collection (PostgreSQL)
 
-Continuous local scraping of Wunderground HTML pages into PostgreSQL + raw files. Config: [`config/weather_collectors.yaml`](config/weather_collectors.yaml). Raw HTML: `data/weather/raw/wunderground/`.
+Continuous local scraping of Wunderground HTML pages into PostgreSQL + raw files. Config: `[config/weather_collectors.yaml](config/weather_collectors.yaml)`. Raw HTML: `data/weather/raw/wunderground/`.
 
 Set the database URL before init, migrate, or run:
 
@@ -314,9 +322,10 @@ Set the database URL before init, migrate, or run:
 export POLYTEMPO_DATABASE_URL='postgresql://USER:PASSWORD@HOST:5432/polytempo_weather'
 ```
 
-See [`.env.example`](.env.example) for the expected format.
+See `[.env.example](.env.example)` for the expected format.
 
 Each poll per station fetches:
+
 - live observation page (ICAO or PWS dashboard URL)
 - hourly forecast page for **today** and **tomorrow** (station local dates)
 
@@ -326,13 +335,15 @@ Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `
 
 Forecast-only collector: pairs rolling S3 `meta.json` (per model run init) with the live Forecast API, stores **parsed** rows (no raw JSON):
 
-| Table | Contents |
-| --- | --- |
-| `open_meteo_fetch_cycles` | One row per station poll (`fetched_at_utc`, staleness flag) |
-| `open_meteo_model_meta_snapshots` | Per-model init / availability / lag |
-| `open_meteo_forecast_snapshots` | Per `(model, target_date)` Tmax + `init_lead_hours` + `wall_clock_lead_hours` |
 
-Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). See [`docs/calibration-data.md`](docs/calibration-data.md) for SQL joins vs `calibration_forecast_records`.
+| Table                             | Contents                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `open_meteo_fetch_cycles`         | One row per station poll (`fetched_at_utc`, staleness flag)                   |
+| `open_meteo_model_meta_snapshots` | Per-model init / availability / lag                                           |
+| `open_meteo_forecast_snapshots`   | Per `(model, target_date)` Tmax + `init_lead_hours` + `wall_clock_lead_hours` |
+
+
+Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). See `[docs/calibration-data.md](docs/calibration-data.md)` for SQL joins vs `calibration_forecast_records`.
 
 Scheduling uses **UTC wall-clock slots** (not sleep-after-work). Per collector in YAML:
 
@@ -403,7 +414,7 @@ psql "$POLYTEMPO_DATABASE_URL" -c "\dt open_meteo*"
 psql "$POLYTEMPO_DATABASE_URL" -c "SELECT COUNT(*) FROM open_meteo_fetch_cycles;"
 ```
 
-6. Production loop: `python scripts/run_collector.py`
+1. Production loop: `python scripts/run_collector.py`
 
 To debug open_meteo only, temporarily set `wunderground.enabled: false` in YAML.
 
@@ -411,12 +422,14 @@ To debug open_meteo only, temporarily set `wunderground.enabled: false` in YAML.
 
 Four jobs on mac0 run as user `jnlow` from `/Users/jnlow/projects/PolyTempo`, supervised by LaunchDaemons. Full runbook: [docs/mac0-setup.md](docs/mac0-setup.md).
 
-| Label | Schedule |
-| --- | --- |
-| `com.polytempo.collector` | long-lived (internal UTC slots) |
-| `com.polytempo.paper-bot` | long-lived |
+
+| Label                       | Schedule                        |
+| --------------------------- | ------------------------------- |
+| `com.polytempo.collector`   | long-lived (internal UTC slots) |
+| `com.polytempo.paper-bot`   | long-lived                      |
 | `com.polytempo.calibration` | **01:00 mac0 local** (`--once`) |
-| `com.polytempo.db-backup` | **02:00 mac0 local** (`--once`) |
+| `com.polytempo.db-backup`   | **02:00 mac0 local** (`--once`) |
+
 
 ```bash
 # one-time install (on mac0, as admin):
@@ -435,11 +448,13 @@ Smoke before install uses `deploy/bin/run-with-env.sh` (sources `.env`, prepends
 
 Nightly automation for `best_historical_updated`. Does **not** modify frozen `scripts/Calibrator_V1/` or `data/weather/statistical/calibration_stats.csv`.
 
-| Script | When | Purpose |
-| --- | --- | --- |
-| `scripts/bootstrap_calibration_store.py` | Once on prod | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_*` Postgres tables; write `calibration_stats_updated.csv` |
-| `scripts/run_daily_calibration.py` | mac0 **01:00 local** via launchd (`--once`) | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv` |
-| `scripts/backup_databases.py` | mac0 **02:00 local** via launchd (`--once`) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md)) |
+
+| Script                                   | When                                        | Purpose                                                                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/bootstrap_calibration_store.py` | Once on prod                                | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_`* Postgres tables; write `calibration_stats_updated.csv` |
+| `scripts/run_daily_calibration.py`       | mac0 **01:00 local** via launchd (`--once`) | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv`                                                       |
+| `scripts/backup_databases.py`            | mac0 **02:00 local** via launchd (`--once`) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md))                                                   |
+
 
 Config: `config/calibration.yaml` (stations from `config/weather_collectors.yaml`, models + cadence baked in — no `capabilities_csv` at runtime).
 
@@ -463,11 +478,13 @@ python scripts/backup_databases.py --once
 
 Model strategies:
 
-| Strategy | Calibration CSV |
-| --- | --- |
-| `best_historical` | `data/weather/statistical/calibration_stats.csv` (frozen, in git) |
+
+| Strategy                  | Calibration CSV                                                    |
+| ------------------------- | ------------------------------------------------------------------ |
+| `best_historical`         | `data/weather/statistical/calibration_stats.csv` (frozen, in git)  |
 | `best_historical_updated` | `data/weather/statistical/calibration_stats_updated.csv` (nightly) |
-| `ensemble_spread` | *(none)* |
+| `ensemble_spread`         | *(none)*                                                           |
+
 
 ```bash
 polytempo live --model-strategy best_historical_updated ...
@@ -475,27 +492,31 @@ polytempo live --model-strategy best_historical_updated ...
 
 Bootstrap stderr summary fields:
 
-| Field | Meaning |
-| --- | --- |
-| `observations_ingested` | Days upserted into `calibration_observed_tmax` this run |
-| `fetched_raw` | New Single-Runs JSON files downloaded (0 if cache complete) |
-| `forecast_rows_ingested` | Predicted Tmax rows upserted into `calibration_forecast_records` |
-| `joined_rows` | Inner-join pairs `(forecast, observation)` with `error_c` — **not** API failures |
-| `unjoined_forecasts` | Forecast rows whose `target_date` has no observation (often future dates beyond yesterday) |
-| `stat_groups` | Aggregated CSV rows: one per `(station_id, model, lead_hours)` |
+
+| Field                    | Meaning                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------ |
+| `observations_ingested`  | Days upserted into `calibration_observed_tmax` this run                                    |
+| `fetched_raw`            | New Single-Runs JSON files downloaded (0 if cache complete)                                |
+| `forecast_rows_ingested` | Predicted Tmax rows upserted into `calibration_forecast_records`                           |
+| `joined_rows`            | Inner-join pairs `(forecast, observation)` with `error_c` — **not** API failures           |
+| `unjoined_forecasts`     | Forecast rows whose `target_date` has no observation (often future dates beyond yesterday) |
+| `stat_groups`            | Aggregated CSV rows: one per `(station_id, model, lead_hours)`                             |
+
 
 ## Offline calibration pipeline (standalone scripts)
 
 Numbered scripts under `scripts/` run in order. All use global vars at the top (no CLI flags). Data lives under `data/weather/` (see [docs/calibration-data.md](docs/calibration-data.md)).
 
-| Step | Script | Purpose |
-| --- | --- | --- |
-| 1 | `scripts/1_analyze_single_runs_models.py` | Probe model capabilities → `single_runs_model_capabilities.csv` + `raw_capabilities/` |
-| 2 | `scripts/2_fetch_historical_forecasts_by_model.py` | Bulk-fetch raw Single Runs JSON → `raw/single-runs/` |
-| 3 | `scripts/3_fetch_wunderground_observations.py` | Fetch observed Tmax → `observed_tmax.jsonl` |
-| 4 | `scripts/4_build_forecast_records_csv.py` | Raw JSON → `processed/forecast_records.csv` |
-| 5 | `scripts/5_build_observed_tmax_csv.py` | `observed_tmax.jsonl` → `observed_tmax.csv` |
-| 6 | `scripts/6_compute_calibration_errors.py` | Join forecasts + observations → `statistical/forecast_errors.csv` + `statistical/calibration_stats.csv` |
+
+| Step | Script                                             | Purpose                                                                                                 |
+| ---- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 1    | `scripts/1_analyze_single_runs_models.py`          | Probe model capabilities → `single_runs_model_capabilities.csv` + `raw_capabilities/`                   |
+| 2    | `scripts/2_fetch_historical_forecasts_by_model.py` | Bulk-fetch raw Single Runs JSON → `raw/single-runs/`                                                    |
+| 3    | `scripts/3_fetch_wunderground_observations.py`     | Fetch observed Tmax → `observed_tmax.jsonl`                                                             |
+| 4    | `scripts/4_build_forecast_records_csv.py`          | Raw JSON → `processed/forecast_records.csv`                                                             |
+| 5    | `scripts/5_build_observed_tmax_csv.py`             | `observed_tmax.jsonl` → `observed_tmax.csv`                                                             |
+| 6    | `scripts/6_compute_calibration_errors.py`          | Join forecasts + observations → `statistical/forecast_errors.csv` + `statistical/calibration_stats.csv` |
+
 
 ### 1 — Single Runs model capability probe
 
@@ -582,3 +603,7 @@ Manual [REST Client `.http` requests](http/) under `http/`:
 - `http/polymarket_gamma.http` — Gamma event payload inspection + CLOB `POST /books` live order-book inspection
 
 These files are **not** part of the Python package. Use them to inspect API payload shapes before coding parsers. Do **not** use them in live analysis.
+
+
+
+:)
