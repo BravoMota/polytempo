@@ -4,26 +4,24 @@ from __future__ import annotations
 
 from datetime import date
 
-from polytempo.weather.calibration_runner import _snap_observations_to_integer_c
+from polytempo.weather.wunderground import _observed_tmax_from_celsius
 
 
-def test_snap_recovers_integer_c_from_fahrenheit_artifact():
-    # The °F round-trip sawtooth from the diagnostics: stored °C -> true °C.
-    artifact = {
-        ("EGLC", date(2026, 6, 6)): 17.22,  # 63°F -> 17°C
-        ("EGLC", date(2026, 6, 7)): 18.89,  # 66°F -> 19°C
-        ("EGLC", date(2026, 6, 8)): 16.11,  # 61°F -> 16°C
-        ("LEMD", date(2026, 6, 8)): 22.78,  # 73°F -> 23°C
-    }
-    snapped = _snap_observations_to_integer_c(artifact)
-    assert snapped == {
-        ("EGLC", date(2026, 6, 6)): 17.0,
-        ("EGLC", date(2026, 6, 7)): 19.0,
-        ("EGLC", date(2026, 6, 8)): 16.0,
-        ("LEMD", date(2026, 6, 8)): 23.0,
-    }
+def test_observed_tmax_from_celsius_rounds_to_integer() -> None:
+    row = _observed_tmax_from_celsius(
+        station_id="EGLC",
+        target_date=date(2026, 6, 8),
+        temp_c=16.4,
+    )
+    assert row.observed_tmax_c == 16.0
+    assert row.observed_tmax_f is None
 
 
-def test_snap_is_idempotent_for_clean_integer_values():
-    clean = {("EGLC", date(2026, 6, 8)): 16.0}
-    assert _snap_observations_to_integer_c(clean) == clean
+def test_observed_tmax_from_celsius_keeps_integer() -> None:
+    row = _observed_tmax_from_celsius(
+        station_id="EGLC",
+        target_date=date(2026, 6, 8),
+        temp_c=17.0,
+    )
+    assert row.observed_tmax_c == 17.0
+    assert row.observed_tmax_f is None

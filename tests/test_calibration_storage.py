@@ -57,3 +57,39 @@ def test_calibration_observation_and_forecast_round_trip(weather_db_url: str) ->
     assert obs[("EGLC", date(2026, 4, 2))] == pytest.approx(16.11)
     assert len(forecasts) == 1
     assert forecasts[0].predicted_tmax_c == pytest.approx(17.0)
+
+
+def test_calibration_observation_null_fahrenheit(weather_db_url: str) -> None:
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="LEMD",
+            name="Madrid",
+            timezone="Europe/Madrid",
+            lat=40.4722,
+            lon=-3.5608,
+            country="es",
+        )
+        upsert_observation(
+            conn,
+            CalibrationObservedTmax(
+                station_id="LEMD",
+                target_date=date(2026, 4, 3),
+                observed_tmax_f=None,
+                observed_tmax_c=23.0,
+                source="wunderground",
+            ),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            """
+            SELECT observed_tmax_f, observed_tmax_c
+            FROM calibration_observed_tmax
+            WHERE station_id = 'LEMD' AND target_date = '2026-04-03'
+            """
+        ).fetchone()
+
+    assert row is not None
+    assert row["observed_tmax_f"] is None
+    assert row["observed_tmax_c"] == pytest.approx(23.0)

@@ -85,6 +85,10 @@ def initialize_database(
         conn.execute(
             "ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS raw_temp_text TEXT"
         )
+        conn.execute(
+            "ALTER TABLE calibration_observed_tmax "
+            "ALTER COLUMN observed_tmax_f DROP NOT NULL"
+        )
         conn.commit()
 
 
@@ -342,7 +346,7 @@ def upsert_calibration_observed_tmax(
     *,
     station_id: str,
     target_date: str,
-    observed_tmax_f: float,
+    observed_tmax_f: float | None,
     observed_tmax_c: float,
     source: str,
     fetched_at_utc: str,

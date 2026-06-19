@@ -108,9 +108,10 @@ python scripts/init_weather_db.py
 python scripts/init_paper_db.py
 ```
 
-Optional first-time calibration store (before nightly job):
+Optional first-time calibration store (before nightly job; requires this repo version with metric °C observation fetch):
 
 ```bash
+python scripts/init_weather_db.py   # applies nullable observed_tmax_f migration if needed
 python scripts/bootstrap_calibration_store.py
 ```
 

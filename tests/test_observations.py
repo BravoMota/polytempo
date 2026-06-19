@@ -161,11 +161,11 @@ def test_fetch_wunderground_observed_tmax_uses_station_hourly_max(
         assert station_id == "EGLC"
         assert target_date == date(2026, 5, 14)
         assert country_code == "GB"
-        return 71.0
+        return 22.0
 
     monkeypatch.setattr(_WU_MODULE, "fetch_dailysummary_30day_map", lambda *a, **k: {})
     monkeypatch.setattr(
-        _WU_MODULE, "_fetch_v1_historical_daily_high_f", fake_hourly_max
+        _WU_MODULE, "_fetch_v1_historical_daily_high_c", fake_hourly_max
     )
 
     row = _WU_MODULE.fetch_wunderground_observed_tmax(
@@ -177,8 +177,8 @@ def test_fetch_wunderground_observed_tmax_uses_station_hourly_max(
         lon=0.0553,
     )
 
-    assert row.observed_tmax_c == pytest.approx(21.67)
-    assert row.observed_tmax_f == pytest.approx(71.0)
+    assert row.observed_tmax_c == pytest.approx(22.0)
+    assert row.observed_tmax_f is None
     assert row.source == "wunderground"
 
 

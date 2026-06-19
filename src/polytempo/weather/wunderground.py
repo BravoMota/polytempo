@@ -1,9 +1,10 @@
 """Wunderground daily Tmax fetcher.
 
-Reads the daily high (°F) from Weather.com station hourly observations
-(``v1/location/{ICAO}/observations/historical.json``, ``units=e``) — the
-same source WU's history-page Summary table uses. Does **not** use the
-geocode ``dailysummary/30day`` grid product (often 1–3°F higher).
+Reads the daily high (°C) from Weather.com station hourly observations
+(``v1/location/{ICAO}/observations/historical.json``, ``units=m``);
+daily high = ``max(observations[*].temp)``. Stored as integer °C (market
+resolution). Fallback uses geocode ``dailysummary/30day`` (``units=m``),
+which may differ from the history-page Summary table.
 """
 
 from __future__ import annotations
@@ -29,13 +30,13 @@ WUNDERGROUND_LOCATION_POINT_URL_TEMPLATE = (
 
 DAILYSUMMARY_30DAY_URL_TEMPLATE = (
     "https://api.weather.com/v3/wx/conditions/historical/dailysummary/30day"
-    "?geocode={geocode}&format=json&language=en-US&units=e&apiKey={api_key}"
+    "?geocode={geocode}&format=json&language=en-US&units=m&apiKey={api_key}"
 )
 
 V1_HISTORICAL_URL_TEMPLATE = (
     "https://api.weather.com/v1/location/{station_id}:9:{country_code}"
     "/observations/historical.json"
-    "?apiKey={api_key}&units=e&startDate={start_date}"
+    "?apiKey={api_key}&units=m&startDate={start_date}"
 )
 
 DEFAULT_COUNTRY_CODE = "GB"
@@ -159,6 +160,21 @@ def _parse_summary_table_high_temp_f(html: str) -> float | None:
     return float(match.group(1))
 
 
+def _observed_tmax_from_celsius(
+    *,
+    station_id: str,
+    target_date: date,
+    temp_c: float,
+) -> ObservedTmax:
+    return ObservedTmax(
+        station_id=station_id,
+        target_date=target_date,
+        observed_tmax_c=float(round(temp_c)),
+        observed_tmax_f=None,
+        source="wunderground",
+    )
+
+
 def _observed_tmax_from_fahrenheit(
     *,
     station_id: str,
@@ -226,8 +242,6 @@ def parse_dailysummary_payload(
 
 def to_calibration_observed(row: ObservedTmax) -> CalibrationObservedTmax:
     """Convert a parsed observation to the DB store shape."""
-    if row.observed_tmax_f is None:
-        raise ValueError("observed_tmax_f is required for calibration store")
     return CalibrationObservedTmax(
         station_id=row.station_id,
         target_date=row.target_date,
@@ -323,7 +337,7 @@ def fetch_dailysummary_30day_map(
     return out
 
 
-def _fetch_v1_historical_daily_high_f(
+def _fetch_v1_historical_daily_high_c(
     station_id: str,
     target_date: date,
     *,
@@ -331,7 +345,7 @@ def _fetch_v1_historical_daily_high_f(
     client: httpx.Client | None = None,
     api_key: str = WUNDERGROUND_API_KEY,
 ) -> float:
-    """Best-effort fallback for dates outside the 30-day dailysummary window."""
+    """Daily high in °C from station hourly observations (metric API)."""
     url = _build_v1_historical_url(
         station_id,
         target_date,
@@ -386,7 +400,7 @@ def fetch_wunderground_observed_tmax(
     dailysummary_cache: dict[date, float] | None = None,
     geocode: str | None = None,
 ) -> ObservedTmax:
-    """Fetch reported daily Tmax (°F) for one station/day."""
+    """Fetch reported daily Tmax (°C) for one station/day."""
     if base_url is not None:
         raise ValueError("base_url override is not supported; use Weather.com APIs")
 
@@ -398,16 +412,16 @@ def fetch_wunderground_observed_tmax(
     )
 
     try:
-        temp_f = _fetch_v1_historical_daily_high_f(
+        temp_c = _fetch_v1_historical_daily_high_c(
             station_id,
             target_date,
             country_code=resolved_country_code,
             client=client,
         )
     except Exception as exc:
-        dailysummary_f: float | None = None
+        dailysummary_c: float | None = None
         if dailysummary_cache is not None:
-            dailysummary_f = dailysummary_cache.get(target_date)
+            dailysummary_c = dailysummary_cache.get(target_date)
         else:
             try:
                 resolved_geocode = geocode or resolve_station_geocode(
@@ -416,27 +430,27 @@ def fetch_wunderground_observed_tmax(
                     lat=lat,
                     lon=lon,
                 )
-                dailysummary_f = fetch_dailysummary_30day_map(
+                dailysummary_c = fetch_dailysummary_30day_map(
                     resolved_geocode, client=client
                 ).get(target_date)
             except Exception:
-                dailysummary_f = None
-        if dailysummary_f is not None:
+                dailysummary_c = None
+        if dailysummary_c is not None:
             print(
                 f"wunderground: v1 historical failed for {target_date.isoformat()}; "
                 "falling back to dailysummary/30day grid (may differ from Summary table)",
                 file=sys.stderr,
             )
-            temp_f = dailysummary_f
+            temp_c = dailysummary_c
         else:
             raise ValueError(
                 f"station hourly observations failed: {exc}"
             ) from exc
 
-    return _observed_tmax_from_fahrenheit(
+    return _observed_tmax_from_celsius(
         station_id=station_id,
         target_date=target_date,
-        temp_f=temp_f,
+        temp_c=temp_c,
     )
 
 

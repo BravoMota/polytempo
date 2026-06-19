@@ -12,7 +12,7 @@ Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_for
 | `raw/single-runs/` | Cached Open-Meteo Single Runs JSON (reused from V1 fetch) |
 | `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated` |
 
-**Observations:** WU history daily page reported `temperatureMax` in °F, stored as both `observed_tmax_f` and `observed_tmax_c` (F→C, 2 dp). Not `max()` of hourly obs, not metric API.
+**Observations:** WU station hourly observations (`units=m`); daily high = `max(observations[*].temp)` in °C, stored as integer `observed_tmax_c`. `observed_tmax_f` is null for metric fetches (legacy imperial parse paths may still populate it).
 
 **Scripts:**
 
@@ -102,4 +102,4 @@ Tmax is aggregated over the **station-local** calendar day by Open-Meteo; the le
 {"station_id": "EGLC", "target_date": "2026-05-14", "observed_tmax_c": 22.4, "source": "wunderground"}
 ```
 
-Updated-store DB rows also carry `observed_tmax_f` (reported °F from WU page).
+Updated-store DB rows store integer `observed_tmax_c`; `observed_tmax_f` is optional (null for metric API fetches).

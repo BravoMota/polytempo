@@ -31,7 +31,7 @@ class CalibrationObservedTmax:
 
     station_id: str
     target_date: date
-    observed_tmax_f: float
+    observed_tmax_f: float | None
     observed_tmax_c: float
     source: str
 

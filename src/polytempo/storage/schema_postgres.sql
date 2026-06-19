@@ -86,7 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_collector_state_lookup
 CREATE TABLE IF NOT EXISTS calibration_observed_tmax (
     station_id TEXT NOT NULL REFERENCES stations(station_id),
     target_date TEXT NOT NULL,
-    observed_tmax_f DOUBLE PRECISION NOT NULL,
+    observed_tmax_f DOUBLE PRECISION,
     observed_tmax_c DOUBLE PRECISION NOT NULL,
     source TEXT NOT NULL,
     fetched_at_utc TEXT NOT NULL,

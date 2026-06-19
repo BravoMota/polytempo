@@ -453,7 +453,7 @@ Nightly automation for `best_historical_updated`. Does **not** modify frozen `sc
 
 | Script                                   | When                                        | Purpose                                                                                                                                                                     |
 | ---------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/bootstrap_calibration_store.py` | Once on prod                                | Scrape WU reported daily highs (°F→°C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_`* Postgres tables; write `calibration_stats_updated.csv` |
+| `scripts/bootstrap_calibration_store.py` | Once on prod                                | Fetch WU daily highs (metric hourly max °C) from `2026-02-01` … yesterday; bulk-fetch Single Runs; upsert `calibration_`* Postgres tables; write `calibration_stats_updated.csv` |
 | `scripts/run_daily_calibration.py`       | mac0 **01:00 local** via launchd (`--once`) | Incremental observations + new run inits since last success; full recompute from DB → `calibration_stats_updated.csv`                                                       |
 | `scripts/backup_databases.py`            | mac0 **02:00 local** via launchd (`--once`) | `pg_dump -Fc` all four Postgres DBs → `backups/`; 14-day retention ([docs/database-backups.md](docs/database-backups.md))                                                   |
 
