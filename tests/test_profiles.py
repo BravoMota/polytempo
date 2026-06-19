@@ -12,6 +12,7 @@ from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
 )
+from polytempo.weather.data_dir import REPO_ROOT
 
 
 def test_generate_all_twelve_profiles_count() -> None:
@@ -36,7 +37,9 @@ def test_best_historical_updated_uses_updated_calibration_path() -> None:
         trade_strategies=["dist_arb"],
     )
     assert len(profiles) == 1
-    assert profiles[0].calibration_stats_path == DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+    assert profiles[0].calibration_stats_path == (
+        REPO_ROOT / DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+    ).resolve()
 
 
 def test_best_historical_uses_static_calibration_path() -> None:
@@ -45,7 +48,23 @@ def test_best_historical_uses_static_calibration_path() -> None:
         model_strategies=["best_historical"],
         trade_strategies=["dist_arb"],
     )
-    assert profiles[0].calibration_stats_path == DEFAULT_CALIBRATION_STATS_CSV_PATH
+    assert profiles[0].calibration_stats_path == (
+        REPO_ROOT / DEFAULT_CALIBRATION_STATS_CSV_PATH
+    ).resolve()
+
+
+def test_load_paper_profiles_resolves_absolute_calibration_paths() -> None:
+    path = Path("config/paper_profiles.yaml")
+    if not path.is_file():
+        pytest.skip("config/paper_profiles.yaml missing")
+    profiles = load_paper_profiles(path)
+    bhu = next(p for p in profiles if p.id == "bhu_dist_arb_lead30")
+    bh = next(p for p in profiles if p.id == "bh_dist_arb_lead30")
+    assert bhu.calibration_stats_path.is_absolute()
+    assert bh.calibration_stats_path.is_absolute()
+    assert bhu.calibration_stats_path == (
+        REPO_ROOT / DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+    ).resolve()
 
 
 def test_load_paper_profiles_from_repo_config() -> None:

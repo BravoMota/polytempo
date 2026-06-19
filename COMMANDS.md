@@ -124,6 +124,8 @@ python scripts/run_paper_bot.py --config config/paper_profiles.yaml
 
 Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need the paper DB.
 
+**BHU calibration guard:** profiles using `best_historical_updated` are disabled when `data/weather/statistical/calibration_stats_updated.csv` is missing, empty, or older than 48 hours; BH and ES profiles keep running. If a `best_historical` or `best_historical_updated` profile would fall back to `ensemble_spread` at entry time (e.g. no qualifying calibration row), the bot logs a warning, records a `GATE_SKIP` with reason `model_strategy_fallback`, and does **not** open a trade. OPEN/TICK ledger rows store the **resolved** `model_strategy` plus audit metadata (`requested_model_strategy`, `fallback_reason`, `selected_model`, …).
+
 **Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` uses **per-model init lead** only for models with rolling `meta.json` (others are excluded from selection — see `[docs/calibration-data.md](docs/calibration-data.md)`). **Restart `run_paper_bot.py` after deploying this change.**
 
 No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).

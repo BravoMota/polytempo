@@ -80,7 +80,13 @@ class ActiveExitResult:
 
 
 def reload_profiles(config_path: Path) -> list[TradingProfile]:
-    return [p for p in load_paper_profiles(config_path) if p.enabled]
+    from polytempo.profiles.calibration_ready import filter_profiles_by_calibration
+
+    loaded = [p for p in load_paper_profiles(config_path) if p.enabled]
+    enabled, warnings = filter_profiles_by_calibration(loaded)
+    for message in warnings:
+        logger.warning(message)
+    return enabled
 
 
 def _profile_settlement_dates(profile: TradingProfile, now: datetime) -> list[date]:

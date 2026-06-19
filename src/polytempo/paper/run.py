@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from polytempo.analysis import AnalysisResult, analyze_event
+from polytempo.analysis import (
+    MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    AnalysisResult,
+    analyze_event,
+)
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     is_event_resolved,
@@ -16,6 +22,12 @@ from polytempo.model.lead_time import lead_hours_at_target
 from polytempo.paper.ledger import LedgerStore, OpenTrade, PostgresLedgerStore
 from polytempo.profiles.models import TradingProfile
 from polytempo.weather.schema import ForecastValues
+
+logger = logging.getLogger(__name__)
+
+_BEST_HISTORICAL_STRATEGIES = frozenset(
+    {MODEL_STRATEGY_BEST_HISTORICAL, MODEL_STRATEGY_BEST_HISTORICAL_UPDATED}
+)
 
 
 @dataclass(frozen=True)
@@ -128,12 +140,39 @@ def run_profile(
         station_id=_station_id_for_city(profile.city),
         calibration_stats_path=profile.calibration_stats_path,
     )
+    audit_metadata = _analysis_audit_metadata(profile, analysis)
+    if (
+        profile.model_strategy in _BEST_HISTORICAL_STRATEGIES
+        and analysis.fallback_reason is not None
+    ):
+        logger.warning(
+            "profile %s skipping open: %s -> %s (%s)",
+            profile.id,
+            profile.model_strategy,
+            analysis.model_strategy,
+            analysis.fallback_reason,
+        )
+        if isinstance(store, PostgresLedgerStore):
+            store.log_gate_skip(
+                profile.id,
+                lead_hours=lead_hours,
+                reason="model_strategy_fallback",
+                metadata=audit_metadata,
+            )
+        return ProfileRunResult(
+            profile_id=profile.id,
+            action="MODEL_STRATEGY_SKIP",
+            lead_hours=lead_hours,
+            gate_passed=True,
+            analysis=analysis,
+        )
+
     opened = store.open_trades_from_analysis(
         profile.id,
         analysis,
         event.event_id,
         lead_hours=lead_hours,
-        model_strategy=profile.model_strategy,
+        audit_metadata=audit_metadata,
     )
     action = "OPENED" if opened else "SKIP"
     if isinstance(store, PostgresLedgerStore):
@@ -141,8 +180,9 @@ def run_profile(
             profile.id,
             polymarket_event_id=event.event_id,
             lead_hours=lead_hours,
-            model_strategy=profile.model_strategy,
+            model_strategy=analysis.model_strategy,
             trade_action=action,
+            metadata=audit_metadata,
         )
     return ProfileRunResult(
         profile_id=profile.id,
@@ -229,3 +269,16 @@ def _station_id_for_city(city: str) -> str:
     from polytempo.weather.stations import get_station
 
     return get_station(city).icao
+
+
+def _analysis_audit_metadata(
+    profile: TradingProfile,
+    analysis: AnalysisResult,
+) -> dict[str, object]:
+    return {
+        "requested_model_strategy": profile.model_strategy,
+        "resolved_model_strategy": analysis.model_strategy,
+        "fallback_reason": analysis.fallback_reason,
+        "selected_model": analysis.selected_model,
+        "calibration_sigma_source": analysis.calibration_sigma_source,
+    }

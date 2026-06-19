@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.paper.ledger import PostgresLedgerStore, STARTING_BALANCE_USD
 from polytempo.paper.run import open_event_ids, run_profile, run_profiles
 from polytempo.profiles.models import EntryGate, TradingProfile
+from polytempo.storage.paper_postgres import get_paper_connection
 from polytempo.weather.schema import ForecastValues
 
 
@@ -187,3 +189,68 @@ def test_preview_mode_no_opens(paper_db_url: str) -> None:
     assert summary.profiles[0].action == "PREVIEW"
     state = store.read_state("test_argmax_yes")
     assert state.balance_usd == STARTING_BALANCE_USD
+
+
+def test_model_strategy_skip_on_calibration_fallback(
+    paper_db_url: str,
+    tmp_path: Path,
+) -> None:
+    store = PostgresLedgerStore(database_url=paper_db_url)
+    profile = TradingProfile(
+        id="bhu_test",
+        model_strategy="best_historical_updated",
+        trade_strategy="argmax_yes",
+        entry_gate=EntryGate(target_lead_hours=12.0, tolerance_seconds=90.0),
+        calibration_stats_path=tmp_path / "missing.csv",
+        city="london",
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=-0.1,
+        target_date=date(2026, 5, 22),
+        values_c=[24.0],
+        models=["ukmo_uk_deterministic_2km"],
+        init_lead_hours=[12.0],
+        model_run_init_utc=["2026-06-01T00:00:00+00:00"],
+    )
+    event = _event(
+        [
+            _bucket("23°C", yes_ask=0.30, yes_bid=0.25),
+            _bucket("24°C", yes_ask=0.40, yes_bid=0.35),
+            _bucket("25°C", yes_ask=0.25, yes_bid=0.20),
+        ]
+    )
+
+    result = run_profile(
+        store,
+        profile,
+        forecast,
+        event,
+        lead_hours=12.0,
+        enforce_gate=False,
+    )
+
+    assert result.action == "MODEL_STRATEGY_SKIP"
+    assert result.analysis is not None
+    assert result.analysis.fallback_reason == "no_calibration_csv"
+    assert result.opened == []
+    state = store.read_state("bhu_test")
+    assert state.balance_usd == STARTING_BALANCE_USD
+
+    with get_paper_connection(paper_db_url) as conn:
+        row = conn.execute(
+            """
+            SELECT event_type, metadata
+            FROM paper_events
+            WHERE profile_id = %(pid)s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            {"pid": "bhu_test"},
+        ).fetchone()
+    assert row is not None
+    assert row["event_type"] == "GATE_SKIP"
+    assert row["metadata"]["reason"] == "model_strategy_fallback"
+    assert row["metadata"]["requested_model_strategy"] == "best_historical_updated"
+    assert row["metadata"]["resolved_model_strategy"] == "ensemble_spread"

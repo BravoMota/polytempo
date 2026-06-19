@@ -70,6 +70,7 @@ class LedgerStore(Protocol):
         *,
         lead_hours: float | None = None,
         model_strategy: str | None = None,
+        audit_metadata: dict | None = None,
     ) -> list[OpenTrade]: ...
 
     def settle_event(
@@ -163,6 +164,7 @@ class PostgresLedgerStore:
         *,
         lead_hours: float | None = None,
         model_strategy: str | None = None,
+        audit_metadata: dict | None = None,
     ) -> list[OpenTrade]:
         state = self.read_state(profile_id)
         balance = state.balance_usd
@@ -171,6 +173,8 @@ class PostgresLedgerStore:
         }
         opened: list[OpenTrade] = []
         ts = _now_iso()
+        resolved_strategy = model_strategy or analysis.model_strategy
+        event_metadata = dict(audit_metadata or {})
 
         with get_paper_connection(self._database_url) as conn:
             for row in analysis.rows:
@@ -223,8 +227,9 @@ class PostgresLedgerStore:
                         yes_bid=row.yes_bid,
                         yes_ask=row.yes_ask,
                         lead_hours=lead_hours,
-                        model_strategy=model_strategy or analysis.model_strategy,
+                        model_strategy=resolved_strategy,
                         trade_action=row.action,
+                        metadata=event_metadata,
                     ),
                 )
                 opened.append(trade)

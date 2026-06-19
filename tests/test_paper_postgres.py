@@ -34,6 +34,73 @@ def test_initialize_and_insert_open(paper_db_url: str) -> None:
     assert state.open_trades[0].trade_id == "t1"
 
 
+def test_open_trades_stores_resolved_strategy_and_audit_metadata(paper_db_url: str) -> None:
+    from polytempo.analysis import AnalysisResult, AnalysisRow, DistributionBuildInfo
+
+    store = PostgresLedgerStore(database_url=paper_db_url)
+    analysis = AnalysisResult(
+        distribution_mean_c=24.0,
+        distribution_sigma_c=1.0,
+        distribution_build=DistributionBuildInfo(
+            values_used_c=[24.0],
+            default_sigma_c=1.0,
+            lead_hours=30.0,
+            lead_hours_sigma_floor_c=1.0,
+            ensemble_stdev_c=None,
+            mean_c=24.0,
+            sigma_c=1.0,
+            method="test",
+        ),
+        rows=[
+            AnalysisRow(
+                label="24°C",
+                probability=0.5,
+                yes_ask=0.30,
+                edge_yes_pp=10.0,
+                action="BUY_YES",
+                reason="test",
+                confidence="medium",
+                warnings=[],
+                side="YES",
+                yes_bid=0.25,
+            )
+        ],
+        model_strategy="best_historical_updated",
+        selected_model="ukmo_uk_deterministic_2km",
+        calibration_sigma_source="error_std_c",
+        fallback_reason=None,
+    )
+    audit = {
+        "requested_model_strategy": "best_historical_updated",
+        "resolved_model_strategy": "best_historical_updated",
+        "fallback_reason": None,
+        "selected_model": "ukmo_uk_deterministic_2km",
+        "calibration_sigma_source": "error_std_c",
+    }
+    store.open_trades_from_analysis(
+        "bhu_dist_arb_lead30",
+        analysis,
+        "evt-1",
+        lead_hours=30.0,
+        audit_metadata=audit,
+    )
+
+    with get_paper_connection(paper_db_url) as conn:
+        row = conn.execute(
+            """
+            SELECT model_strategy, metadata
+            FROM paper_events
+            WHERE profile_id = %(pid)s AND event_type = 'OPEN'
+            """,
+            {"pid": "bhu_dist_arb_lead30"},
+        ).fetchone()
+
+    assert row is not None
+    assert row["model_strategy"] == "best_historical_updated"
+    assert row["metadata"]["requested_model_strategy"] == "best_historical_updated"
+    assert row["metadata"]["selected_model"] == "ukmo_uk_deterministic_2km"
+
+
 def test_settle_updates_balance(paper_db_url: str) -> None:
     store = PostgresLedgerStore(database_url=paper_db_url)
     from polytempo.analysis import AnalysisResult, AnalysisRow, DistributionBuildInfo

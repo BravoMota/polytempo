@@ -13,6 +13,7 @@ from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
 )
+from polytempo.weather.data_dir import REPO_ROOT
 
 DEFAULT_PROFILES_PATH = Path("config/paper_profiles.yaml")
 
@@ -21,6 +22,12 @@ _MODEL_ABBREV = {
     "best_historical_updated": "bhu",
     "ensemble_spread": "es",
 }
+
+
+def _resolve_repo_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path.resolve()
+    return (REPO_ROOT / path).resolve()
 
 
 def _calibration_path_for_strategy(
@@ -70,6 +77,8 @@ def generate_all_twelve_profiles(
     city: str = "london",
     target_day: str = "tomorrow",
 ) -> list[TradingProfile]:
+    static_path = _resolve_repo_path(calibration_stats_path)
+    updated_path = _resolve_repo_path(updated_calibration_stats_path)
     models = list(model_strategies or MODEL_STRATEGIES)
     trades = list(trade_strategies or known_trade_strategies())
     profiles: list[TradingProfile] = []
@@ -87,8 +96,8 @@ def generate_all_twelve_profiles(
                         ),
                         calibration_stats_path=_calibration_path_for_strategy(
                             model,
-                            static_path=calibration_stats_path,
-                            updated_path=updated_calibration_stats_path,
+                            static_path=static_path,
+                            updated_path=updated_path,
                         ),
                         city=city,
                         target_day=target_day,
@@ -114,6 +123,8 @@ def generate_xsell_profiles(
     """
     if not spec:
         return []
+    static_path = _resolve_repo_path(calibration_stats_path)
+    updated_path = _resolve_repo_path(updated_calibration_stats_path)
     policy_raw = spec.get("exit_policy") or {}
     exit_policy = ExitPolicy(
         take_profit_ratio=float(policy_raw.get("take_profit_ratio", 1.5)),
@@ -144,8 +155,8 @@ def generate_xsell_profiles(
                         ),
                         calibration_stats_path=_calibration_path_for_strategy(
                             model,
-                            static_path=calibration_stats_path,
-                            updated_path=updated_calibration_stats_path,
+                            static_path=static_path,
+                            updated_path=updated_path,
                         ),
                         city=city,
                         target_day=target_day,
@@ -170,13 +181,15 @@ def load_paper_profiles(
     if not lead_gates:
         raise ValueError("lead_gates must be defined in paper_profiles.yaml")
 
-    cal_path = Path(
-        raw.get("calibration_stats_path", DEFAULT_CALIBRATION_STATS_CSV_PATH)
+    cal_path = _resolve_repo_path(
+        Path(raw.get("calibration_stats_path", DEFAULT_CALIBRATION_STATS_CSV_PATH))
     )
-    updated_cal_path = Path(
-        raw.get(
-            "updated_calibration_stats_path",
-            DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+    updated_cal_path = _resolve_repo_path(
+        Path(
+            raw.get(
+                "updated_calibration_stats_path",
+                DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+            )
         )
     )
     city = str(raw.get("city", "london"))

@@ -22,7 +22,8 @@ from polytempo.paper.bot import (  # noqa: E402
     run_tick,
 )
 from polytempo.paper.ledger import PostgresLedgerStore  # noqa: E402
-from polytempo.profiles.load import DEFAULT_PROFILES_PATH  # noqa: E402
+from polytempo.profiles.calibration_ready import filter_profiles_by_calibration  # noqa: E402
+from polytempo.profiles.load import DEFAULT_PROFILES_PATH, load_paper_profiles  # noqa: E402
 from polytempo.storage.paper_postgres import resolve_paper_database_url  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -80,15 +81,20 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     config_path = args.config
-    profiles = reload_profiles(config_path)
 
     if args.once:
+        loaded = [p for p in load_paper_profiles(config_path) if p.enabled]
+        profiles, warnings = filter_profiles_by_calibration(loaded)
+        for message in warnings:
+            print(f"warning: {message}", file=sys.stderr)
         try:
             print(run_preview(profiles))
         except Exception:
             logger.exception("preview failed")
             return 1
         return 0
+
+    profiles = reload_profiles(config_path)
 
     database_url = resolve_paper_database_url(override=args.database_url)
     store = PostgresLedgerStore(database_url=database_url)
