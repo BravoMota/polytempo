@@ -173,3 +173,32 @@ CREATE INDEX IF NOT EXISTS idx_open_meteo_forecast_station_model_target
 
 CREATE INDEX IF NOT EXISTS idx_open_meteo_meta_fetch_cycle
     ON open_meteo_model_meta_snapshots(fetch_cycle_id);
+
+CREATE TABLE IF NOT EXISTS clob_bucket_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    city_slug TEXT NOT NULL,
+    station_id TEXT REFERENCES stations(station_id),
+    polymarket_event_id TEXT NOT NULL,
+    settlement_date TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    bucket_label TEXT NOT NULL,
+    yes_token_id TEXT,
+    yes_bid DOUBLE PRECISION,
+    yes_ask DOUBLE PRECISION,
+    spread DOUBLE PRECISION,
+    liquidity_usd DOUBLE PRECISION,
+    poll_slot_utc TEXT NOT NULL,
+    fetched_at_utc TEXT NOT NULL,
+    lead_hours_to_day_end DOUBLE PRECISION NOT NULL,
+    wall_clock_lead_hours DOUBLE PRECISION NOT NULL,
+    created_at_utc TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_clob_snapshots_event_poll_slot
+    ON clob_bucket_snapshots(polymarket_event_id, poll_slot_utc);
+
+CREATE INDEX IF NOT EXISTS idx_clob_snapshots_city_settlement_poll_slot
+    ON clob_bucket_snapshots(city_slug, settlement_date, poll_slot_utc);
+
+CREATE INDEX IF NOT EXISTS idx_clob_snapshots_event_fetched
+    ON clob_bucket_snapshots(polymarket_event_id, fetched_at_utc);

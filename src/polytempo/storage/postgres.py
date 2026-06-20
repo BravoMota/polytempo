@@ -542,6 +542,30 @@ def insert_open_meteo_forecast_snapshot(
     )
 
 
+def insert_clob_bucket_snapshots(
+    conn: Connection,
+    rows: list[dict[str, object]],
+) -> None:
+    """Insert one row per bucket from a single CLOB poll cycle."""
+    sql = """
+        INSERT INTO clob_bucket_snapshots (
+            city_slug, station_id, polymarket_event_id, settlement_date,
+            market_id, bucket_label, yes_token_id,
+            yes_bid, yes_ask, spread, liquidity_usd,
+            poll_slot_utc, fetched_at_utc,
+            lead_hours_to_day_end, wall_clock_lead_hours, created_at_utc
+        ) VALUES (
+            %(city_slug)s, %(station_id)s, %(polymarket_event_id)s, %(settlement_date)s,
+            %(market_id)s, %(bucket_label)s, %(yes_token_id)s,
+            %(yes_bid)s, %(yes_ask)s, %(spread)s, %(liquidity_usd)s,
+            %(poll_slot_utc)s, %(fetched_at_utc)s,
+            %(lead_hours_to_day_end)s, %(wall_clock_lead_hours)s, %(created_at_utc)s
+        )
+        """
+    for row in rows:
+        conn.execute(sql, row)
+
+
 def upsert_calibration_job_state(
     conn: Connection,
     *,

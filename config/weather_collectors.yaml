@@ -57,3 +57,22 @@ collectors:
         country: gb
         city_slug: london
         pws_id: null
+
+  - name: polymarket_clob
+    enabled: true
+    source: polymarket_clob
+    forecast_interval_seconds: 300
+    forecast_anchor_time_utc: "00:00"
+    observations_interval_seconds: 86400
+    observations_anchor_time_utc: "00:00"
+    target_horizon_days: 4
+    stations:
+      - station_id: EGLC
+        station_type: icao
+        name: London City Airport
+        timezone: Europe/London
+        lat: 51.5053
+        lon: 0.0553
+        country: gb
+        city_slug: london
+        pws_id: null
