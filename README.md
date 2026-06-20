@@ -11,7 +11,7 @@ Current status: **all plan phases (0–10) complete**, and the project has grown
 - **Trade strategies** — fourteen: `argmax_yes`, `argmax_no`, `dist_arb`, `mid_band`, `topk_yes`, `topk_no`, `max_edge`, `edge_band`, `book_arb`, `coverage_band`, `max_roi`, `dist_arb_tight`, `dist_arb_kelly`, `tail_fade` (`strategy/`, registered in `profiles/registry.py`).
 - **Paper trading** — **378 profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates) from `config/paper_profiles.yaml`; each profile has its own $1000 bankroll in **PostgreSQL** (`polytempo_paper`). The always-on bot (`scripts/run_paper_bot.py`) opens trades at each profile's exact lead-hour gate and settles resolved events.
 - **Data collection** — Wunderground collectors into Postgres (`scripts/run_collector.py`) and nightly calibration updates (`scripts/run_daily_calibration.py`).
-- **Reports** — every `polytempo live` run writes a Markdown report under `reports/`.
+- **Reports** — every `polytempo live` run writes a Markdown report under `reports/live/`.
 
 Live API smoke: `POLYTEMPO_RUN_LIVE_API_TESTS=1 pytest tests/test_pipeline.py` (opt-in; may still skip if no parseable event).
 

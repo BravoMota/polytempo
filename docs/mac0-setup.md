@@ -7,6 +7,7 @@ Operator runbook for running PolyTempo on **mac0** under user **`jnlow`**, super
 | Repo path | `/Users/jnlow/projects/PolyTempo` |
 | Run-as user | `jnlow` |
 | Logs | `logs/*.out.log`, `logs/*.err.log` (gitignored) |
+| Reports | `reports/live/` (polytempo live), `reports/health/` (health bundles) |
 | Secrets | `.env` in repo root (not committed) |
 
 ## Jobs
@@ -185,6 +186,17 @@ launchctl print system/com.polytempo.db-backup
 
 tail -f logs/collector.err.log
 tail -f logs/paper-bot.err.log
+
+# Production health bundle (launchd + logs + DB → reports/health/)
+deploy/bin/polytempo-health.sh
+# Attach reports/health/health_<UTC>.md to an LLM; follow the embedded review prompt.
+```
+
+One-time migration if live reports were written to `reports/` root (before `reports/live/`):
+
+```bash
+mkdir -p reports/live reports/health
+mv reports/live_*.md reports/live/ 2>/dev/null || true
 ```
 
 Calibration health (from any machine with DB access):
@@ -215,6 +227,8 @@ sudo deploy/bin/polytempo-service restart collector
 sudo deploy/bin/polytempo-service restart paper-bot
 sudo deploy/bin/polytempo-service run calibration
 sudo deploy/bin/polytempo-service run db-backup
+
+deploy/bin/polytempo-health.sh   # LLM-ready production bundle → reports/health/
 ```
 
 ---

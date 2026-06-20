@@ -54,7 +54,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run **all ac
   7. **Mode branch:**
     - `**preview`**: analysis only — no trades opened. (Resolved events are still settled against the Postgres store.)
     - `**trade**`: per-profile **dedupe** — a profile that already has an open trade on `event_id` returns `DEDUPED_OPEN_TRADES_EXIST`; otherwise OPEN rows are written to the paper Postgres database (`POLYTEMPO_PAPER_DATABASE_URL`).
-  8. **Markdown report** written to `reports/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-profile result tables + opened/settled trades).
+  8. **Markdown report** written to `reports/live/live_<UTC>.md` with sections: Inputs, Event, Forecast, Distribution, Run outcome (per-profile result tables + opened/settled trades).
   9. **Stdout summary** — per-profile actions; in trade mode, per-profile balances after writes.
 
 ### Flags
@@ -442,6 +442,27 @@ sudo deploy/bin/polytempo-service status all
 sudo deploy/bin/polytempo-service restart collector
 sudo deploy/bin/polytempo-service run calibration
 sudo deploy/bin/polytempo-service run db-backup
+```
+
+### polytempo-health (production bundle)
+
+Collect launchd status, log tails, and DB freshness into a raw evidence dump for LLM review:
+
+```bash
+deploy/bin/polytempo-health.sh
+deploy/bin/polytempo-health.sh /tmp/health.md   # custom output path
+deploy/bin/polytempo-health.sh --no-db            # skip SQL when DB unreachable
+```
+
+Default output: `reports/health/health_<UTC>.md`. Each file embeds an **LLM review prompt** at the top — attach the file to an agent and say *“follow the LLM review prompt in the attached file.”*
+
+Optional env tunables (see `.env.example`): `POLYTEMPO_HEALTH_ERR_LINES` (default 80), `POLYTEMPO_HEALTH_OUT_LINES` (default 30).
+
+One-time migration if old live reports sit at `reports/` root:
+
+```bash
+mkdir -p reports/live reports/health
+mv reports/live_*.md reports/live/ 2>/dev/null || true
 ```
 
 Smoke before install uses `deploy/bin/run-with-env.sh` (sources `.env`, prepends Homebrew to PATH for `pg_dump`).

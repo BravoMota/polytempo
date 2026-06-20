@@ -41,7 +41,7 @@ class HttpCall:
 class RunReporter(AbstractContextManager["RunReporter"]):
     """Markdown run reporter with automatic httpx.get capture."""
 
-    output_dir: str | Path = "reports"
+    output_dir: str | Path = "reports/live"
     filename: str | None = None
     title: str = "PolyTempo live run"
 
