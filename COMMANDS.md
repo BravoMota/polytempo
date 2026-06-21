@@ -209,6 +209,30 @@ List London weather events; pass `--date` to filter Gamma by settlement day.
 polytempo paper list-london --limit 20 --date 2026-05-23
 ```
 
+### paper performance report
+
+Daily realized P/L matrix (markdown). Rows = wallets; columns = UTC calendar days. Cell = that day's realized P/L as **% of start-of-day balance**. Includes `since` (first OPEN) so new wallets aren't judged on stale cumulative totals from `paper status`.
+
+```bash
+deploy/bin/run-with-env.sh scripts/report_performance.py
+deploy/bin/run-with-env.sh scripts/report_performance.py --days 14 --top 0          # all profiles
+deploy/bin/run-with-env.sh scripts/report_performance.py --group model_trade --top 20
+deploy/bin/run-with-env.sh scripts/report_performance.py --min-settled-days 3 --sort balance
+deploy/bin/run-with-env.sh scripts/report_performance.py --out reports/performance/latest.md
+```
+
+| Flag | Meaning |
+| ---- | ------- |
+| `--days` | Trailing UTC days (default `7`) |
+| `--end` | Last day inclusive `YYYY-MM-DD` (default: today UTC) |
+| `--group` | `profile` (default), `trade`, or `model_trade` rollup |
+| `--top` | Max rows sorted by `--sort` (default `40`; `0` = all) |
+| `--min-settled-days` | Drop rows with fewer than N settlement days in the window |
+| `--sort` | `7d` (default), `balance`, or `name` |
+| `--out` | Write markdown file (default: stdout) |
+
+Active-sell A/B vs hold twins: `deploy/bin/run-with-env.sh scripts/report_xsell.py`.
+
 ## fetch-historical-forecasts
 
 Fetch Open-Meteo Single Runs and cache **full API JSON** under `data/weather/raw/single-runs/`. In date-range mode, also append parsed Tmax rows to JSONL. Offline only — not used by `polytempo live`.
