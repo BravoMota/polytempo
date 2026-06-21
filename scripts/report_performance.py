@@ -177,11 +177,8 @@ def _window_days(*, days: int, end: date) -> list[date]:
 
 
 def _sum_window_pct(perf: ProfilePerf, window: list[date]) -> float:
-    pnl = sum(perf.daily[d].pnl_usd for d in window if d in perf.daily)
-    sod = sum(perf.daily[d].sod_balance_usd for d in window if d in perf.daily)
-    if sod <= 0:
-        return 0.0
-    return 100.0 * pnl / sod
+    """Sum of the row's daily percentages over the window (Σ of the cells)."""
+    return sum(perf.daily[d].pct for d in window if d in perf.daily)
 
 
 def _fmt_cell(perf: ProfilePerf, d: date) -> str:
@@ -201,7 +198,7 @@ def _render_table(
 ) -> str:
     day_headers = [d.strftime("%m-%d") for d in window]
     header = (
-        f"| wallet | since | bal | 7d Σ% | {' | '.join(day_headers)} |"
+        f"| wallet | since | bal | {len(window)}d Σ% | {' | '.join(day_headers)} |"
     )
     sep = (
         "|---|---:|---:|---:|" + "|".join(["---:"] * len(window)) + "|"
@@ -353,6 +350,12 @@ def main() -> int:
         args.out.write_text(report, encoding="utf-8")
         print(f"wrote {args.out}")
     else:
+        # Report uses non-ASCII glyphs (Σ, ·, —); avoid crashing on a
+        # legacy console encoding (e.g. cp1252 on Windows).
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
         print(report)
     return 0
 
