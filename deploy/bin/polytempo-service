@@ -3,7 +3,7 @@
 set -euo pipefail
 
 DOMAIN="system"
-ALL_JOBS=(collector paper-bot calibration db-backup)
+ALL_JOBS=(collector paper-bot calibration db-backup performance-export performance-viewer)
 
 usage() {
   cat <<EOF
@@ -11,8 +11,8 @@ Usage: polytempo-service <command> [job]
 
 Commands:
   status [job|all]              launchctl print for one or all jobs
-  restart collector|paper-bot|all   kickstart -k long-lived jobs
-  run calibration|db-backup     kickstart calendar jobs (--once via plist)
+  restart collector|paper-bot|performance-viewer|all   kickstart -k long-lived jobs
+  run calibration|db-backup|performance-export     kickstart calendar jobs (--once via plist)
 
 Jobs: ${ALL_JOBS[*]}
 EOF
@@ -24,6 +24,8 @@ resolve_label() {
     paper-bot) echo com.polytempo.paper-bot ;;
     calibration) echo com.polytempo.calibration ;;
     db-backup) echo com.polytempo.db-backup ;;
+    performance-export) echo com.polytempo.performance-export ;;
+    performance-viewer) echo com.polytempo.performance-viewer ;;
     *)
       echo "Unknown job: $1" >&2
       exit 1
@@ -33,14 +35,14 @@ resolve_label() {
 
 is_long_lived() {
   case "$1" in
-    collector | paper-bot) return 0 ;;
+    collector | paper-bot | performance-viewer) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 is_calendar() {
   case "$1" in
-    calibration | db-backup) return 0 ;;
+    calibration | db-backup | performance-export) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -70,10 +72,11 @@ cmd_restart() {
   if [[ "$target" == "all" ]]; then
     cmd_restart collector
     cmd_restart paper-bot
+    cmd_restart performance-viewer
     return
   fi
   if ! is_long_lived "$target"; then
-    echo "restart applies only to long-lived jobs: collector, paper-bot, all" >&2
+    echo "restart applies only to long-lived jobs: collector, paper-bot, performance-viewer, all" >&2
     exit 1
   fi
   local label
@@ -89,7 +92,7 @@ cmd_run() {
     exit 1
   fi
   if ! is_calendar "$target"; then
-    echo "run applies only to calendar jobs: calibration, db-backup" >&2
+    echo "run applies only to calendar jobs: calibration, db-backup, performance-export" >&2
     exit 1
   fi
   local label

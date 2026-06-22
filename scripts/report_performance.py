@@ -12,12 +12,13 @@ date or 00:00Z the next UTC date.
 Includes ``since`` (first OPEN) so new wallets are not compared on stale
 cumulative totals alone.
 
-Reads the live paper DB; no writes unless ``--out`` is set.
+Reads the live paper DB; no writes unless ``--out`` or ``--csv`` is set.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -39,10 +40,26 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+CSV_COLUMNS = [
+    "profile_id",
+    "model",
+    "trade",
+    "lead_hours",
+    "exit_mode",
+    "since",
+    "settlement_date",
+    "pnl_usd",
+    "pnl_pct",
+    "sod_balance_usd",
+    "n_trades",
+]
+
+
 @dataclass(frozen=True)
 class DayPnl:
     pnl_usd: float
     sod_balance_usd: float
+    n_trades: int = 0
 
     @property
     def pct(self) -> float:
@@ -59,6 +76,8 @@ class ProfilePerf:
     since: date | None
     balance_usd: float
     daily: dict[date, DayPnl]
+    lead_hours: float | None = None
+    exit_mode: str = ""
 
 
 def _fetch_events(conn) -> list[dict]:
@@ -112,10 +131,14 @@ def _realization_day(
     return ts.date()
 
 
+def _in_window(reporting_day: date, window: set[date] | None) -> bool:
+    return window is None or reporting_day in window
+
+
 def _replay_profile(
     rows: list[dict],
     *,
-    window: set[date],
+    window: set[date] | None,
     event_settlement_dates: dict[str, date],
 ) -> ProfilePerf | None:
     if not rows:
@@ -126,6 +149,7 @@ def _replay_profile(
     open_stakes: dict[str, float] = {}
     open_event_ids: dict[str, str] = {}
     daily_pnl_usd: dict[date, float] = defaultdict(float)
+    daily_n_trades: dict[date, int] = defaultdict(int)
     sod_balance: dict[date, float] = {}
     since: date | None = None
 
@@ -157,13 +181,22 @@ def _replay_profile(
             open_event_ids.pop(trade_id, None)
             payout = float(row["payout_usd"] or 0.0)
             balance += payout
-            if reporting_day in window:
+            if _in_window(reporting_day, window):
                 daily_pnl_usd[reporting_day] += payout - stake
+                daily_n_trades[reporting_day] += 1
+
+    if window is None:
+        day_keys = sorted(daily_pnl_usd)
+    else:
+        day_keys = [d for d in window if d in daily_pnl_usd]
 
     daily = {
-        d: DayPnl(pnl_usd=daily_pnl_usd[d], sod_balance_usd=sod_balance.get(d, balance))
-        for d in window
-        if d in daily_pnl_usd
+        d: DayPnl(
+            pnl_usd=daily_pnl_usd[d],
+            sod_balance_usd=sod_balance.get(d, balance),
+            n_trades=daily_n_trades[d],
+        )
+        for d in day_keys
     }
     return ProfilePerf(
         profile_id=profile_id,
@@ -181,7 +214,9 @@ def _attach_profile_meta(perfs: list[ProfilePerf], config: Path) -> list[Profile
     for perf in perfs:
         meta = by_id.get(perf.profile_id)
         if meta is None:
+            out.append(perf)
             continue
+        exit_mode = "xsell" if meta.exit_policy is not None else "hold"
         out.append(
             ProfilePerf(
                 profile_id=perf.profile_id,
@@ -190,6 +225,8 @@ def _attach_profile_meta(perfs: list[ProfilePerf], config: Path) -> list[Profile
                 since=perf.since,
                 balance_usd=perf.balance_usd,
                 daily=perf.daily,
+                lead_hours=meta.entry_gate.target_lead_hours,
+                exit_mode=exit_mode,
             )
         )
     return out
@@ -215,7 +252,8 @@ def _rollup(
             sod = sum(
                 m.daily[d].sod_balance_usd for m in members if d in m.daily
             ) or (len(members) * STARTING_BALANCE_USD)
-            daily[d] = DayPnl(pnl_usd=pnl, sod_balance_usd=sod)
+            n_trades = sum(m.daily[d].n_trades for m in members if d in m.daily)
+            daily[d] = DayPnl(pnl_usd=pnl, sod_balance_usd=sod, n_trades=n_trades)
         rolled.append(
             ProfilePerf(
                 profile_id=label_fn(key, members),
@@ -272,19 +310,11 @@ def _render_table(
     return "\n".join(lines)
 
 
-def build_report(
+def _load_perfs(
     *,
-    days: int,
-    end: date,
-    group: str,
+    window: set[date] | None,
     config: Path,
-    min_settled_days: int,
-    top: int | None,
-    sort_by: str,
-) -> str:
-    window = _window_days(days=days, end=end)
-    window_set = set(window)
-
+) -> list[ProfilePerf]:
     url = resolve_paper_database_url()
     with get_paper_connection(url) as conn:
         rows = _fetch_events(conn)
@@ -299,13 +329,71 @@ def build_report(
     for profile_rows in by_profile.values():
         perf = _replay_profile(
             profile_rows,
-            window=window_set,
+            window=window,
             event_settlement_dates=event_settlement_dates,
         )
         if perf is not None:
             perfs.append(perf)
 
-    perfs = _attach_profile_meta(perfs, config)
+    return _attach_profile_meta(perfs, config)
+
+
+def build_csv_rows(
+    *,
+    window: set[date] | None,
+    config: Path,
+) -> list[dict]:
+    perfs = _load_perfs(window=window, config=config)
+    rows: list[dict] = []
+    for perf in sorted(perfs, key=lambda p: p.profile_id):
+        since_s = perf.since.isoformat() if perf.since else ""
+        lead_s = "" if perf.lead_hours is None else str(int(perf.lead_hours))
+        for settlement_date in sorted(perf.daily):
+            day = perf.daily[settlement_date]
+            if day.n_trades <= 0:
+                continue
+            rows.append(
+                {
+                    "profile_id": perf.profile_id,
+                    "model": perf.model_strategy,
+                    "trade": perf.trade_strategy,
+                    "lead_hours": lead_s,
+                    "exit_mode": perf.exit_mode,
+                    "since": since_s,
+                    "settlement_date": settlement_date.isoformat(),
+                    "pnl_usd": round(day.pnl_usd, 4),
+                    "pnl_pct": round(day.pct, 4),
+                    "sod_balance_usd": round(day.sod_balance_usd, 4),
+                    "n_trades": day.n_trades,
+                }
+            )
+    return rows
+
+
+def write_csv(path: Path, rows: list[dict]) -> None:
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(f"# generated_utc: {generated}\n")
+        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def build_report(
+    *,
+    days: int,
+    end: date,
+    group: str,
+    config: Path,
+    min_settled_days: int,
+    top: int | None,
+    sort_by: str,
+) -> str:
+    window = _window_days(days=days, end=end)
+    window_set = set(window)
+
+    perfs = _load_perfs(window=window_set, config=config)
 
     if group == "trade":
         perfs = _rollup(
@@ -400,9 +488,31 @@ def main() -> int:
         default=None,
         help="Write markdown here (default: stdout only)",
     )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        default=None,
+        help="Write long-format CSV (use with --all for full history)",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="CSV: every settlement date since first trade (ignores --days/--group/--top/--sort)",
+    )
     args = parser.parse_args()
 
     end = date.fromisoformat(args.end) if args.end else datetime.now(timezone.utc).date()
+
+    if args.csv:
+        if args.all:
+            window_set: set[date] | None = None
+        else:
+            window_set = set(_window_days(days=args.days, end=end))
+        csv_rows = build_csv_rows(window=window_set, config=args.config)
+        write_csv(args.csv, csv_rows)
+        print(f"wrote {args.csv} ({len(csv_rows)} rows)")
+        return 0
+
     top = None if args.top == 0 else args.top
 
     report = build_report(

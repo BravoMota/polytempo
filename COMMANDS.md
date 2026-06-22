@@ -211,7 +211,7 @@ polytempo paper list-london --limit 20 --date 2026-05-23
 
 ### paper performance report
 
-Daily realized P/L matrix (markdown). Rows = wallets; columns = UTC calendar days. Cell = that day's realized P/L as **% of start-of-day balance**. Includes `since` (first OPEN) so new wallets aren't judged on stale cumulative totals from `paper status`.
+Daily realized P/L matrix (markdown). Rows = wallets; columns = market settlement dates. Cell = that day's realized P/L as **% of start-of-day balance**. Includes `since` (first OPEN) so new wallets aren't judged on stale cumulative totals from `paper status`.
 
 ```bash
 deploy/bin/run-with-env.sh scripts/report_performance.py
@@ -221,15 +221,34 @@ deploy/bin/run-with-env.sh scripts/report_performance.py --min-settled-days 3 --
 deploy/bin/run-with-env.sh scripts/report_performance.py --out reports/performance/latest.md
 ```
 
+**Full-history CSV** (long format, one row per wallet × settlement date; strategy knobs as columns):
+
+```bash
+deploy/bin/run-with-env.sh scripts/report_performance.py --all --csv reports/performance/daily.csv
+deploy/bin/run-with-env.sh scripts/report_performance.py --days 14 --csv reports/performance/daily.csv
+```
+
+**Viewer** (offline; reads CSV — install once: `pip install -e ".[view]"`):
+
+```bash
+streamlit run scripts/view_performance.py -- reports/performance/daily.csv
+```
+
+On mac0 the viewer runs as LaunchDaemon on **127.0.0.1:8501** (SSH tunnel: `ssh -L 8501:127.0.0.1:8501 jnlow@mac0`). Sidebar **Refresh from DB** re-runs the export; nightly job at **03:30** writes `reports/performance/daily.csv`.
+
+`reports/` is gitignored — CSV and markdown snapshots are local/generated.
+
 | Flag | Meaning |
 | ---- | ------- |
-| `--days` | Trailing UTC days (default `7`) |
-| `--end` | Last day inclusive `YYYY-MM-DD` (default: today UTC) |
-| `--group` | `profile` (default), `trade`, or `model_trade` rollup |
-| `--top` | Max rows sorted by `--sort` (default `40`; `0` = all) |
+| `--days` | Trailing settlement dates (default `7`) |
+| `--end` | Last settlement date inclusive `YYYY-MM-DD` (default: today UTC) |
+| `--group` | `profile` (default), `trade`, or `model_trade` rollup (markdown only) |
+| `--top` | Max rows sorted by `--sort` (default `40`; `0` = all; markdown only) |
 | `--min-settled-days` | Drop rows with fewer than N settlement days in the window |
-| `--sort` | `7d` (default), `balance`, or `name` |
+| `--sort` | `7d` (default), `balance`, or `name` (markdown only) |
 | `--out` | Write markdown file (default: stdout) |
+| `--csv` | Write long-format CSV |
+| `--all` | CSV: every settlement date since first trade (ignores `--days` window) |
 
 Active-sell A/B vs hold twins: `deploy/bin/run-with-env.sh scripts/report_xsell.py`.
 
@@ -446,7 +465,7 @@ To debug open_meteo only, temporarily set `wunderground.enabled: false` in YAML.
 
 ## Production supervision (mac0)
 
-Four jobs on mac0 run as user `jnlow` from `/Users/jnlow/projects/PolyTempo`, supervised by LaunchDaemons. Full runbook: [docs/mac0-setup.md](docs/mac0-setup.md).
+Six jobs on mac0 run as user `jnlow` from `/Users/jnlow/projects/PolyTempo`, supervised by LaunchDaemons. Full runbook: [docs/mac0-setup.md](docs/mac0-setup.md).
 
 
 | Label                       | Schedule                        |
@@ -455,6 +474,8 @@ Four jobs on mac0 run as user `jnlow` from `/Users/jnlow/projects/PolyTempo`, su
 | `com.polytempo.paper-bot`   | long-lived                      |
 | `com.polytempo.calibration` | **01:00 mac0 local** (`--once`) |
 | `com.polytempo.db-backup`   | **02:00 mac0 local** (`--once`) |
+| `com.polytempo.performance-export` | **03:30 mac0 local** (`--all --csv`) |
+| `com.polytempo.performance-viewer` | long-lived **127.0.0.1:8501** |
 
 
 ```bash
@@ -464,8 +485,10 @@ sudo deploy/bin/install-launchd.sh
 # day-to-day (as jnlow, optional NOPASSWD sudo — see deploy/sudoers.d/polytempo.example):
 sudo deploy/bin/polytempo-service status all
 sudo deploy/bin/polytempo-service restart collector
+sudo deploy/bin/polytempo-service restart performance-viewer
 sudo deploy/bin/polytempo-service run calibration
 sudo deploy/bin/polytempo-service run db-backup
+sudo deploy/bin/polytempo-service run performance-export
 ```
 
 ### polytempo-health (production bundle)

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon: long-lived Streamlit performance viewer (127.0.0.1:8501).
+  Reads reports/performance/daily.csv; use SSH/Tailscale to access.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.performance-viewer</string>
+
+    <key>UserName</key>
+    <string>jnlow</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
+        <string>-m</string>
+        <string>streamlit</string>
+        <string>run</string>
+        <string>scripts/view_performance.py</string>
+        <string>--</string>
+        <string>reports/performance/daily.csv</string>
+        <string>--server.address=127.0.0.1</string>
+        <string>--server.port=8501</string>
+        <string>--server.headless=true</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jnlow/projects/PolyTempo</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/performance-viewer.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/performance-viewer.err.log</string>
+</dict>
+</plist>

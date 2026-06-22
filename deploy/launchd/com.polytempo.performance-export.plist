@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon: nightly performance CSV export at 03:30 mac0 local time.
+  Env from /Users/jnlow/projects/PolyTempo/.env via run-with-env.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.performance-export</string>
+
+    <key>UserName</key>
+    <string>jnlow</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
+        <string>scripts/report_performance.py</string>
+        <string>--all</string>
+        <string>--csv</string>
+        <string>reports/performance/daily.csv</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jnlow/projects/PolyTempo</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/performance-export.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/performance-export.err.log</string>
+</dict>
+</plist>

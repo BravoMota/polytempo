@@ -6,6 +6,9 @@ import importlib.util
 import sys
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_PATH = REPO_ROOT / "scripts" / "report_performance.py"
@@ -107,3 +110,113 @@ def test_close_on_resolution_day_buckets_with_market_settlement_date() -> None:
     )
     assert perf is not None
     assert perf.daily[date(2026, 6, 19)].pnl_usd == 4.0
+
+
+def test_replay_all_window_records_every_settlement_date() -> None:
+    event_dates = {
+        "evt-17": date(2026, 6, 17),
+        "evt-19": date(2026, 6, 19),
+    }
+    rows = [
+        {
+            "profile_id": "p1",
+            "event_type": "OPEN",
+            "trade_id": "t17",
+            "ts_utc": "2026-06-15T18:00:00+00:00",
+            "stake_usd": 100.0,
+            "payout_usd": None,
+            "polymarket_event_id": "evt-17",
+        },
+        {
+            "profile_id": "p1",
+            "event_type": "SETTLE",
+            "trade_id": "t17",
+            "ts_utc": "2026-06-18T00:00:00+00:00",
+            "stake_usd": None,
+            "payout_usd": 150.0,
+            "polymarket_event_id": "evt-17",
+        },
+        {
+            "profile_id": "p1",
+            "event_type": "OPEN",
+            "trade_id": "t19",
+            "ts_utc": "2026-06-17T18:00:00+00:00",
+            "stake_usd": 50.0,
+            "payout_usd": None,
+            "polymarket_event_id": "evt-19",
+        },
+        {
+            "profile_id": "p1",
+            "event_type": "SETTLE",
+            "trade_id": "t19",
+            "ts_utc": "2026-06-20T00:00:00+00:00",
+            "stake_usd": None,
+            "payout_usd": 0.0,
+            "polymarket_event_id": "evt-19",
+        },
+    ]
+    perf = report._replay_profile(rows, window=None, event_settlement_dates=event_dates)
+    assert perf is not None
+    assert set(perf.daily) == {date(2026, 6, 17), date(2026, 6, 19)}
+    assert perf.daily[date(2026, 6, 17)].n_trades == 1
+    assert perf.daily[date(2026, 6, 19)].n_trades == 1
+
+
+def test_build_csv_row_fields() -> None:
+    perf = report.ProfilePerf(
+        profile_id="bh_dist_arb_lead42",
+        trade_strategy="dist_arb",
+        model_strategy="best_historical",
+        since=date(2026, 6, 10),
+        balance_usd=1100.0,
+        daily={
+            date(2026, 6, 17): report.DayPnl(
+                pnl_usd=50.0, sod_balance_usd=1000.0, n_trades=2
+            ),
+        },
+        lead_hours=42.0,
+        exit_mode="hold",
+    )
+
+    def fake_load(*, window, config):
+        return [perf]
+
+    with patch.object(report, "_load_perfs", side_effect=fake_load):
+        rows = report.build_csv_rows(window=None, config=Path("config/paper_profiles.yaml"))
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["profile_id"] == "bh_dist_arb_lead42"
+    assert row["model"] == "best_historical"
+    assert row["trade"] == "dist_arb"
+    assert row["lead_hours"] == "42"
+    assert row["exit_mode"] == "hold"
+    assert row["since"] == "2026-06-10"
+    assert row["settlement_date"] == "2026-06-17"
+    assert row["pnl_usd"] == 50.0
+    assert row["pnl_pct"] == pytest.approx(5.0)
+    assert row["n_trades"] == 2
+
+
+def test_write_csv(tmp_path: Path) -> None:
+    out = tmp_path / "perf.csv"
+    rows = [
+        {
+            "profile_id": "p1",
+            "model": "best_historical",
+            "trade": "dist_arb",
+            "lead_hours": "42",
+            "exit_mode": "hold",
+            "since": "2026-06-10",
+            "settlement_date": "2026-06-17",
+            "pnl_usd": 10.0,
+            "pnl_pct": 1.0,
+            "sod_balance_usd": 1000.0,
+            "n_trades": 1,
+        }
+    ]
+    report.write_csv(out, rows)
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith("# generated_utc:")
+    assert "profile_id,model,trade" in text
+    assert "p1,best_historical,dist_arb" in text

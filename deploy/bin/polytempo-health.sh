@@ -11,7 +11,7 @@ DEPLOY_LOG_LINES=30
 SKIP_DB=0
 OUT=""
 
-JOBS=(collector paper-bot calibration db-backup)
+JOBS=(collector paper-bot calibration db-backup performance-export performance-viewer)
 
 usage() {
   cat <<EOF
@@ -124,11 +124,14 @@ Give a TLDR in this exact structure:
 - paper-bot: OK / issue — …
 - calibration: OK / issue — …
 - db-backup: OK / issue — …
+- performance-export: OK / issue — …
+- performance-viewer: OK / issue — …
 
 **Data freshness**
 - collector_state: OK / stale — last success …
 - paper bot last_tick: OK / stale — …
 - calibration: OK / stale — last success …
+- performance_csv: OK / stale — generated_utc …
 
 **Action needed:** none | list concrete next steps (commands only, no speculation).
 
@@ -138,6 +141,7 @@ Rules:
 - Long-lived jobs should be state=running with a PID.
 - paper_bot_state.last_tick should be within ~20 minutes.
 - calibration_job_state.last_success_at_utc should be within ~36 hours.
+- reports/performance/daily.csv generated_utc should be within ~36 hours.
 - Do not quote log lines; summarize only.
 - Do not invent issues not supported by this bundle.
 EOF
@@ -230,10 +234,24 @@ write_paper_db() {
   } | fenced
 }
 
+write_performance_csv() {
+  section "Performance CSV"
+  local csv="$REPO/reports/performance/daily.csv"
+  if [[ ! -f "$csv" ]]; then
+    echo "(missing $csv)" | fenced
+    return
+  fi
+  {
+    head -n 1 "$csv"
+    echo "mtime: $(date -r "$csv" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || stat -f %Sm -t '%Y-%m-%dT%H:%M:%SZ' "$csv")"
+    echo "size_bytes: $(wc -c <"$csv" | tr -d ' ')"
+  } | fenced
+}
+
 write_reviewer_checklist() {
   section "Reviewer checklist"
   fenced <<'EOF'
-- Long-lived jobs (collector, paper-bot): state=running, PID set
+- Long-lived jobs (collector, paper-bot, performance-viewer): state=running, PID set
 - paper_bot_state.last_tick: within ~20 minutes
 - calibration_job_state.last_success_at_utc: within ~36 hours
 - collector_state.last_success_at_utc: recent per expected slot cadence
@@ -261,6 +279,7 @@ main() {
       write_log_tail "$job" out "$LINES_OUT"
     done
     write_deploy_log
+    write_performance_csv
     if [[ "$SKIP_DB" -eq 0 ]]; then
       write_weather_db
       write_paper_db

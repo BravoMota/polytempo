@@ -8,6 +8,8 @@ Plists in this directory target:
 - User: `jnlow`
 - Calibration: **01:00 local** (`--once`)
 - DB backup: **02:00 local** (`--once`)
+- Performance CSV export: **03:30 local** (`report_performance.py --all --csv`)
+- Performance viewer: long-lived Streamlit on **127.0.0.1:8501**
 
 ## Verify calibration is working
 

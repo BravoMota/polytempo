@@ -18,6 +18,8 @@ Operator runbook for running PolyTempo on **mac0** under user **`jnlow`**, super
 | `com.polytempo.paper-bot` | `scripts/run_paper_bot.py` | long-lived | lead-time gates |
 | `com.polytempo.calibration` | `scripts/run_daily_calibration.py --once` | calendar | **01:00 mac0 local** |
 | `com.polytempo.db-backup` | `scripts/backup_databases.py --once` | calendar | **02:00 mac0 local** |
+| `com.polytempo.performance-export` | `scripts/report_performance.py --all --csv …` | calendar | **03:30 mac0 local** |
+| `com.polytempo.performance-viewer` | Streamlit `scripts/view_performance.py` | long-lived | **127.0.0.1:8501** (SSH/Tailscale) |
 
 Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad`.
 
@@ -73,7 +75,7 @@ cd PolyTempo
 cd /Users/jnlow/projects/PolyTempo
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,view]"
 ```
 
 ---
@@ -127,9 +129,19 @@ deploy/bin/run-with-env.sh scripts/run_collector.py --once
 deploy/bin/run-with-env.sh scripts/run_paper_bot.py --once
 deploy/bin/run-with-env.sh scripts/run_daily_calibration.py --once
 deploy/bin/run-with-env.sh scripts/backup_databases.py --once
+deploy/bin/run-with-env.sh scripts/report_performance.py --all --csv reports/performance/daily.csv
+deploy/bin/run-with-env.sh -m streamlit run scripts/view_performance.py -- reports/performance/daily.csv --server.headless=true --server.address=127.0.0.1
 ```
 
 Fix any connectivity or missing-tool errors before installing daemons.
+
+**Performance viewer access** (after launchd install): from your laptop,
+
+```bash
+ssh -L 8501:127.0.0.1:8501 jnlow@mac0
+```
+
+Then open http://127.0.0.1:8501 . Nightly job refreshes `reports/performance/daily.csv`; use sidebar **Refresh from DB** for ad-hoc export.
 
 ---
 
@@ -252,7 +264,7 @@ Requires passwordless sudo for `polytempo-service` (see step 11). Manual equival
 ```bash
 cd /Users/jnlow/projects/polytempo
 git pull
-pip install -e ".[dev]"   # if dependencies changed
+pip install -e ".[dev,view]"   # if dependencies changed
 sudo deploy/bin/polytempo-service restart all
 ```
 

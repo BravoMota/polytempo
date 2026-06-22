@@ -11,6 +11,8 @@ LABELS=(
   com.polytempo.paper-bot
   com.polytempo.calibration
   com.polytempo.db-backup
+  com.polytempo.performance-export
+  com.polytempo.performance-viewer
 )
 
 usage() {
