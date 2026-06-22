@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Daily realized P/L matrix for paper wallets (profiles).
 
-Rows: one wallet per profile (or rolled up by trade/model). Columns: calendar
-days (default last 7 UTC). Cell: realized P/L that day as % of start-of-day
-balance. Includes ``since`` (first OPEN) so new wallets are not compared on
-stale cumulative totals alone.
+Rows: one wallet per profile (or rolled up by trade/model). Columns: market
+settlement dates (weather days, default last 7 ending ``--end``). Cell:
+realized P/L for positions on that settlement date as % of balance immediately
+before the first realization that day. ``SETTLE``/``CLOSE`` rows are bucketed by
+the Polymarket event's settlement date (not the ledger timestamp), because Gamma
+often resolves shortly after local end-of-day — e.g. 23:55Z on the prior UTC
+date or 00:00Z the next UTC date.
+
+Includes ``since`` (first OPEN) so new wallets are not compared on stale
+cumulative totals alone.
 
 Reads the live paper DB; no writes unless ``--out`` is set.
 """
@@ -59,17 +65,58 @@ def _fetch_events(conn) -> list[dict]:
     return conn.execute(
         """
         SELECT id, profile_id, event_type, trade_id, ts_utc,
-               stake_usd, payout_usd
+               stake_usd, payout_usd, polymarket_event_id
         FROM paper_events
         ORDER BY profile_id, id ASC
         """
     ).fetchall()
 
 
+def _collect_event_ids(rows: list[dict]) -> set[str]:
+    ids: set[str] = set()
+    for row in rows:
+        eid = row.get("polymarket_event_id")
+        if eid:
+            ids.add(str(eid))
+    return ids
+
+
+def _build_event_settlement_dates(event_ids: set[str]) -> dict[str, date]:
+    """Map Polymarket event id → weather settlement date (Gamma endDate)."""
+    if not event_ids:
+        return {}
+    from polytempo.markets.polymarket import fetch_event
+
+    out: dict[str, date] = {}
+    for eid in sorted(event_ids):
+        try:
+            event = fetch_event(eid)
+        except Exception:
+            continue
+        if event.settlement_date is not None:
+            out[eid] = event.settlement_date
+    return out
+
+
+def _realization_day(
+    ts: datetime,
+    *,
+    polymarket_event_id: str | None,
+    event_settlement_dates: dict[str, date],
+) -> date:
+    """Reporting day for a SETTLE/CLOSE row."""
+    if polymarket_event_id:
+        settlement = event_settlement_dates.get(polymarket_event_id)
+        if settlement is not None:
+            return settlement
+    return ts.date()
+
+
 def _replay_profile(
     rows: list[dict],
     *,
     window: set[date],
+    event_settlement_dates: dict[str, date],
 ) -> ProfilePerf | None:
     if not rows:
         return None
@@ -77,31 +124,41 @@ def _replay_profile(
     profile_id = rows[0]["profile_id"]
     balance = STARTING_BALANCE_USD
     open_stakes: dict[str, float] = {}
+    open_event_ids: dict[str, str] = {}
     daily_pnl_usd: dict[date, float] = defaultdict(float)
     sod_balance: dict[date, float] = {}
     since: date | None = None
 
     for row in rows:
         ts = _parse_ts(row["ts_utc"])
-        day = ts.date()
         if since is None and row["event_type"] == "OPEN":
-            since = day
-
-        if day not in sod_balance:
-            sod_balance[day] = balance
+            since = ts.date()
 
         kind = row["event_type"]
         if kind == "OPEN":
             stake = float(row["stake_usd"] or 0.0)
             balance -= stake
-            open_stakes[row["trade_id"]] = stake
+            trade_id = row["trade_id"]
+            open_stakes[trade_id] = stake
+            eid = row.get("polymarket_event_id")
+            if eid:
+                open_event_ids[trade_id] = str(eid)
         elif kind in ("SETTLE", "CLOSE"):
             trade_id = row["trade_id"]
+            eid = row.get("polymarket_event_id") or open_event_ids.get(trade_id)
+            reporting_day = _realization_day(
+                ts,
+                polymarket_event_id=str(eid) if eid else None,
+                event_settlement_dates=event_settlement_dates,
+            )
+            if reporting_day not in sod_balance:
+                sod_balance[reporting_day] = balance
             stake = open_stakes.pop(trade_id, 0.0)
+            open_event_ids.pop(trade_id, None)
             payout = float(row["payout_usd"] or 0.0)
             balance += payout
-            if day in window:
-                daily_pnl_usd[day] += payout - stake
+            if reporting_day in window:
+                daily_pnl_usd[reporting_day] += payout - stake
 
     daily = {
         d: DayPnl(pnl_usd=daily_pnl_usd[d], sod_balance_usd=sod_balance.get(d, balance))
@@ -232,13 +289,19 @@ def build_report(
     with get_paper_connection(url) as conn:
         rows = _fetch_events(conn)
 
+    event_settlement_dates = _build_event_settlement_dates(_collect_event_ids(rows))
+
     by_profile: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         by_profile[row["profile_id"]].append(row)
 
     perfs: list[ProfilePerf] = []
     for profile_rows in by_profile.values():
-        perf = _replay_profile(profile_rows, window=window_set)
+        perf = _replay_profile(
+            profile_rows,
+            window=window_set,
+            event_settlement_dates=event_settlement_dates,
+        )
         if perf is not None:
             perfs.append(perf)
 
@@ -277,8 +340,10 @@ def build_report(
         f"generated_utc: {generated}",
         f"group: {group}",
         "",
-        "Cell = realized P/L that UTC day as % of start-of-day balance. "
-        "``·`` = no settlements that day. ``since`` = first OPEN.",
+        "Cell = realized P/L for that market settlement date as % of balance "
+        "before the first realization that day (``SETTLE``/``CLOSE`` bucketed "
+        "by Polymarket endDate, not ledger UTC timestamp). "
+        "``·`` = no realizations that settlement date. ``since`` = first OPEN.",
         "",
         _render_table(
             perfs,
@@ -292,12 +357,17 @@ def build_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, default=7, help="Trailing UTC days (default 7)")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Trailing settlement dates (default 7)",
+    )
     parser.add_argument(
         "--end",
         type=str,
         default="",
-        help="Last day inclusive (YYYY-MM-DD, UTC). Default: today UTC.",
+        help="Last settlement date inclusive (YYYY-MM-DD). Default: today UTC.",
     )
     parser.add_argument(
         "--group",
