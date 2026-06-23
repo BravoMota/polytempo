@@ -228,13 +228,15 @@ deploy/bin/run-with-env.sh scripts/report_performance.py --all --csv reports/per
 deploy/bin/run-with-env.sh scripts/report_performance.py --days 14 --csv reports/performance/daily.csv
 ```
 
-**Viewer** (offline; reads CSV — install once: `pip install -e ".[view]"`):
+**Viewer** (summary reads CSV; install once: `pip install -e ".[view]"`):
 
 ```bash
 streamlit run scripts/view_performance.py -- reports/performance/daily.csv
 ```
 
-On mac0 the viewer runs as LaunchDaemon on **127.0.0.1:8501** (SSH tunnel: `ssh -L 8501:127.0.0.1:8501 jnlow@mac0`). Sidebar **Refresh from DB** re-runs the export; nightly job at **03:30** writes `reports/performance/daily.csv`.
+The Daily P/L table is driven by `daily.csv` (offline). **Trade detail** (wallet + settlement date) queries `paper_events` on demand when `POLYTEMPO_PAPER_DATABASE_URL` is set — trades, prices, and resolution. **Analysis replay charts** also need `POLYTEMPO_DATABASE_URL` (Open-Meteo + CLOB snapshots). Install viewer deps: `pip install -e ".[view]"` (includes `plotly`). Click a cell on the heatmap to pre-fill drill-down.
+
+On mac0 the viewer runs as LaunchDaemon on **127.0.0.1:8501** (SSH tunnel: `ssh -L 8501:127.0.0.1:8501 jnlow@mac0`). Sidebar **Refresh from DB** re-runs the performance export only; nightly job at **03:30** writes `reports/performance/daily.csv`.
 
 `reports/` is gitignored — CSV and markdown snapshots are local/generated.
 

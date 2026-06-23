@@ -270,6 +270,14 @@ def _normal_cdf(x: float, mu: float, sigma: float) -> float:
     return 0.5 * (1.0 + math.erf(z))
 
 
+def normal_pdf(x: float, mu: float, sigma: float) -> float:
+    """PDF of Normal(mu, sigma) at x."""
+    if sigma <= 0:
+        raise ValueError("sigma must be positive")
+    z = (x - mu) / sigma
+    return math.exp(-0.5 * z * z) / (sigma * math.sqrt(2.0 * math.pi))
+
+
 def probability_for_bucket(distribution: ForecastDistribution, bucket: TemperatureBucket) -> float:
     """Probability mass for bucket under Normal(mean_c, sigma_c)."""
     mu = distribution.mean_c

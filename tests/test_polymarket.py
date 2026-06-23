@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from polytempo.markets.polymarket import (
+    PolymarketBucket,
     PolymarketEvent,
     fetch_clob_book,
     fetch_event,
@@ -14,6 +15,7 @@ from polytempo.markets.polymarket import (
     first_parseable_weather_event,
     hydrate_prices,
     parse_event_payload,
+    strip_untradeable_bucket_prices,
     to_market_prices,
 )
 
@@ -96,6 +98,31 @@ def test_parse_event_payload_converts_numeric_strings_to_floats() -> None:
     assert bucket.yes_ask == pytest.approx(0.34)
     assert bucket.liquidity_usd == pytest.approx(1234.50)
     assert bucket.spread == pytest.approx(0.03)
+
+
+def test_strip_untradeable_bucket_prices_clears_resolved_quotes() -> None:
+    event = PolymarketEvent(
+        event_id="evt-1",
+        slug="slug",
+        title="title",
+        settlement_date=date(2026, 6, 17),
+        buckets=[
+            PolymarketBucket(
+                market_id="m1",
+                label="26°C",
+                yes_bid=0.99,
+                yes_ask=1.0,
+                liquidity_usd=10.0,
+                spread=0.01,
+                rules=None,
+                resolved=True,
+                outcome="YES",
+            )
+        ],
+    )
+    stripped = strip_untradeable_bucket_prices(event)
+    assert stripped.buckets[0].yes_ask is None
+    assert stripped.buckets[0].yes_bid is None
 
 
 def test_parse_event_payload_missing_optional_bucket_fields_become_none() -> None:

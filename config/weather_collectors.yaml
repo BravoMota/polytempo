@@ -46,7 +46,7 @@ collectors:
       - ecmwf_ifs025
       - icon_eu
       - gfs_seamless
-    target_horizon_days: 2
+    target_horizon_days: 4
     stations:
       - station_id: EGLC
         station_type: icao

@@ -26,6 +26,7 @@ dev = [
 view = [
     "streamlit",
     "pandas",
+    "plotly>=5",
 ]
 
 [project.scripts]

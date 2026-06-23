@@ -25,7 +25,7 @@ def test_load_default_config_shape() -> None:
     om = next(c for c in config.collectors if c.name == "open_meteo")
     assert om.models
     assert "ukmo_uk_deterministic_2km" in om.models
-    assert om.target_horizon_days == 2
+    assert om.target_horizon_days == 4
     assert wu.observations_anchor_time_utc == "00:00"
     assert wu.forecast_anchor_time_utc == "00:00"
 

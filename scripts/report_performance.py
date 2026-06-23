@@ -28,6 +28,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from polytempo.paper.settlement_reporting import (  # noqa: E402
+    build_event_settlement_dates,
+    realization_day,
+)
 from polytempo.profiles.load import DEFAULT_PROFILES_PATH, load_paper_profiles  # noqa: E402
 from polytempo.storage.paper_postgres import (  # noqa: E402
     STARTING_BALANCE_USD,
@@ -100,37 +104,6 @@ def _collect_event_ids(rows: list[dict]) -> set[str]:
     return ids
 
 
-def _build_event_settlement_dates(event_ids: set[str]) -> dict[str, date]:
-    """Map Polymarket event id → weather settlement date (Gamma endDate)."""
-    if not event_ids:
-        return {}
-    from polytempo.markets.polymarket import fetch_event
-
-    out: dict[str, date] = {}
-    for eid in sorted(event_ids):
-        try:
-            event = fetch_event(eid)
-        except Exception:
-            continue
-        if event.settlement_date is not None:
-            out[eid] = event.settlement_date
-    return out
-
-
-def _realization_day(
-    ts: datetime,
-    *,
-    polymarket_event_id: str | None,
-    event_settlement_dates: dict[str, date],
-) -> date:
-    """Reporting day for a SETTLE/CLOSE row."""
-    if polymarket_event_id:
-        settlement = event_settlement_dates.get(polymarket_event_id)
-        if settlement is not None:
-            return settlement
-    return ts.date()
-
-
 def _in_window(reporting_day: date, window: set[date] | None) -> bool:
     return window is None or reporting_day in window
 
@@ -170,7 +143,7 @@ def _replay_profile(
         elif kind in ("SETTLE", "CLOSE"):
             trade_id = row["trade_id"]
             eid = row.get("polymarket_event_id") or open_event_ids.get(trade_id)
-            reporting_day = _realization_day(
+            reporting_day = realization_day(
                 ts,
                 polymarket_event_id=str(eid) if eid else None,
                 event_settlement_dates=event_settlement_dates,
@@ -319,7 +292,7 @@ def _load_perfs(
     with get_paper_connection(url) as conn:
         rows = _fetch_events(conn)
 
-    event_settlement_dates = _build_event_settlement_dates(_collect_event_ids(rows))
+    event_settlement_dates = build_event_settlement_dates(_collect_event_ids(rows))
 
     by_profile: dict[str, list[dict]] = defaultdict(list)
     for row in rows:

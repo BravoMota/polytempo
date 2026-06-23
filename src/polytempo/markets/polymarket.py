@@ -116,6 +116,29 @@ def is_event_resolved(event: PolymarketEvent) -> bool:
     return any(bucket.resolved for bucket in event.buckets)
 
 
+UNTRADEABLE_YES_ASK = 0.999
+
+
+def is_untradeable_market_price(
+    yes_bid: float | None,
+    yes_ask: float | None,
+) -> bool:
+    """True for post-settlement or otherwise non-executable book quotes."""
+    _ = yes_bid
+    return yes_ask is not None and yes_ask >= UNTRADEABLE_YES_ASK
+
+
+def strip_untradeable_bucket_prices(event: PolymarketEvent) -> PolymarketEvent:
+    """Clear bid/ask on resolved buckets and other untradeable quotes."""
+    buckets: list[PolymarketBucket] = []
+    for bucket in event.buckets:
+        if bucket.resolved or is_untradeable_market_price(bucket.yes_bid, bucket.yes_ask):
+            buckets.append(replace(bucket, yes_bid=None, yes_ask=None, spread=None))
+        else:
+            buckets.append(bucket)
+    return replace(event, buckets=buckets)
+
+
 def _parse_resolution(market: dict) -> tuple[bool, str | None]:
     """Map Gamma ``closed`` + ``outcomePrices`` to (resolved, "YES"|"NO"|None).
 
