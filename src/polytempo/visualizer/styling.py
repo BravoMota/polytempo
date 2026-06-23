@@ -31,15 +31,24 @@ def table_height(n_rows: int) -> int:
 
 def scroll_to_anchor(anchor_id: str) -> None:
     """Smooth-scroll the parent page to an element id (Streamlit iframe)."""
+    nonce = st.session_state.get("_scroll_nonce", 0)
+    st.session_state["_scroll_nonce"] = nonce + 1
     components.html(
         f"""
         <script>
-            const doc = window.parent.document;
-            const el = doc.getElementById("{anchor_id}");
-            if (el) {{
-                el.scrollIntoView({{behavior: "smooth", block: "start"}});
-            }}
+            (function() {{
+                function scroll() {{
+                    const doc = window.parent.document;
+                    const el = doc.getElementById("{anchor_id}");
+                    if (el) {{
+                        el.scrollIntoView({{behavior: "smooth", block: "start"}});
+                    }}
+                }}
+                scroll();
+                requestAnimationFrame(scroll);
+            }})();
         </script>
+        <!-- scroll nonce: {nonce} -->
         """,
         height=0,
     )

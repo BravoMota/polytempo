@@ -117,12 +117,10 @@ def apply_cell_selection(
     if mapped is None:
         return
     wallet, settlement_date = mapped
-    if (
-        st.session_state.get("detail_wallet") == wallet
-        and st.session_state.get("detail_date") == settlement_date
-        and st.session_state.get("detail_expanded")
-    ):
+    selection_key = (row_idx, col_name)
+    if st.session_state.get("pivot_selection_key") == selection_key:
         return
+    st.session_state["pivot_selection_key"] = selection_key
     st.session_state["detail_wallet"] = wallet
     st.session_state["detail_date"] = settlement_date
     st.session_state["detail_expanded"] = True
