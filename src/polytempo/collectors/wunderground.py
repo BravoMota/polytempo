@@ -3,6 +3,8 @@
 Scrapes wunderground.com pages, saves raw HTML under
 ``data/weather/raw/wunderground/``, and parses the embedded Angular
 ``app-root-state`` JSON cache into observation and forecast snapshot rows.
+Imperial (°F) comes from the HTML embed; metric (°C) from a separate
+Weather.com API call (``units=m``).
 """
 
 from __future__ import annotations
@@ -31,6 +33,11 @@ from polytempo.storage.postgres import (
     upsert_collector_state_error,
     upsert_collector_state_success,
     utc_now_iso,
+)
+from polytempo.weather.wunderground import (
+    fetch_current_observation_payload,
+    fetch_hourly_forecast_payload,
+    resolve_station_geocode,
 )
 
 logger = logging.getLogger(__name__)
@@ -149,6 +156,7 @@ class ParsedObservation:
     """One observation snapshot extracted from a Wunderground page."""
 
     target_date_local: date
+    temp_f: float
     temp_c: float
     raw_temp_text: str
     observed_at_utc: str | None = None
@@ -161,6 +169,7 @@ class ParsedForecastHour:
 
     target_time_local: str
     target_time_utc: str
+    temp_f: float
     temp_c: float
     raw_temp_text: str
 
@@ -183,11 +192,6 @@ def _extract_app_root_state(html: bytes | str) -> dict[str, Any]:
         raise ValueError(f"failed to parse app-root-state JSON: {exc}") from exc
 
 
-def _f_to_c(value: float) -> float:
-    """Convert Fahrenheit to Celsius (pages always serve imperial units)."""
-    return round((value - 32.0) * 5.0 / 9.0, 2)
-
-
 def _epoch_to_iso_z(epoch: int) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -198,14 +202,53 @@ def _state_bodies(state: dict[str, Any], url_fragment: str) -> Any:
             yield entry.get("b")
 
 
+def _station_geocode(station: StationConfig, *, client: httpx.Client) -> str:
+    if station.lat is not None and station.lon is not None:
+        return f"{station.lat},{station.lon}"
+    return resolve_station_geocode(station.station_id, client=client)
+
+
+def _temp_c_from_metric_observation(metric_body: dict[str, Any], station: StationConfig) -> float:
+    if station.station_type == "pws":
+        observations = metric_body.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise ValueError(f"PWS metric observation not found for {station.station_id}")
+        latest = observations[-1]
+        temp_c = (latest.get("metric") or {}).get("tempAvg")
+        if temp_c is None:
+            raise ValueError(f"PWS metric tempAvg missing for {station.station_id}")
+        return float(temp_c)
+
+    temp_c = metric_body.get("temperature")
+    if temp_c is None:
+        raise ValueError(f"ICAO metric temperature missing for {station.station_id}")
+    return float(temp_c)
+
+
+def _metric_hourly_temp_map(metric_body: dict[str, Any]) -> dict[int, float]:
+    temps = metric_body.get("temperature")
+    times_utc = metric_body.get("validTimeUtc")
+    if not isinstance(temps, list) or not isinstance(times_utc, list):
+        raise ValueError("metric hourly forecast arrays missing")
+    out: dict[int, float] = {}
+    for temp_c, utc_epoch in zip(temps, times_utc, strict=False):
+        if temp_c is None or utc_epoch is None:
+            continue
+        out[int(utc_epoch)] = float(temp_c)
+    return out
+
+
 def parse_observation_page(
     html: bytes | str,
     station: StationConfig,
     scraped_at_utc: datetime,
+    *,
+    metric_body: dict[str, Any],
 ) -> ParsedObservation:
     """Parse the current observation from a live observation page."""
     state = _extract_app_root_state(html)
     target_date_local = local_today(station.timezone, scraped_at_utc)
+    temp_c = _temp_c_from_metric_observation(metric_body, station)
 
     if station.station_type == "pws":
         for body in _state_bodies(state, "/v2/pws/observations/all/1day"):
@@ -218,7 +261,8 @@ def parse_observation_page(
                 continue
             return ParsedObservation(
                 target_date_local=target_date_local,
-                temp_c=_f_to_c(temp_f),
+                temp_f=float(temp_f),
+                temp_c=temp_c,
                 raw_temp_text=str(temp_f),
                 observed_at_utc=latest.get("obsTimeUtc"),
                 observed_at_local=latest.get("obsTimeLocal"),
@@ -229,10 +273,13 @@ def parse_observation_page(
         if not isinstance(body, dict) or body.get("temperature") is None:
             continue
         epoch = body.get("validTimeUtc")
+        temp_f_val = body["temperature"]
+        temp_f = float(temp_f_val)
         return ParsedObservation(
             target_date_local=target_date_local,
-            temp_c=_f_to_c(body["temperature"]),
-            raw_temp_text=str(body["temperature"]),
+            temp_f=temp_f,
+            temp_c=temp_c,
+            raw_temp_text=str(temp_f_val),
             observed_at_utc=_epoch_to_iso_z(epoch) if epoch else None,
             observed_at_local=body.get("validTimeLocal"),
         )
@@ -244,6 +291,8 @@ def parse_hourly_forecast_page(
     station: StationConfig,
     target_date_local: date,
     scraped_at_utc: datetime,
+    *,
+    metric_body: dict[str, Any],
 ) -> list[ParsedForecastHour]:
     """Parse hourly forecast rows for ``target_date_local`` from a forecast page."""
     state = _extract_app_root_state(html)
@@ -260,17 +309,28 @@ def parse_hourly_forecast_page(
     if not temps or not times_local or not times_utc:
         raise ValueError(f"hourly forecast arrays missing for {station.station_id}")
 
+    metric_by_epoch = _metric_hourly_temp_map(metric_body)
     prefix = target_date_local.isoformat()
     hours: list[ParsedForecastHour] = []
-    for temp_f, local_iso, utc_epoch in zip(temps, times_local, times_utc):
-        if temp_f is None or not str(local_iso).startswith(prefix):
+    for temp_f_raw, local_iso, utc_epoch in zip(temps, times_local, times_utc, strict=False):
+        if temp_f_raw is None or not str(local_iso).startswith(prefix):
+            continue
+        temp_c = metric_by_epoch.get(int(utc_epoch))
+        if temp_c is None:
+            logger.warning(
+                "hourly forecast missing metric temp station=%s epoch=%s local=%s",
+                station.station_id,
+                utc_epoch,
+                local_iso,
+            )
             continue
         hours.append(
             ParsedForecastHour(
                 target_time_local=local_iso,
                 target_time_utc=_epoch_to_iso_z(utc_epoch),
-                temp_c=_f_to_c(temp_f),
-                raw_temp_text=str(temp_f),
+                temp_f=float(temp_f_raw),
+                temp_c=temp_c,
+                raw_temp_text=str(temp_f_raw),
             )
         )
     if not hours:
@@ -321,6 +381,15 @@ def run_station_observations(
     mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
 
     try:
+        geocode = _station_geocode(station, client=client)
+        metric_body = fetch_current_observation_payload(
+            station_type=station.station_type,
+            station_id=station.station_id,
+            geocode=geocode,
+            pws_id=station.pws_id,
+            units="m",
+            client=client,
+        )
         obs_url = build_observation_url(station)
         body, path, content_hash = _fetch_and_save(
             raw_dir=raw_dir,
@@ -330,7 +399,7 @@ def run_station_observations(
             scraped_at=scraped_at,
             client=client,
         )
-        obs = parse_observation_page(body, station, scraped_at)
+        obs = parse_observation_page(body, station, scraped_at, metric_body=metric_body)
         insert_observation_snapshot(
             conn,
             station_id=station.station_id,
@@ -340,6 +409,7 @@ def run_station_observations(
             station_timezone=station.timezone,
             observed_at_utc=obs.observed_at_utc,
             observed_at_local=obs.observed_at_local,
+            temp_f=obs.temp_f,
             temp_c=obs.temp_c,
             raw_temp_text=obs.raw_temp_text,
             raw_file_path=str(path),
@@ -387,6 +457,21 @@ def run_station_forecasts(
 
     errors: list[str] = []
     today_local, tomorrow_local = forecast_dates_for_station(station.timezone, now)
+    try:
+        geocode = _station_geocode(station, client=client)
+        metric_body = fetch_hourly_forecast_payload(geocode, units="m", client=client)
+    except Exception as exc:
+        conn.rollback()
+        upsert_collector_state_error(
+            conn,
+            COLLECTOR_NAME,
+            station.station_id,
+            source,
+            f"hourly_forecast metric API: {exc}",
+        )
+        conn.commit()
+        return
+
     for target_day in (today_local, tomorrow_local):
         try:
             fc_url = build_hourly_forecast_url(station, target_day)
@@ -399,7 +484,9 @@ def run_station_forecasts(
                 client=client,
                 target_date_local=target_day,
             )
-            for hour in parse_hourly_forecast_page(body, station, target_day, scraped_at):
+            for hour in parse_hourly_forecast_page(
+                body, station, target_day, scraped_at, metric_body=metric_body
+            ):
                 insert_forecast_snapshot(
                     conn,
                     station_id=station.station_id,
@@ -412,6 +499,7 @@ def run_station_forecasts(
                     lead_hours_to_day_end=lead_hours_to_day_end(
                         scraped_at, target_day, station.timezone
                     ),
+                    temp_f=hour.temp_f,
                     temp_c=hour.temp_c,
                     raw_temp_text=hour.raw_temp_text,
                     requested_lat=station.lat,

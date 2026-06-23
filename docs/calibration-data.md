@@ -42,7 +42,7 @@ Numbered scripts under `scripts/Calibrator_V1/` (or legacy numbered `scripts/1_`
 
 | Path / store | Purpose |
 | --- | --- |
-| PostgreSQL `observation_snapshots`, `forecast_snapshots` | Wunderground HTML scrape (`scripts/run_collector.py`) |
+| PostgreSQL `observation_snapshots`, `forecast_snapshots` | Wunderground HTML scrape + Weather.com metric API (`scripts/run_collector.py`); `temp_f` / `temp_c` are native °F / °C |
 | PostgreSQL `open_meteo_fetch_cycles`, `open_meteo_model_meta_snapshots`, `open_meteo_forecast_snapshots` | Open-Meteo rolling meta + Forecast API audit (`run_collector.py` `open_meteo` block) |
 | `raw/wunderground/` | Raw WU HTML sidecars |
 

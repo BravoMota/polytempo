@@ -39,6 +39,21 @@ V1_HISTORICAL_URL_TEMPLATE = (
     "?apiKey={api_key}&units=m&startDate={start_date}"
 )
 
+CURRENT_OBSERVATION_URL_TEMPLATE = (
+    "https://api.weather.com/v3/wx/observations/current"
+    "?geocode={geocode}&format=json&language=en-US&units={units}&apiKey={api_key}"
+)
+
+PWS_OBSERVATIONS_1DAY_URL_TEMPLATE = (
+    "https://api.weather.com/v2/pws/observations/all/1day"
+    "?stationId={station_id}&format=json&units={units}&apiKey={api_key}"
+)
+
+HOURLY_FORECAST_15DAY_URL_TEMPLATE = (
+    "https://api.weather.com/v3/wx/forecast/hourly/15day"
+    "?geocode={geocode}&format=json&language=en-US&units={units}&apiKey={api_key}"
+)
+
 DEFAULT_COUNTRY_CODE = "GB"
 
 USER_AGENT = (
@@ -96,6 +111,97 @@ def _build_v1_historical_url(
         api_key=api_key,
         start_date=target_date.strftime("%Y%m%d"),
     )
+
+
+def _build_current_observation_url(
+    geocode: str,
+    *,
+    units: str,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> str:
+    return CURRENT_OBSERVATION_URL_TEMPLATE.format(
+        geocode=geocode,
+        units=units,
+        api_key=api_key,
+    )
+
+
+def _build_pws_observations_1day_url(
+    station_id: str,
+    *,
+    units: str,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> str:
+    return PWS_OBSERVATIONS_1DAY_URL_TEMPLATE.format(
+        station_id=station_id,
+        units=units,
+        api_key=api_key,
+    )
+
+
+def _build_hourly_forecast_15day_url(
+    geocode: str,
+    *,
+    units: str,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> str:
+    return HOURLY_FORECAST_15DAY_URL_TEMPLATE.format(
+        geocode=geocode,
+        units=units,
+        api_key=api_key,
+    )
+
+
+def _fetch_weather_com_json(
+    url: str,
+    *,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    headers = _api_headers()
+    if client is not None:
+        response = client.get(url, headers=headers, timeout=REQUEST_TIMEOUT_S)
+    else:
+        response = httpx.get(url, headers=headers, timeout=REQUEST_TIMEOUT_S)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("Weather.com API payload must be an object")
+    return payload
+
+
+def fetch_hourly_forecast_payload(
+    geocode: str,
+    *,
+    units: str,
+    client: httpx.Client | None = None,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> dict[str, Any]:
+    """Fetch hourly forecast JSON from Weather.com (``units`` = ``m`` or ``e``)."""
+    url = _build_hourly_forecast_15day_url(geocode, units=units, api_key=api_key)
+    return _fetch_weather_com_json(url, client=client)
+
+
+def fetch_current_observation_payload(
+    *,
+    station_type: str,
+    station_id: str,
+    geocode: str,
+    pws_id: str | None = None,
+    units: str,
+    client: httpx.Client | None = None,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> dict[str, Any]:
+    """Fetch current observation JSON from Weather.com (``units`` = ``m`` or ``e``)."""
+    if station_type == "pws":
+        pws_station_id = pws_id or station_id
+        url = _build_pws_observations_1day_url(
+            pws_station_id,
+            units=units,
+            api_key=api_key,
+        )
+    else:
+        url = _build_current_observation_url(geocode, units=units, api_key=api_key)
+    return _fetch_weather_com_json(url, client=client)
 
 
 def _api_headers(*, referer: str | None = None) -> dict[str, str]:

@@ -376,7 +376,7 @@ Each poll per station fetches:
 - live observation page (ICAO or PWS dashboard URL)
 - hourly forecast page for **today** and **tomorrow** (station local dates)
 
-Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station. Forecast rows include `raw_temp_text` (integer °F string from Wunderground).
+Parsed rows land in `observation_snapshots` / `forecast_snapshots`; raw HTML + `.meta.json` sidecars are saved under `raw/wunderground/`. `collector_state` tracks success/error per station. Each snapshot stores native API temperatures: `temp_f` (°F from embedded HTML, `units=e`) and `temp_c` (°C from Weather.com API, `units=m`). `raw_temp_text` duplicates `temp_f` as a string (deprecated).
 
 ### Open-Meteo collector (`open_meteo` block in YAML)
 

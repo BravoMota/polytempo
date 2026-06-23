@@ -82,6 +82,10 @@ def _icao_obs_html() -> bytes:
     )
 
 
+def _icao_obs_metric() -> dict:
+    return {"temperature": 15.0}
+
+
 def _pws_obs_html() -> bytes:
     return _state_html(
         {
@@ -101,6 +105,18 @@ def _pws_obs_html() -> bytes:
     )
 
 
+def _pws_obs_metric() -> dict:
+    return {
+        "observations": [
+            {
+                "obsTimeUtc": "2026-06-03T22:00:00Z",
+                "obsTimeLocal": "2026-06-03 23:00:00",
+                "metric": {"tempAvg": 15.2},
+            }
+        ]
+    }
+
+
 def _hourly_html(target: date = date(2026, 6, 4)) -> bytes:
     iso = target.isoformat()
     return _state_html(
@@ -118,6 +134,31 @@ def _hourly_html(target: date = date(2026, 6, 4)) -> bytes:
             }
         }
     )
+
+
+def _hourly_metric() -> dict:
+    return {
+        "temperature": [15.0, 14.4],
+        "validTimeUtc": [1780527600, 1780531200],
+    }
+
+
+def _install_metric_api_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_current_observation_payload(**kwargs: object) -> dict:
+        station_type = kwargs.get("station_type")
+        if station_type == "pws":
+            return _pws_obs_metric()
+        return _icao_obs_metric()
+
+    def fake_hourly_forecast_payload(geocode: str, **kwargs: object) -> dict:
+        _ = geocode
+        return {
+            "temperature": [16.0, 15.5, 15.0, 14.4],
+            "validTimeUtc": [1780441200, 1780444800, 1780527600, 1780531200],
+        }
+
+    monkeypatch.setattr(wu, "fetch_current_observation_payload", fake_current_observation_payload)
+    monkeypatch.setattr(wu, "fetch_hourly_forecast_payload", fake_hourly_forecast_payload)
 
 
 def test_build_observation_url_icao() -> None:
@@ -170,7 +211,10 @@ def test_save_raw_response_writes_html_and_meta(tmp_path: Path) -> None:
 
 def test_parse_observation_page_icao() -> None:
     scraped = datetime(2026, 6, 3, 22, 30, tzinfo=timezone.utc)
-    obs = wu.parse_observation_page(_icao_obs_html(), _icao_station(), scraped)
+    obs = wu.parse_observation_page(
+        _icao_obs_html(), _icao_station(), scraped, metric_body=_icao_obs_metric()
+    )
+    assert obs.temp_f == pytest.approx(59.0)
     assert obs.temp_c == pytest.approx(15.0)
     assert obs.raw_temp_text == "59"
     assert obs.target_date_local == date(2026, 6, 3)
@@ -179,8 +223,11 @@ def test_parse_observation_page_icao() -> None:
 
 def test_parse_observation_page_pws_decimal() -> None:
     scraped = datetime(2026, 6, 3, 22, 30, tzinfo=timezone.utc)
-    obs = wu.parse_observation_page(_pws_obs_html(), _pws_station(), scraped)
-    assert obs.temp_c == pytest.approx(15.22)
+    obs = wu.parse_observation_page(
+        _pws_obs_html(), _pws_station(), scraped, metric_body=_pws_obs_metric()
+    )
+    assert obs.temp_f == pytest.approx(59.4)
+    assert obs.temp_c == pytest.approx(15.2)
     assert obs.raw_temp_text == "59.4"
     assert obs.observed_at_local == "2026-06-03 23:00:00"
 
@@ -188,19 +235,40 @@ def test_parse_observation_page_pws_decimal() -> None:
 def test_parse_hourly_forecast_page_filters_to_target_date() -> None:
     scraped = datetime(2026, 6, 3, 22, 30, tzinfo=timezone.utc)
     hours = wu.parse_hourly_forecast_page(
-        _hourly_html(), _icao_station(), date(2026, 6, 4), scraped
+        _hourly_html(),
+        _icao_station(),
+        date(2026, 6, 4),
+        scraped,
+        metric_body=_hourly_metric(),
     )
     assert len(hours) == 2
     assert hours[0].target_time_local == "2026-06-04T00:00:00+0100"
     assert hours[0].target_time_utc == "2026-06-03T23:00:00Z"
+    assert hours[0].temp_f == pytest.approx(59.0)
     assert hours[0].temp_c == pytest.approx(15.0)
-    assert hours[0].raw_temp_text == "59"
+
+
+def test_parse_hourly_forecast_page_skips_missing_metric_hour() -> None:
+    scraped = datetime(2026, 6, 3, 22, 30, tzinfo=timezone.utc)
+    metric_body = {"temperature": [15.0], "validTimeUtc": [1780527600]}
+    hours = wu.parse_hourly_forecast_page(
+        _hourly_html(),
+        _icao_station(),
+        date(2026, 6, 4),
+        scraped,
+        metric_body=metric_body,
+    )
+    assert len(hours) == 1
+    assert hours[0].temp_f == pytest.approx(59.0)
+    assert hours[0].temp_c == pytest.approx(15.0)
 
 
 def test_parse_observation_page_missing_state_raises() -> None:
     scraped = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
     with pytest.raises(ValueError):
-        wu.parse_observation_page(b"<html></html>", _icao_station(), scraped)
+        wu.parse_observation_page(
+            b"<html></html>", _icao_station(), scraped, metric_body=_icao_obs_metric()
+        )
 
 
 def test_run_station_cycle_saves_files_and_inserts_rows(
@@ -223,6 +291,7 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
         return _icao_obs_html()
 
     monkeypatch.setattr(wu, "fetch_raw_page", fake_fetch)
+    _install_metric_api_mocks(monkeypatch)
 
     collector = _collector()
 
@@ -251,13 +320,23 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
             "SELECT COUNT(*) AS n FROM forecast_snapshots WHERE station_id = 'EGLC'"
         ).fetchone()
         fc_row = conn.execute(
-            "SELECT raw_temp_text FROM forecast_snapshots WHERE station_id = 'EGLC' LIMIT 1"
+            """
+            SELECT temp_f, temp_c, raw_temp_text
+            FROM forecast_snapshots WHERE station_id = 'EGLC' LIMIT 1
+            """
+        ).fetchone()
+        obs_row = conn.execute(
+            "SELECT temp_f, temp_c FROM observation_snapshots WHERE station_id = 'EGLC'"
         ).fetchone()
     assert state["success_count"] == 2
     assert obs_count["n"] == 1
     # Two hourly pages (today + tomorrow), each yielding two rows for its own date.
     assert fc_count["n"] == 4
+    assert fc_row["temp_f"] == pytest.approx(59.0)
+    assert fc_row["temp_c"] == pytest.approx(15.0)
     assert fc_row["raw_temp_text"] == "59"
+    assert obs_row["temp_f"] == pytest.approx(59.0)
+    assert obs_row["temp_c"] == pytest.approx(15.0)
 
 
 def test_run_station_observations_only(
@@ -275,6 +354,7 @@ def test_run_station_observations_only(
         conn.commit()
 
     monkeypatch.setattr(wu, "fetch_raw_page", lambda url, *, client=None: _icao_obs_html())
+    _install_metric_api_mocks(monkeypatch)
 
     with get_connection(weather_db_url) as conn:
         wu.run_station_cycle(
@@ -322,6 +402,7 @@ def test_run_station_cycle_one_failure_still_saves_others(
         return _icao_obs_html()
 
     monkeypatch.setattr(wu, "fetch_raw_page", fake_fetch)
+    _install_metric_api_mocks(monkeypatch)
 
     collector = _collector()
 
@@ -367,8 +448,6 @@ def test_run_cycle_isolates_station_failures(
             raise RuntimeError("station boom")
 
     monkeypatch.setattr(wu, "run_station_cycle", fake_run_station_cycle)
-
-    from polytempo.collectors.config import WeatherCollectorsConfig
 
     config = WeatherCollectorsConfig(
         raw_base_dir=raw_base,

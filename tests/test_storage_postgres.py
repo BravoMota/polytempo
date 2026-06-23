@@ -53,6 +53,7 @@ def test_insert_station_and_observation_snapshot(weather_db_url: str) -> None:
             target_date_local="2026-06-03",
             station_timezone="Europe/London",
             temp_c=18.5,
+            temp_f=65.3,
             content_hash="abc123",
             created_at_utc="2026-06-03T12:00:01Z",
         )
@@ -62,10 +63,11 @@ def test_insert_station_and_observation_snapshot(weather_db_url: str) -> None:
 
     with get_connection(weather_db_url) as conn:
         row = conn.execute(
-            "SELECT temp_c, content_hash FROM observation_snapshots WHERE id = 1"
+            "SELECT temp_c, temp_f, content_hash FROM observation_snapshots WHERE id = 1"
         ).fetchone()
     assert row is not None
     assert row["temp_c"] == pytest.approx(18.5)
+    assert row["temp_f"] == pytest.approx(65.3)
     assert row["content_hash"] == "abc123"
 
 
@@ -86,6 +88,7 @@ def test_insert_forecast_snapshot(weather_db_url: str) -> None:
             station_timezone="Europe/London",
             lead_hours_to_day_end=36.0,
             temp_c=19.0,
+            temp_f=66.0,
             raw_temp_text="66",
             created_at_utc="2026-06-03T12:00:01Z",
         )
@@ -95,11 +98,31 @@ def test_insert_forecast_snapshot(weather_db_url: str) -> None:
 
     with get_connection(weather_db_url) as conn:
         row = conn.execute(
-            "SELECT temp_c, raw_temp_text FROM forecast_snapshots WHERE id = 1"
+            "SELECT temp_c, temp_f, raw_temp_text FROM forecast_snapshots WHERE id = 1"
         ).fetchone()
     assert row is not None
     assert row["temp_c"] == pytest.approx(19.0)
+    assert row["temp_f"] == pytest.approx(66.0)
     assert row["raw_temp_text"] == "66"
+
+
+def test_initialize_database_adds_temp_f_columns(weather_db_url: str) -> None:
+    initialize_database(weather_db_url)
+    with get_connection(weather_db_url) as conn:
+        forecast_col = conn.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'forecast_snapshots' AND column_name = 'temp_f'
+            """
+        ).fetchone()
+        observation_col = conn.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name = 'observation_snapshots' AND column_name = 'temp_f'
+            """
+        ).fetchone()
+    assert forecast_col is not None
+    assert observation_col is not None
 
 
 def test_initialize_database_adds_forecast_raw_temp_text(weather_db_url: str) -> None:

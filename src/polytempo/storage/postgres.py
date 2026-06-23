@@ -86,6 +86,12 @@ def initialize_database(
             "ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS raw_temp_text TEXT"
         )
         conn.execute(
+            "ALTER TABLE forecast_snapshots ADD COLUMN IF NOT EXISTS temp_f DOUBLE PRECISION"
+        )
+        conn.execute(
+            "ALTER TABLE observation_snapshots ADD COLUMN IF NOT EXISTS temp_f DOUBLE PRECISION"
+        )
+        conn.execute(
             "ALTER TABLE calibration_observed_tmax "
             "ALTER COLUMN observed_tmax_f DROP NOT NULL"
         )
@@ -134,6 +140,7 @@ def insert_observation_snapshot(
     observed_at_utc: str | None = None,
     observed_at_local: str | None = None,
     temp_c: float | None = None,
+    temp_f: float | None = None,
     raw_temp_text: str | None = None,
     raw_file_path: str | None = None,
     content_hash: str | None = None,
@@ -144,9 +151,9 @@ def insert_observation_snapshot(
         """
         INSERT INTO observation_snapshots (
             station_id, source, scraped_at_utc, observed_at_utc, observed_at_local,
-            target_date_local, station_timezone, temp_c, raw_temp_text,
+            target_date_local, station_timezone, temp_c, temp_f, raw_temp_text,
             raw_file_path, content_hash, created_at_utc
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -158,6 +165,7 @@ def insert_observation_snapshot(
             target_date_local,
             station_timezone,
             temp_c,
+            temp_f,
             raw_temp_text,
             raw_file_path,
             content_hash,
@@ -183,6 +191,7 @@ def insert_forecast_snapshot(
     target_time_local: str | None = None,
     lead_hours_to_day_end: float | None = None,
     temp_c: float | None = None,
+    temp_f: float | None = None,
     raw_temp_text: str | None = None,
     requested_lat: float | None = None,
     requested_lon: float | None = None,
@@ -198,9 +207,9 @@ def insert_forecast_snapshot(
         INSERT INTO forecast_snapshots (
             station_id, source, model, scraped_at_utc, forecast_generated_at_utc,
             target_time_utc, target_time_local, target_date_local, station_timezone,
-            lead_hours_to_day_end, temp_c, raw_temp_text, requested_lat, requested_lon,
+            lead_hours_to_day_end, temp_c, temp_f, raw_temp_text, requested_lat, requested_lon,
             returned_lat, returned_lon, raw_file_path, content_hash, created_at_utc
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -215,6 +224,7 @@ def insert_forecast_snapshot(
             station_timezone,
             lead_hours_to_day_end,
             temp_c,
+            temp_f,
             raw_temp_text,
             requested_lat,
             requested_lon,
