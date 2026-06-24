@@ -32,6 +32,7 @@ from polytempo.weather.historical_forecasts import (
     DEFAULT_RAW_FORECASTS_DIR,
     DEFAULT_SINGLE_RUNS_BASE_URL,
     _station_model_from_raw_filename,
+    floor_run_time_to_init_grid,
     generate_run_times_utc,
     load_or_fetch_single_run_payload,
     parse_run_time_utc_from_raw_filename,
@@ -124,13 +125,26 @@ def ingest_forecasts_for_range(
     ingested_rows = 0
     run_start_utc = run_start.astimezone(dt_timezone.utc)
     run_end_utc = run_end.astimezone(dt_timezone.utc)
+    if run_end_utc < run_start_utc:
+        logger.info(
+            "forecast ingest skipped: run_end %s before run_start %s (already caught up)",
+            run_end_utc.isoformat(),
+            run_start_utc.isoformat(),
+        )
+        return 0, 0
 
     for station in config.stations:
         if station.lat is None or station.lon is None:
             continue
         for model_cfg in config.models:
-            run_times = generate_run_times_utc(
+            grid_start = floor_run_time_to_init_grid(
                 run_start_utc,
+                model_cfg.run_init_interval_hours,
+            )
+            if grid_start > run_end_utc:
+                continue
+            run_times = generate_run_times_utc(
+                grid_start,
                 run_end_utc,
                 model_cfg.run_init_interval_hours,
             )
@@ -350,6 +364,7 @@ def run_daily(
 
         last_success_text = state.get("last_success_at_utc")
         if isinstance(last_success_text, str) and last_success_text:
+            # Hint only: ingest_forecasts_for_range snaps per-model to init grid.
             run_start = _parse_iso_utc(last_success_text)
         else:
             run_start = datetime.combine(
@@ -357,7 +372,11 @@ def run_daily(
                 time.min,
                 tzinfo=dt_timezone.utc,
             )
-        run_end = datetime.now(dt_timezone.utc)
+        run_end = datetime.combine(
+            end,
+            time.max.replace(microsecond=0),
+            tzinfo=dt_timezone.utc,
+        )
         fetched, forecast_rows = ingest_forecasts_for_range(
             conn,
             config,

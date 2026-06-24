@@ -56,6 +56,23 @@ class HistoricalForecastJob:
     timezone: str
 
 
+def floor_run_time_to_init_grid(run_time: datetime, interval_hours: float) -> datetime:
+    """Floor ``run_time`` to the latest init on a UTC-midnight ``interval_hours`` grid.
+
+    Bootstrap and daily calibration step Single Runs fetches on this grid (e.g. 6h →
+    00/06/12/18Z; 3h → 00/03/06/…/21Z). Wall-clock job timestamps must be snapped
+    before ``generate_run_times_utc`` or ``lead_hours`` becomes fractional.
+    """
+    if interval_hours <= 0:
+        raise ValueError("interval_hours must be positive")
+
+    run_utc = run_time.astimezone(dt_timezone.utc)
+    anchor = datetime.combine(run_utc.date(), time.min, tzinfo=dt_timezone.utc)
+    elapsed_h = (run_utc - anchor).total_seconds() / 3600.0
+    slot_h = math.floor(elapsed_h / interval_hours) * interval_hours
+    return anchor + timedelta(hours=slot_h)
+
+
 def snap_run_time_to_model_init(
     run_time: datetime,
     model_run_hours_utc: tuple[int, ...] = DEFAULT_MODEL_RUN_HOURS_UTC,

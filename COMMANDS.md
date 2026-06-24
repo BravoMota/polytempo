@@ -17,6 +17,8 @@ cd /path/to/PolyTempo
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
+set -a && source .env && set +a
+
 ```
 
 ## demo

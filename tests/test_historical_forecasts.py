@@ -20,6 +20,7 @@ from polytempo.weather.historical_forecasts import (
     fetch_historical_forecast_record,
     fetch_raw_forecast_runs,
     format_run_time_utc_for_filename,
+    floor_run_time_to_init_grid,
     generate_forecast_run_times,
     generate_run_times_utc,
     job_key,
@@ -81,6 +82,55 @@ def test_snap_run_time_to_model_init_floors_to_synoptic_hour() -> None:
         datetime(2026, 3, 29, 5, 0, tzinfo=timezone.utc)
     )
     assert snapped == datetime(2026, 3, 29, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("run_time", "interval_hours", "expected"),
+    [
+        (
+            datetime(2026, 6, 10, 1, 4, 17, tzinfo=timezone.utc),
+            6.0,
+            datetime(2026, 6, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 6, 10, 1, 4, 17, tzinfo=timezone.utc),
+            3.0,
+            datetime(2026, 6, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 6, 10, 7, 30, tzinfo=timezone.utc),
+            6.0,
+            datetime(2026, 6, 10, 6, 0, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2026, 6, 10, 7, 30, tzinfo=timezone.utc),
+            3.0,
+            datetime(2026, 6, 10, 6, 0, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_floor_run_time_to_init_grid(
+    run_time: datetime,
+    interval_hours: float,
+    expected: datetime,
+) -> None:
+    assert floor_run_time_to_init_grid(run_time, interval_hours) == expected
+
+
+def test_daily_incremental_run_times_stay_on_init_grid() -> None:
+    """Wall-clock job finish must not produce fractional lead_hours run inits."""
+    last_success = datetime(2026, 6, 10, 1, 4, 17, tzinfo=timezone.utc)
+    run_end = datetime(2026, 6, 10, 23, 59, 59, tzinfo=timezone.utc)
+
+    for interval_hours in (3.0, 6.0):
+        grid_start = floor_run_time_to_init_grid(last_success, interval_hours)
+        runs = generate_run_times_utc(grid_start, run_end, interval_hours)
+        assert runs
+        for run_utc in runs:
+            assert run_utc.second == 0
+            assert run_utc.microsecond == 0
+            assert run_utc.minute == 0
+            assert run_utc.hour % int(interval_hours) == 0
 
 
 def test_generate_forecast_run_times_uses_timezone_anchor() -> None:
