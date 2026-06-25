@@ -647,7 +647,7 @@ def test_analyze_event_best_historical_no_models_with_init_meta_falls_back(
     )
 
     assert result.model_strategy == MODEL_STRATEGY_ENSEMBLE_SPREAD
-    assert result.fallback_reason == "no_models_with_init_meta"
+    assert result.fallback_reason == "no_ceiling_row_for_any_live_model"
 
 
 def test_analyze_event_best_historical_init_lead_length_mismatch_falls_back(

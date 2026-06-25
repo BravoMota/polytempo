@@ -616,3 +616,38 @@ def upsert_calibration_job_state(
             updated_at_utc,
         ),
     )
+
+
+def upsert_wu_history_daily_observation(
+    conn: Connection,
+    *,
+    station_id: str,
+    target_date: str,
+    observed_at_utc: str,
+    observed_at_local: str | None,
+    temp_c: float,
+    fetched_at_utc: str,
+    raw_file_path: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO wu_history_daily_observations (
+            station_id, target_date, observed_at_utc, observed_at_local,
+            temp_c, fetched_at_utc, raw_file_path
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (station_id, target_date, observed_at_utc) DO UPDATE SET
+            observed_at_local = EXCLUDED.observed_at_local,
+            temp_c = EXCLUDED.temp_c,
+            fetched_at_utc = EXCLUDED.fetched_at_utc,
+            raw_file_path = EXCLUDED.raw_file_path
+        """,
+        (
+            station_id,
+            target_date,
+            observed_at_utc,
+            observed_at_local,
+            temp_c,
+            fetched_at_utc,
+            raw_file_path,
+        ),
+    )

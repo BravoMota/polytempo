@@ -83,6 +83,71 @@ def test_build_wunderground_history_page_url() -> None:
     assert "wunderground.com/history/daily/gb/london/EGLC/date/2026-05-14" in url
 
 
+def _history_daily_observations_html() -> str:
+    body = (
+        '{"observations":['
+        '{"temp":18.5,"obsTimeUtc":1715666400,"obsTimeLocal":"2026-05-14T07:00:00+0100"},'
+        '{"temp":22.0,"obsTimeUtc":1715670000,"obsTimeLocal":"2026-05-14T08:00:00+0100"}'
+        "]}"
+    )
+    state = (
+        '{"x":{"u":"https://api.weather.com/v1/location/EGLC:9:GB/observations/historical.json'
+        '?apiKey=test&units=m&startDate=20260514",'
+        f'"b":{body}'
+        "}}"
+    )
+    return f'<html><script id="app-root-state" type="application/json">{state}</script></html>'
+
+
+def _v1_historical_payload() -> dict:
+    return {
+        "observations": [
+            {
+                "temp": 22,
+                "valid_time_gmt": 1782256800,
+                "wx_phrase": "Fair",
+            },
+            {
+                "temp": 21,
+                "valid_time_gmt": 1782258600,
+                "wx_phrase": "Fair",
+            },
+        ]
+    }
+
+
+def test_parse_wu_history_daily_observations_metric_html() -> None:
+    rows = _WU_MODULE.parse_wu_history_daily_observations(_history_daily_observations_html())
+    assert len(rows) == 2
+    assert rows[0].temp_c == pytest.approx(18.5)
+    assert rows[1].temp_c == pytest.approx(22.0)
+
+
+def test_parse_v1_historical_observations_payload() -> None:
+    rows = _WU_MODULE.parse_v1_historical_observations_payload(_v1_historical_payload())
+    assert len(rows) == 2
+    assert rows[0].temp_c == pytest.approx(22.0)
+    assert rows[1].temp_c == pytest.approx(21.0)
+    assert rows[0].observed_at_utc.tzinfo is not None
+
+
+def test_fetch_wu_history_daily_observations_live() -> None:
+    """Live smoke test: v1 API returns Daily Observations for EGLC (2026-06-24)."""
+    import httpx
+
+    with httpx.Client() as client:
+        rows, path = _WU_MODULE.fetch_wu_history_daily_observations(
+            "EGLC",
+            date(2026, 6, 24),
+            country_code="GB",
+            raw_dir=Path("/tmp/wu_history_test"),
+            client=client,
+        )
+    assert path.is_file()
+    assert len(rows) >= 40
+    assert max(row.temp_c for row in rows) >= 20.0
+
+
 def test_parse_wunderground_daily_high_uses_reported_temperature_max() -> None:
     payload = {
         "validTimeLocal": ["2026-05-14T07:00:00+0100"],

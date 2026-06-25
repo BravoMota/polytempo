@@ -55,6 +55,7 @@ from polytempo.markets.polymarket import (
 from polytempo.weather.wunderground import fetch_wunderground_observed_tmax
 from polytempo.reports.writer import RunReporter
 from polytempo.reports.live_report import (
+    format_calibration_per_model_compact,
     format_calibration_per_model_md,
     format_calibration_selection_md,
     format_distribution_md,
@@ -94,6 +95,7 @@ from polytempo.weather.open_meteo import (
     fetch_open_meteo_live_bundle,
 )
 from polytempo.weather.stations import STATIONS, Station, get_station
+from polytempo.weather.wu_live_forecast import append_wunderground_forecast
 
 app = typer.Typer()
 paper_app = typer.Typer(help="Paper trading ledger (demo account, no live orders).")
@@ -412,6 +414,11 @@ def _run_live_one_day(
                 )
             daily = bundle.daily_by_date[target_date]
             forecast = daily_to_forecast_values(bundle, target_date)
+            forecast = append_wunderground_forecast(
+                forecast,
+                station,
+                as_of_utc=run_at,
+            )
 
             reporter.section(
                 "Open-Meteo",
@@ -593,6 +600,19 @@ def _run_live_one_day(
                 typer.echo(
                     f"calibration (updated): {updated_selection.row.model} "
                     f"@ {updated_selection.row.lead_hours:g}h"
+                )
+            if model_strategy in (
+                ModelStrategy.BEST_HISTORICAL,
+                ModelStrategy.BEST_HISTORICAL_UPDATED,
+            ):
+                typer.echo(f"calibration per-model ceiling ({cal_path.name}):")
+                typer.echo(
+                    format_calibration_per_model_compact(
+                        csv_path=cal_path,
+                        station_id=station.icao,
+                        forecast=forecast,
+                        wall_lead_hours=lead_hours,
+                    )
                 )
             typer.echo(
                 f"distribution ({preview_result.model_strategy}): "

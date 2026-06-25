@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import csv
 import math
-import shutil
 import statistics
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -13,7 +11,11 @@ from datetime import timezone as dt_timezone
 from pathlib import Path
 from typing import Any
 
-from polytempo.weather.calibration_stats_csv import CalibrationStatRow
+from polytempo.weather.calibration_stats_csv import (
+    CalibrationStatRow,
+    archive_calibration_stats_csv_before_write,
+    write_calibration_stats_csv,
+)
 
 
 @dataclass(frozen=True)
@@ -44,18 +46,6 @@ class ForecastError:
     error_c: float
     abs_error_c: float
     squared_error_c: float
-
-
-CALIBRATION_STAT_COLUMNS = (
-    "station_id",
-    "model",
-    "lead_hours",
-    "n_samples",
-    "bias_c",
-    "mae_c",
-    "rmse_c",
-    "error_std_c",
-)
 
 
 def compute_lead_hours(run_time_utc: datetime, target_date: date) -> float:
@@ -195,38 +185,11 @@ def compute_calibration_stats(errors: list[ForecastError]) -> list[CalibrationSt
     return stats
 
 
-def _format_lead_hours(value: float) -> str:
-    return f"{value:g}"
+def tag_calibration_stats_anchor(
+    rows: list[CalibrationStatRow],
+    lead_hours_anchor: str,
+) -> list[CalibrationStatRow]:
+    """Attach ``lead_hours_anchor`` to rows from ``compute_calibration_stats``."""
+    from dataclasses import replace
 
-
-def archive_calibration_stats_csv_before_write(path: Path) -> Path | None:
-    """If path exists, copy to parent/historic/<stem>_<UTC-timestamp>.csv."""
-    if not path.is_file():
-        return None
-    historic_dir = path.parent / "historic"
-    historic_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(dt_timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    archive_path = historic_dir / f"{path.stem}_{timestamp}{path.suffix}"
-    shutil.copy2(path, archive_path)
-    return archive_path
-
-
-def write_calibration_stats_csv(rows: list[CalibrationStatRow], path: Path) -> None:
-    """Write per-(station, model, lead_hours) aggregated metrics."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CALIBRATION_STAT_COLUMNS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "station_id": row.station_id,
-                    "model": row.model,
-                    "lead_hours": _format_lead_hours(row.lead_hours),
-                    "n_samples": row.n_samples,
-                    "bias_c": row.bias_c,
-                    "mae_c": row.mae_c,
-                    "rmse_c": row.rmse_c,
-                    "error_std_c": row.error_std_c,
-                }
-            )
+    return [replace(row, lead_hours_anchor=lead_hours_anchor) for row in rows]

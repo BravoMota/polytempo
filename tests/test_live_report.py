@@ -18,6 +18,36 @@ from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import get_station
 
 
+def test_format_calibration_per_model_compact(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats_updated.csv"
+    csv_path.write_text(
+        "station_id,model,lead_hours,lead_hours_anchor,n_samples,bias_c,mae_c,rmse_c,error_std_c\n"
+        "EGLC,ecmwf_ifs025,36,run_init,90,-0.1,1.0,1.2,1.500\n"
+        "EGLC,wunderground,36,scraped_at,40,-0.1,0.8,0.9,0.600\n",
+        encoding="utf-8",
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 14),
+        values_c=[20.0, 22.0],
+        models=["ecmwf_ifs025", "wunderground"],
+        init_lead_hours=[30.0, 36.0],
+        model_run_init_utc=["2026-06-13T00:00:00Z", ""],
+    )
+    from polytempo.reports.live_report import format_calibration_per_model_compact
+
+    text = format_calibration_per_model_compact(
+        csv_path=csv_path,
+        station_id="EGLC",
+        forecast=forecast,
+        wall_lead_hours=36.0,
+    )
+    assert "ecmwf_ifs025: lead_hours=36 error_std_c=1.500" in text
+    assert "wunderground: lead_hours=36 error_std_c=0.600" in text
+
+
 def test_resolve_calibration_selection_uses_init_lead(tmp_path: Path) -> None:
     csv_path = tmp_path / "calibration_stats.csv"
     csv_path.write_text(

@@ -20,10 +20,17 @@ from __future__ import annotations
 
 import csv
 import math
+import shutil
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone as dt_timezone
 from pathlib import Path
 
 from polytempo.weather.data_dir import WEATHER_DATA_DIR
+from polytempo.weather.schema import ForecastValues
+
+LEAD_HOURS_ANCHOR_RUN_INIT = "run_init"
+LEAD_HOURS_ANCHOR_SCRAPED_AT = "scraped_at"
 
 DEFAULT_CALIBRATION_STATS_CSV_PATH = (
     WEATHER_DATA_DIR / "statistical" / "calibration_stats.csv"
@@ -31,11 +38,29 @@ DEFAULT_CALIBRATION_STATS_CSV_PATH = (
 DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH = (
     WEATHER_DATA_DIR / "statistical" / "calibration_stats_updated.csv"
 )
+DEFAULT_WU_CALIBRATION_STATS_CSV_PATH = (
+    WEATHER_DATA_DIR / "statistical" / "calibration_stats_wu.csv"
+)
+DEFAULT_COMBINED_CALIBRATION_STATS_CSV_PATH = (
+    WEATHER_DATA_DIR / "statistical" / "calibration_stats_combined.csv"
+)
+
+CALIBRATION_STAT_COLUMNS = (
+    "station_id",
+    "model",
+    "lead_hours",
+    "lead_hours_anchor",
+    "n_samples",
+    "bias_c",
+    "mae_c",
+    "rmse_c",
+    "error_std_c",
+)
 
 
 @dataclass(frozen=True)
 class CalibrationStatRow:
-    """One ``(station_id, model, lead_hours)`` aggregated error stat."""
+    """One ``(station_id, model, lead_hours, lead_hours_anchor)`` aggregated error stat."""
 
     station_id: str
     model: str
@@ -45,11 +70,12 @@ class CalibrationStatRow:
     mae_c: float
     rmse_c: float
     error_std_c: float
+    lead_hours_anchor: str | None = None
 
 
 def calibration_stat_row_to_dict(row: CalibrationStatRow) -> dict[str, object]:
     """Serialize one calibration CSV row for JSON audit metadata."""
-    return {
+    out: dict[str, object] = {
         "station_id": row.station_id,
         "model": row.model,
         "lead_hours": row.lead_hours,
@@ -59,6 +85,9 @@ def calibration_stat_row_to_dict(row: CalibrationStatRow) -> dict[str, object]:
         "rmse_c": row.rmse_c,
         "error_std_c": row.error_std_c,
     }
+    if row.lead_hours_anchor is not None:
+        out["lead_hours_anchor"] = row.lead_hours_anchor
+    return out
 
 
 def _parse_float(value: object) -> float | None:
@@ -107,6 +136,8 @@ def read_calibration_stats_csv(path: Path) -> list[CalibrationStatRow]:
             mae_c = _parse_float(raw.get("mae_c"))
             rmse_c = _parse_float(raw.get("rmse_c"))
             error_std_c = _parse_float(raw.get("error_std_c"))
+            anchor_raw = (raw.get("lead_hours_anchor") or "").strip()
+            lead_hours_anchor = anchor_raw or None
 
             if (
                 not station_id
@@ -131,9 +162,97 @@ def read_calibration_stats_csv(path: Path) -> list[CalibrationStatRow]:
                     mae_c=mae_c,
                     rmse_c=rmse_c,
                     error_std_c=error_std_c,
+                    lead_hours_anchor=lead_hours_anchor,
                 )
             )
     return rows
+
+
+def _format_lead_hours(value: float) -> str:
+    return f"{value:g}"
+
+
+def archive_calibration_stats_csv_before_write(path: Path) -> Path | None:
+    """If path exists, copy to parent/historic/<stem>_<UTC-timestamp>.csv."""
+    if not path.is_file():
+        return None
+    historic_dir = path.parent / "historic"
+    historic_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(dt_timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = historic_dir / f"{path.stem}_{timestamp}{path.suffix}"
+    shutil.copy2(path, archive_path)
+    return archive_path
+
+
+def write_calibration_stats_csv(rows: list[CalibrationStatRow], path: Path) -> None:
+    """Write per-(station, model, lead_hours) aggregated metrics."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CALIBRATION_STAT_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            anchor = row.lead_hours_anchor or ""
+            writer.writerow(
+                {
+                    "station_id": row.station_id,
+                    "model": row.model,
+                    "lead_hours": _format_lead_hours(row.lead_hours),
+                    "lead_hours_anchor": anchor,
+                    "n_samples": row.n_samples,
+                    "bias_c": row.bias_c,
+                    "mae_c": row.mae_c,
+                    "rmse_c": row.rmse_c,
+                    "error_std_c": row.error_std_c,
+                }
+            )
+
+
+def effective_lead_hours_anchor(row: CalibrationStatRow) -> str:
+    """Resolve anchor for one CSV row (explicit column or legacy default)."""
+    if row.lead_hours_anchor:
+        return row.lead_hours_anchor
+    if row.model == "wunderground":
+        return LEAD_HOURS_ANCHOR_SCRAPED_AT
+    return LEAD_HOURS_ANCHOR_RUN_INIT
+
+
+def resolve_lead_hours_anchor(
+    rows: list[CalibrationStatRow],
+    *,
+    station_id: str,
+    model: str,
+) -> str:
+    """Anchor used for live ceiling lookup for one model at one station."""
+    anchors = {
+        effective_lead_hours_anchor(row)
+        for row in rows
+        if row.station_id == station_id and row.model == model
+    }
+    if len(anchors) == 1:
+        return next(iter(anchors))
+    if LEAD_HOURS_ANCHOR_SCRAPED_AT in anchors:
+        return LEAD_HOURS_ANCHOR_SCRAPED_AT
+    if LEAD_HOURS_ANCHOR_RUN_INIT in anchors:
+        return LEAD_HOURS_ANCHOR_RUN_INIT
+    if model == "wunderground":
+        return LEAD_HOURS_ANCHOR_SCRAPED_AT
+    return LEAD_HOURS_ANCHOR_RUN_INIT
+
+
+def lookup_lead_hours_for_calibration(
+    *,
+    model: str,
+    lead_hours_anchor: str,
+    wall_lead_hours: float,
+    init_lead_hours_by_model: dict[str, float] | None,
+) -> float | None:
+    """Map live context to the lead bucket used for ceiling-row lookup."""
+    if lead_hours_anchor == LEAD_HOURS_ANCHOR_SCRAPED_AT:
+        return wall_lead_hours
+    if init_lead_hours_by_model is not None:
+        return init_lead_hours_by_model.get(model)
+    # Legacy CSV rows without init meta: run_init stats keyed on wall clock.
+    return wall_lead_hours
 
 
 def select_ceiling_row(
@@ -141,10 +260,12 @@ def select_ceiling_row(
     station_id: str,
     model: str,
     current_lead_hours: float,
+    *,
+    lead_hours_anchor: str | None = None,
 ) -> CalibrationStatRow | None:
     """Return the row with the smallest ``lead_hours >= current_lead_hours``.
 
-    Matches station + model. Returns ``None`` when no row qualifies.
+    Matches station + model (+ anchor when given). Returns ``None`` when no row qualifies.
     """
     candidates = [
         row
@@ -152,6 +273,10 @@ def select_ceiling_row(
         if row.station_id == station_id
         and row.model == model
         and row.lead_hours >= current_lead_hours
+        and (
+            lead_hours_anchor is None
+            or effective_lead_hours_anchor(row) == lead_hours_anchor
+        )
     ]
     if not candidates:
         return None
@@ -207,30 +332,29 @@ def select_best_model(
 ) -> tuple[CalibrationStatRow, str] | None:
     """Pick the model with the lowest valid sigma at its ceiling lead row.
 
-    For each available model, the ceiling row (smallest ``lead_hours >= current``)
-    is looked up.     When ``init_lead_hours_by_model`` is set, only models present in that
-    mapping are considered; each uses its init-based lead for ceiling lookup.
-    Otherwise all ``available_models`` share ``current_lead_hours``. Models
-    without a ceiling row are dropped. Among the
-    remaining models, the one with the lowest valid ``error_std_c`` wins; if every
-    candidate's ``error_std_c`` is missing/zero/non-finite, ``rmse_c`` is used
-    as the tie-break source. Returns ``(row, sigma_source)`` or ``None`` when
-    no model qualifies.
+    Each model's ceiling lookup lead depends on ``lead_hours_anchor`` in the CSV:
+    ``scraped_at`` rows use wall-clock lead; ``run_init`` rows use init/run-time
+    lead when ``init_lead_hours_by_model`` is available (legacy rows without init
+    meta fall back to wall clock). Models without a ceiling row are dropped.
     """
     candidates: list[tuple[CalibrationStatRow, float, str]] = []
-    if init_lead_hours_by_model:
-        models_to_try = [
-            model for model in available_models if model in init_lead_hours_by_model
-        ]
-    else:
-        models_to_try = available_models
-    for model in models_to_try:
-        lead = (
-            init_lead_hours_by_model[model]
-            if init_lead_hours_by_model
-            else current_lead_hours
+    for model in available_models:
+        anchor = resolve_lead_hours_anchor(rows, station_id=station_id, model=model)
+        lead = lookup_lead_hours_for_calibration(
+            model=model,
+            lead_hours_anchor=anchor,
+            wall_lead_hours=current_lead_hours,
+            init_lead_hours_by_model=init_lead_hours_by_model,
         )
-        row = select_ceiling_row(rows, station_id, model, lead)
+        if lead is None:
+            continue
+        row = select_ceiling_row(
+            rows,
+            station_id,
+            model,
+            lead,
+            lead_hours_anchor=anchor,
+        )
         if row is None:
             continue
         sigma_info = _sigma_for_calibration(row)

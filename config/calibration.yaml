@@ -22,3 +22,9 @@ models:
   - name: gfs_seamless
     run_init_interval_hours: 6
     forecast_days: 16
+
+wunderground_forecast:
+  enabled: true
+  model: wunderground
+  max_lead_hours: 60
+  forecast_snapshot_min_utc: "2026-06-06T20:00:00Z"

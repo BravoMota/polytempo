@@ -10,7 +10,7 @@ Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_for
 | --- | --- |
 | Postgres `calibration_*` tables | Incremental observations + forecast records + job state |
 | `raw/single-runs/` | Cached Open-Meteo Single Runs JSON (reused from V1 fetch) |
-| `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated` |
+| `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated`: Open-Meteo rows (`lead_hours_anchor=run_init`) plus WU rows (`lead_hours_anchor=scraped_at`) |
 | `statistical/historic/calibration_stats_updated_*.csv` | Timestamped archive of the previous nightly CSV before each recompute (gitignored) |
 
 **Observations:** WU station hourly observations (`units=m`); daily high = `max(observations[*].temp)` in °C, stored as integer `observed_tmax_c`. `observed_tmax_f` is null for metric fetches (legacy imperial parse paths may still populate it).
@@ -47,7 +47,7 @@ Numbered scripts under `scripts/Calibrator_V1/` (or legacy numbered `scripts/1_`
 | PostgreSQL `open_meteo_fetch_cycles`, `open_meteo_model_meta_snapshots`, `open_meteo_forecast_snapshots` | Open-Meteo rolling meta + Forecast API audit (`run_collector.py` `open_meteo` block) |
 | `raw/wunderground/` | Raw WU HTML sidecars |
 
-WU collector data is **not** used for calibration joins. Open-Meteo collector rows are for **delay / run-correspondence analysis** against `calibration_forecast_records` (Single Runs).
+Open-Meteo collector rows are for **delay / run-correspondence analysis** against `calibration_forecast_records` (Single Runs). WU `forecast_snapshots` feed the separate WU forecast calibration path (see below).
 
 ### Open-Meteo live audit (init vs wall-clock lead)
 
@@ -83,6 +83,7 @@ Canonical for forecast records, error joins, and `calibration_stats*.csv`:
 **Paper bot (`fetch_market_context`):**
 
 - **Entry gates / ledger:** wall-clock lead from `now` to end of target day (`lead_hours_to_end_of_target_day`).
+- **`best_historical_updated`:** Open-Meteo models use init lead (`run_init` anchor); **Wunderground** uses wall-clock lead (`scraped_at` anchor) with live adjusted Tmax from Weather.com hourly forecast + same-day v1 history obs.
 - **`best_historical` CSV lookup:** per-model init lead from rolling `meta.json` (`compute_lead_hours(run_init_utc, target_date)`), carried on `ForecastValues.init_lead_hours`.
 
 ### `best_historical` and models without rolling meta
@@ -104,3 +105,30 @@ Tmax is aggregated over the **station-local** calendar day by Open-Meteo; the le
 ```
 
 Updated-store DB rows store integer `observed_tmax_c`; `observed_tmax_f` is optional (null for metric API fetches).
+
+## WU forecast calibration (offline, not wired to paper bot)
+
+**Lead lookup at runtime:** Open-Meteo models use init/run-time lead (`run_init` anchor); Wunderground uses wall-clock lead from scrape time (`scraped_at` anchor). See `calibration_stats_csv.select_best_model`.
+
+Separate path for Wunderground **forecast** calibration using collector `forecast_snapshots` and history-page hourly observations. Rows are written into `statistical/calibration_stats_updated.csv` alongside Open-Meteo. Job state: `calibration_job_state.job_name = 'wu_calibration'`.
+
+| Layer | Role |
+| --- | --- |
+| Postgres `wu_history_daily_observations` | Hourly metric °C timeline from Weather.com v1 `observations/historical.json?units=m` (same data as the [history/daily](https://www.wunderground.com/history/daily/gb/london/EGLC/date/2026-6-24) Daily Observations table) |
+| Postgres `calibration_forecast_records` (`model = wunderground`) | Adjusted daily Tmax per o'clock scrape |
+| `raw/wunderground/history_daily/` | Raw v1 API JSON sidecars (`*_historical.json`) |
+
+**Scripts:**
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/bootstrap_wu_calibration_store.py` | Backfill history obs from `start_date`; ingest WU forecasts from collector epoch |
+| `scripts/run_daily_calibration.py --once` | Open-Meteo + WU daily; recomputes unified `calibration_stats_updated.csv` |
+
+**Lead bucketing:** wall-clock UTC anchor (`lead_hours_to_end_of_target_day`), floored to integer hours, capped at 60. Only scrapes with `scraped_at_utc.minute == 0` are used (o'clock polls).
+
+**Adjusted Tmax:** at each scrape, `max(max observed °C so far on target day, max remaining hourly forecast °C)` using `wu_history_daily_observations` for same-day obs.
+
+**Forecast window:** no historical forecast backfill — only `forecast_snapshots` from collector start (config `forecast_snapshot_min_utc`, default `2026-06-06T20:21:37Z`). Error join still uses `calibration_observed_tmax` (v1 API daily high).
+
+**Not wired:** nothing else — WU competes in `best_historical_updated` when live fetch succeeds.

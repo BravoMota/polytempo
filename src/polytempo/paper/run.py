@@ -24,6 +24,8 @@ from polytempo.profiles.models import TradingProfile
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.calibration_stats_csv import (
     calibration_stat_row_to_dict,
+    effective_lead_hours_anchor,
+    lookup_lead_hours_for_calibration,
     verified_init_lead_hours_by_model,
 )
 
@@ -311,9 +313,14 @@ def _analysis_audit_metadata(
                 predicted_tmax_c = forecast.values_c[index]
 
         init_leads = verified_init_lead_hours_by_model(forecast)
-        if init_leads is not None and row.model in init_leads:
-            lookup_lead_hours = init_leads[row.model]
-        else:
+        anchor = effective_lead_hours_anchor(row)
+        lookup_lead_hours = lookup_lead_hours_for_calibration(
+            model=row.model,
+            lead_hours_anchor=anchor,
+            wall_lead_hours=lead_hours if lead_hours is not None else 0.0,
+            init_lead_hours_by_model=init_leads,
+        )
+        if lookup_lead_hours is None and lead_hours is not None:
             lookup_lead_hours = lead_hours
 
         meta["calibration_selection"] = {

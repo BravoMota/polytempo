@@ -87,6 +87,10 @@ def test_fetch_market_context_populates_init_lead_and_wall_clock_lead(
         "polytempo.paper.market_context.fetch_open_meteo_live_bundle",
         lambda **kwargs: bundle,
     )
+    monkeypatch.setattr(
+        "polytempo.paper.market_context.append_wunderground_forecast",
+        lambda forecast, station, **kwargs: forecast,
+    )
 
     ctx = fetch_market_context("london", target_date, now=now)
 

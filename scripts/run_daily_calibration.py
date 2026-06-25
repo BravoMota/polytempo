@@ -23,7 +23,10 @@ from polytempo.weather.calibration_config import (  # noqa: E402
     DEFAULT_CALIBRATION_CONFIG_PATH,
     load_calibration_config,
 )
-from polytempo.weather.calibration_runner import run_daily  # noqa: E402
+from polytempo.weather.calibration_runner import (
+    run_daily,
+    run_wu_daily,
+)  # noqa: E402
 
 logger = logging.getLogger(__name__)
 _stop = False
@@ -38,7 +41,13 @@ def _handle_signal(signum: int, _frame: object) -> None:
 def _run_once(config_path: Path, database_url: str) -> int:
     initialize_database(database_url)
     config = load_calibration_config(config_path)
-    return run_daily(config, database_url)
+    om_code = run_daily(config, database_url)
+    wu_code = run_wu_daily(config, database_url)
+    if om_code != 0:
+        return om_code
+    if wu_code != 0:
+        return wu_code
+    return 0
 
 
 def main() -> int:

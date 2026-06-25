@@ -320,5 +320,144 @@ def test_read_calibration_stats_csv_smoke_real_file() -> None:
         assert row.lead_hours >= 0
 
 
+def test_write_updated_calibration_stats_with_mixed_anchors(tmp_path: Path) -> None:
+    from polytempo.weather.calibration_stats_csv import (
+        CALIBRATION_STAT_COLUMNS,
+        LEAD_HOURS_ANCHOR_RUN_INIT,
+        LEAD_HOURS_ANCHOR_SCRAPED_AT,
+        write_calibration_stats_csv,
+    )
+
+    updated = tmp_path / "calibration_stats_updated.csv"
+    write_calibration_stats_csv(
+        [
+            CalibrationStatRow(
+                station_id="EGLC",
+                model="ecmwf_ifs025",
+                lead_hours=24.0,
+                n_samples=10,
+                bias_c=0.1,
+                mae_c=0.2,
+                rmse_c=0.3,
+                error_std_c=0.4,
+                lead_hours_anchor=LEAD_HOURS_ANCHOR_RUN_INIT,
+            ),
+            CalibrationStatRow(
+                station_id="EGLC",
+                model="wunderground",
+                lead_hours=36.0,
+                n_samples=5,
+                bias_c=-0.1,
+                mae_c=0.5,
+                rmse_c=0.6,
+                error_std_c=0.7,
+                lead_hours_anchor=LEAD_HOURS_ANCHOR_SCRAPED_AT,
+            ),
+        ],
+        updated,
+    )
+    rows = read_calibration_stats_csv(updated)
+    assert len(rows) == 2
+    anchors = {row.model: row.lead_hours_anchor for row in rows}
+    assert anchors["ecmwf_ifs025"] == LEAD_HOURS_ANCHOR_RUN_INIT
+    assert anchors["wunderground"] == LEAD_HOURS_ANCHOR_SCRAPED_AT
+    with updated.open(encoding="utf-8") as handle:
+        header = handle.readline().strip().split(",")
+    assert header == list(CALIBRATION_STAT_COLUMNS)
+
+
+def test_select_best_model_mixed_anchors_uses_wall_and_init_leads() -> None:
+    from polytempo.weather.calibration_stats_csv import (
+        LEAD_HOURS_ANCHOR_RUN_INIT,
+        LEAD_HOURS_ANCHOR_SCRAPED_AT,
+    )
+
+    rows = [
+        CalibrationStatRow(
+            station_id="EGLC",
+            model="ecmwf_ifs025",
+            lead_hours=30.0,
+            n_samples=10,
+            bias_c=0.0,
+            mae_c=1.0,
+            rmse_c=1.2,
+            error_std_c=2.0,
+            lead_hours_anchor=LEAD_HOURS_ANCHOR_RUN_INIT,
+        ),
+        CalibrationStatRow(
+            station_id="EGLC",
+            model="wunderground",
+            lead_hours=30.0,
+            n_samples=10,
+            bias_c=0.0,
+            mae_c=1.0,
+            rmse_c=1.2,
+            error_std_c=0.5,
+            lead_hours_anchor=LEAD_HOURS_ANCHOR_SCRAPED_AT,
+        ),
+    ]
+
+    chosen = select_best_model(
+        rows,
+        station_id="EGLC",
+        available_models=["ecmwf_ifs025", "wunderground"],
+        current_lead_hours=30.0,
+        init_lead_hours_by_model={"ecmwf_ifs025": 30.0},
+    )
+    assert chosen is not None
+    assert chosen[0].model == "wunderground"
+    assert chosen[0].lead_hours == 30.0
+
+
+def test_select_ceiling_row_filters_by_anchor() -> None:
+    from polytempo.weather.calibration_stats_csv import (
+        LEAD_HOURS_ANCHOR_RUN_INIT,
+        LEAD_HOURS_ANCHOR_SCRAPED_AT,
+    )
+
+    rows = [
+        CalibrationStatRow(
+            station_id="EGLC",
+            model="ecmwf_ifs025",
+            lead_hours=24.0,
+            n_samples=10,
+            bias_c=0.0,
+            mae_c=1.0,
+            rmse_c=1.2,
+            error_std_c=1.0,
+            lead_hours_anchor=LEAD_HOURS_ANCHOR_RUN_INIT,
+        ),
+        CalibrationStatRow(
+            station_id="EGLC",
+            model="ecmwf_ifs025",
+            lead_hours=24.0,
+            n_samples=5,
+            bias_c=0.0,
+            mae_c=1.0,
+            rmse_c=1.2,
+            error_std_c=9.0,
+            lead_hours_anchor=LEAD_HOURS_ANCHOR_SCRAPED_AT,
+        ),
+    ]
+    run_init_row = select_ceiling_row(
+        rows,
+        "EGLC",
+        "ecmwf_ifs025",
+        20.0,
+        lead_hours_anchor=LEAD_HOURS_ANCHOR_RUN_INIT,
+    )
+    scraped_row = select_ceiling_row(
+        rows,
+        "EGLC",
+        "ecmwf_ifs025",
+        20.0,
+        lead_hours_anchor=LEAD_HOURS_ANCHOR_SCRAPED_AT,
+    )
+    assert run_init_row is not None
+    assert scraped_row is not None
+    assert run_init_row.error_std_c == 1.0
+    assert scraped_row.error_std_c == 9.0
+
+
 # Quiet pyflakes / linters about unused pytest import when no parametrize.
 _ = pytest

@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -87,6 +89,158 @@ def build_wunderground_history_page_url(
     )
 
 
+@dataclass(frozen=True)
+class ParsedWuHistoryObservation:
+    """One hourly observation from a WU history/daily page (metric °C)."""
+
+    observed_at_utc: datetime
+    observed_at_local: str | None
+    temp_c: float
+
+
+def _parse_observed_at_utc(value: object) -> datetime | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        text = value.strip().replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(text).astimezone(timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _metric_historical_bodies(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return embedded API bodies for station hourly history in metric units."""
+    bodies: list[dict[str, Any]] = []
+    for entry in state.values():
+        if not isinstance(entry, dict):
+            continue
+        url = str(entry.get("u") or "")
+        if "observations/historical" not in url:
+            continue
+        if "units=m" not in url:
+            continue
+        body = entry.get("b")
+        if isinstance(body, dict):
+            bodies.append(body)
+    return bodies
+
+
+def _observations_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or not observations:
+        raise ValueError("Daily Observations not found: observations list empty")
+    return observations
+
+
+def _parse_observation_rows(observations: list[dict[str, Any]]) -> list[ParsedWuHistoryObservation]:
+    out: list[ParsedWuHistoryObservation] = []
+    for row in observations:
+        if not isinstance(row, dict):
+            continue
+        temp = row.get("temp")
+        if not isinstance(temp, (int, float)) or isinstance(temp, bool):
+            continue
+        observed_at = _parse_observed_at_utc(
+            row.get("obsTimeUtc") if row.get("obsTimeUtc") is not None else row.get("valid_time_gmt")
+        )
+        if observed_at is None:
+            continue
+        local_raw = row.get("obsTimeLocal")
+        observed_local = str(local_raw) if local_raw is not None else None
+        out.append(
+            ParsedWuHistoryObservation(
+                observed_at_utc=observed_at,
+                observed_at_local=observed_local,
+                temp_c=float(temp),
+            )
+        )
+    if not out:
+        raise ValueError("Daily Observations not found: no valid temp rows")
+    return out
+
+
+def parse_v1_historical_observations_payload(
+    payload: dict[str, Any],
+) -> list[ParsedWuHistoryObservation]:
+    """Parse metric hourly obs from v1 ``observations/historical.json`` (``units=m``)."""
+    if not isinstance(payload, dict):
+        raise ValueError("historical payload must be an object")
+    return _parse_observation_rows(_observations_from_payload(payload))
+
+
+def parse_wu_history_daily_observations(html_or_json: str) -> list[ParsedWuHistoryObservation]:
+    """Parse Daily Observations from embedded history page JSON (legacy HTML path)."""
+    state = _extract_app_root_state(html_or_json)
+    bodies = _metric_historical_bodies(state)
+    if not bodies:
+        raise ValueError(
+            "Daily Observations not found: no metric observations/historical body in page"
+        )
+
+    for body in bodies:
+        try:
+            return _parse_observation_rows(_observations_from_payload(body))
+        except ValueError:
+            continue
+    raise ValueError("Daily Observations not found: observations list empty")
+
+
+def fetch_v1_historical_observations_payload(
+    station_id: str,
+    target_date: date,
+    *,
+    country_code: str,
+    client: httpx.Client,
+    api_key: str = WUNDERGROUND_API_KEY,
+) -> dict[str, Any]:
+    """Fetch one day of station hourly observations (metric) from Weather.com v1 API."""
+    url = _build_v1_historical_url(
+        station_id,
+        target_date,
+        country_code=country_code,
+        api_key=api_key,
+    )
+    return _fetch_weather_com_json(url, client=client)
+
+
+def fetch_wu_history_daily_observations(
+    station_id: str,
+    target_date: date,
+    *,
+    country_code: str,
+    raw_dir: Path,
+    client: httpx.Client,
+) -> tuple[list[ParsedWuHistoryObservation], Path]:
+    """Fetch Daily Observations for one station/day via v1 API; save raw JSON."""
+    payload = fetch_v1_historical_observations_payload(
+        station_id,
+        target_date,
+        country_code=country_code,
+        client=client,
+    )
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    path = raw_dir / f"{station_id}_{target_date.isoformat()}_historical.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    meta_path = raw_dir / f"{station_id}_{target_date.isoformat()}_historical.meta.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "station_id": station_id,
+                "target_date": target_date.isoformat(),
+                "source_url": _build_v1_historical_url(
+                    station_id,
+                    target_date,
+                    country_code=country_code,
+                ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return parse_v1_historical_observations_payload(payload), path
 def _build_location_point_url(station_id: str, api_key: str = WUNDERGROUND_API_KEY) -> str:
     return WUNDERGROUND_LOCATION_POINT_URL_TEMPLATE.format(
         station_id=station_id,
@@ -458,27 +612,9 @@ def _fetch_v1_historical_daily_high_c(
         country_code=country_code,
         api_key=api_key,
     )
-    headers = _api_headers()
-    if client is not None:
-        response = client.get(url, headers=headers, timeout=REQUEST_TIMEOUT_S)
-    else:
-        response = httpx.get(url, headers=headers, timeout=REQUEST_TIMEOUT_S)
-    response.raise_for_status()
-    payload = response.json()
-    observations = payload.get("observations") if isinstance(payload, dict) else None
-    if not isinstance(observations, list) or not observations:
-        raise ValueError("historical observations missing or empty")
-
-    temps = [
-        float(row["temp"])
-        for row in observations
-        if isinstance(row, dict)
-        and isinstance(row.get("temp"), (int, float))
-        and not isinstance(row.get("temp"), bool)
-    ]
-    if not temps:
-        raise ValueError("historical observations contained no temperature values")
-    return max(temps)
+    payload = _fetch_weather_com_json(url, client=client)
+    rows = parse_v1_historical_observations_payload(payload)
+    return max(row.temp_c for row in rows)
 
 
 def _resolve_history_location(

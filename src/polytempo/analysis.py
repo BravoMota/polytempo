@@ -201,8 +201,6 @@ def _resolve_strategy(
         init_lead_hours_by_model = verified_init_lead_hours_by_model(forecast)
         if init_lead_hours_by_model is None:
             return _ensemble_fallback("forecast_init_lead_length_mismatch")
-        if not init_lead_hours_by_model:
-            return _ensemble_fallback("no_models_with_init_meta")
 
     rows = read_calibration_stats_csv(calibration_stats_path)
     if not rows:

@@ -124,6 +124,20 @@ CREATE INDEX IF NOT EXISTS idx_calibration_forecast_station_target
 CREATE INDEX IF NOT EXISTS idx_calibration_observed_station_target
     ON calibration_observed_tmax(station_id, target_date);
 
+CREATE TABLE IF NOT EXISTS wu_history_daily_observations (
+    station_id TEXT NOT NULL REFERENCES stations(station_id),
+    target_date TEXT NOT NULL,
+    observed_at_utc TEXT NOT NULL,
+    observed_at_local TEXT,
+    temp_c DOUBLE PRECISION NOT NULL,
+    fetched_at_utc TEXT NOT NULL,
+    raw_file_path TEXT,
+    PRIMARY KEY (station_id, target_date, observed_at_utc)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wu_history_obs_station_target
+    ON wu_history_daily_observations(station_id, target_date);
+
 CREATE TABLE IF NOT EXISTS open_meteo_fetch_cycles (
     id BIGSERIAL PRIMARY KEY,
     station_id TEXT NOT NULL REFERENCES stations(station_id),

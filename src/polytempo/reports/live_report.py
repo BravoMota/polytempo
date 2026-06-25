@@ -10,7 +10,9 @@ from polytempo.analysis import AnalysisResult
 from polytempo.model.distribution import DistributionBuildInfo
 from polytempo.weather.calibration_stats_csv import (
     CalibrationStatRow,
+    lookup_lead_hours_for_calibration,
     read_calibration_stats_csv,
+    resolve_lead_hours_anchor,
     select_best_model,
     select_ceiling_row,
     verified_init_lead_hours_by_model,
@@ -81,15 +83,6 @@ def resolve_calibration_selection(
         )
 
     init_leads = _init_lead_by_model(forecast)
-    if init_leads is not None and not init_leads:
-        return CalibrationSelection(
-            csv_path=csv_path,
-            label=label,
-            row=None,
-            sigma_source=None,
-            lookup_lead_hours=None,
-            fallback_reason="no_models_with_init_meta",
-        )
     selection = select_best_model(
         rows,
         station_id=station_id,
@@ -108,7 +101,13 @@ def resolve_calibration_selection(
         )
 
     row, sigma_source = selection
-    lookup_lead = init_leads[row.model] if row.model in init_leads else wall_lead_hours
+    anchor = resolve_lead_hours_anchor(rows, station_id=station_id, model=row.model)
+    lookup_lead = lookup_lead_hours_for_calibration(
+        model=row.model,
+        lead_hours_anchor=anchor,
+        wall_lead_hours=wall_lead_hours,
+        init_lead_hours_by_model=init_leads,
+    )
     tmax_by_model = _predicted_tmax_by_model(forecast)
     return CalibrationSelection(
         csv_path=csv_path,
@@ -154,6 +153,95 @@ def format_calibration_selection_md(selection: CalibrationSelection) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class ModelCalibrationCeiling:
+    """Ceiling calibration stat row used for one live model."""
+
+    model: str
+    anchor: str
+    lookup_lead_hours: float | None
+    row: CalibrationStatRow | None
+
+
+def calibration_ceilings_by_model(
+    *,
+    csv_path: Path,
+    station_id: str,
+    forecast: ForecastValues,
+    wall_lead_hours: float,
+) -> list[ModelCalibrationCeiling]:
+    """Per live model: anchor, lookup lead, and ceiling CSV row (if any)."""
+    rows = read_calibration_stats_csv(csv_path)
+    if not rows or not forecast.models:
+        return []
+
+    init_leads = _init_lead_by_model(forecast)
+    out: list[ModelCalibrationCeiling] = []
+    for model in forecast.models:
+        anchor = resolve_lead_hours_anchor(rows, station_id=station_id, model=model)
+        lookup = lookup_lead_hours_for_calibration(
+            model=model,
+            lead_hours_anchor=anchor,
+            wall_lead_hours=wall_lead_hours,
+            init_lead_hours_by_model=init_leads,
+        )
+        if lookup is None:
+            out.append(
+                ModelCalibrationCeiling(
+                    model=model,
+                    anchor=anchor,
+                    lookup_lead_hours=None,
+                    row=None,
+                )
+            )
+            continue
+        ceiling = select_ceiling_row(
+            rows,
+            station_id,
+            model,
+            lookup,
+            lead_hours_anchor=anchor,
+        )
+        out.append(
+            ModelCalibrationCeiling(
+                model=model,
+                anchor=anchor,
+                lookup_lead_hours=lookup,
+                row=ceiling,
+            )
+        )
+    return out
+
+
+def format_calibration_per_model_compact(
+    *,
+    csv_path: Path,
+    station_id: str,
+    forecast: ForecastValues,
+    wall_lead_hours: float,
+) -> str:
+    """One line per model: ceiling ``lead_hours`` and ``error_std_c``."""
+    ceilings = calibration_ceilings_by_model(
+        csv_path=csv_path,
+        station_id=station_id,
+        forecast=forecast,
+        wall_lead_hours=wall_lead_hours,
+    )
+    if not ceilings:
+        return "(no per-model calibration rows)"
+
+    lines: list[str] = []
+    for entry in ceilings:
+        if entry.row is None:
+            lines.append(f"  {entry.model}: —")
+        else:
+            lines.append(
+                f"  {entry.model}: lead_hours={entry.row.lead_hours:g} "
+                f"error_std_c={entry.row.error_std_c:.3f}"
+            )
+    return "\n".join(lines)
+
+
 def format_calibration_per_model_md(
     *,
     csv_path: Path,
@@ -162,30 +250,35 @@ def format_calibration_per_model_md(
     wall_lead_hours: float,
 ) -> str:
     """Compact ceiling-row lookup per live model (debug aid)."""
-    rows = read_calibration_stats_csv(csv_path)
-    if not rows or not forecast.models:
+    ceilings = calibration_ceilings_by_model(
+        csv_path=csv_path,
+        station_id=station_id,
+        forecast=forecast,
+        wall_lead_hours=wall_lead_hours,
+    )
+    if not ceilings:
         return "_no per-model rows (missing csv or model list)_"
 
-    init_leads = _init_lead_by_model(forecast) or {}
     tmax_by_model = _predicted_tmax_by_model(forecast)
     lines = [
-        "| model | predicted_tmax_c | lookup_lead_h | ceiling_lead_h | error_std_c |",
-        "| --- | ---: | ---: | ---: | ---: |",
+        "| model | anchor | predicted_tmax_c | lookup_lead_h | ceiling_lead_h | error_std_c |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
     ]
-    for model in forecast.models:
-        tmax = tmax_by_model.get(model)
-        tmax_s = _format_optional(tmax, ".2f")
-        if model not in init_leads:
-            lines.append(f"| `{model}` | {tmax_s} | excluded | — | — |")
+    for entry in ceilings:
+        tmax_s = _format_optional(tmax_by_model.get(entry.model), ".2f")
+        if entry.lookup_lead_hours is None:
+            lines.append(f"| `{entry.model}` | `{entry.anchor}` | {tmax_s} | excluded | — | — |")
             continue
-        lookup = init_leads[model]
-        ceiling = select_ceiling_row(rows, station_id, model, lookup)
-        if ceiling is None:
-            lines.append(f"| `{model}` | {tmax_s} | {lookup:g} | — | — |")
+        if entry.row is None:
+            lines.append(
+                f"| `{entry.model}` | `{entry.anchor}` | {tmax_s} | "
+                f"{entry.lookup_lead_hours:g} | — | — |"
+            )
         else:
             lines.append(
-                f"| `{model}` | {tmax_s} | {lookup:g} | {ceiling.lead_hours:g} | "
-                f"{ceiling.error_std_c:.3f} |"
+                f"| `{entry.model}` | `{entry.anchor}` | {tmax_s} | "
+                f"{entry.lookup_lead_hours:g} | {entry.row.lead_hours:g} | "
+                f"{entry.row.error_std_c:.3f} |"
             )
     return "\n".join(lines)
 

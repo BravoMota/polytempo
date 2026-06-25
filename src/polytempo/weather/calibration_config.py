@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
+from datetime import timezone as dt_timezone
 from pathlib import Path
 
 import yaml
@@ -14,7 +15,9 @@ from polytempo.collectors.config import (
     load_weather_collectors_config,
 )
 from polytempo.weather.data_dir import REPO_ROOT, WEATHER_DATA_DIR
-from polytempo.weather.calibration_stats_csv import DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+from polytempo.weather.calibration_stats_csv import (
+    DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+)
 
 DEFAULT_CALIBRATION_CONFIG_PATH = REPO_ROOT / "config" / "calibration.yaml"
 
@@ -27,6 +30,14 @@ class CalibrationModelConfig:
 
 
 @dataclass(frozen=True)
+class WundergroundForecastConfig:
+    enabled: bool
+    model: str
+    max_lead_hours: int
+    forecast_snapshot_min_utc: datetime | None
+
+
+@dataclass(frozen=True)
 class CalibrationConfig:
     start_date: date
     schedule_anchor_time_utc: str
@@ -35,6 +46,7 @@ class CalibrationConfig:
     stations: list[StationConfig]
     models: list[CalibrationModelConfig]
     collector_config_path: Path
+    wunderground_forecast: WundergroundForecastConfig | None = None
 
 
 def _resolve_path(value: str | Path, *, base: Path = REPO_ROOT) -> Path:
@@ -107,6 +119,22 @@ def load_calibration_config(
         base=REPO_ROOT,
     )
 
+    wu_raw = raw.get("wunderground_forecast")
+    wu_config: WundergroundForecastConfig | None = None
+    if isinstance(wu_raw, dict) and wu_raw.get("enabled"):
+        min_utc_raw = wu_raw.get("forecast_snapshot_min_utc")
+        min_utc: datetime | None = None
+        if isinstance(min_utc_raw, str) and min_utc_raw.strip():
+            min_utc = datetime.fromisoformat(min_utc_raw.replace("Z", "+00:00")).astimezone(
+                dt_timezone.utc
+            )
+        wu_config = WundergroundForecastConfig(
+            enabled=True,
+            model=str(wu_raw.get("model") or "wunderground"),
+            max_lead_hours=int(wu_raw.get("max_lead_hours", 60)),
+            forecast_snapshot_min_utc=min_utc,
+        )
+
     return CalibrationConfig(
         start_date=date.fromisoformat(str(raw.get("start_date", "2026-02-01"))),
         schedule_anchor_time_utc=str(raw.get("schedule_anchor_time_utc", "02:00")),
@@ -115,4 +143,5 @@ def load_calibration_config(
         stations=stations,
         models=models,
         collector_config_path=collector_path,
+        wunderground_forecast=wu_config,
     )

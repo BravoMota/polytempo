@@ -26,6 +26,7 @@ from polytempo.weather.open_meteo import (
 )
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station, get_station
+from polytempo.weather.wu_live_forecast import append_wunderground_forecast
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,11 @@ def fetch_market_context(
         )
     daily = bundle.daily_by_date[target_date]
     forecast = daily_to_forecast_values(bundle, target_date)
+    forecast = append_wunderground_forecast(
+        forecast,
+        station,
+        as_of_utc=fetched_at,
+    )
     lead_hours = lead_hours_to_end_of_target_day(target_date, now=now)
 
     return MarketContext(
