@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from polytempo.visualizer.trades import (
+    bucket_probs_from_trades,
     group_by_event,
+    model_p_from_trade,
     realized_trades_from_rows,
 )
 
@@ -168,3 +172,78 @@ def test_group_by_event_resolution_label() -> None:
     by_id = {g.polymarket_event_id: g for g in groups}
     assert by_id["evt-a"].resolution_label == "27°C"
     assert by_id["evt-b"].resolution_label == "early exit"
+
+
+def test_model_p_from_trade_yes_and_no() -> None:
+    from dataclasses import replace
+
+    from polytempo.visualizer.trades import RealizedTrade
+
+    yes_trade = RealizedTrade(
+        trade_id="t1",
+        polymarket_event_id="evt",
+        settlement_date=date(2026, 6, 17),
+        realization_type="SETTLE",
+        bucket_label="26°C",
+        side="YES",
+        entry_price=0.4,
+        stake_usd=10.0,
+        shares=25.0,
+        yes_bid=0.38,
+        yes_ask=0.4,
+        edge_pp=5.0,
+        lead_hours=30.0,
+        model_strategy="best_historical",
+        trade_action="BUY_YES",
+        opened_at_utc="2026-06-16T18:00:00+00:00",
+        open_metadata={},
+        winning_label="26°C",
+        outcome="YES",
+        payout_usd=25.0,
+        realized_at_utc="2026-06-17T23:00:00+00:00",
+        exit_metadata={},
+        pnl_usd=15.0,
+    )
+    assert model_p_from_trade(yes_trade) == pytest.approx(0.45)
+
+    no_trade = replace(
+        yes_trade,
+        side="NO",
+        edge_pp=8.0,
+        yes_bid=0.35,
+        yes_ask=0.38,
+    )
+    assert model_p_from_trade(no_trade) == pytest.approx(0.27)
+
+
+def test_bucket_probs_from_trades() -> None:
+    from polytempo.visualizer.trades import RealizedTrade
+
+    trade = RealizedTrade(
+        trade_id="t1",
+        polymarket_event_id="evt",
+        settlement_date=date(2026, 6, 17),
+        realization_type="SETTLE",
+        bucket_label="28°C",
+        side="NO",
+        entry_price=0.68,
+        stake_usd=10.0,
+        shares=14.7,
+        yes_bid=0.32,
+        yes_ask=0.35,
+        edge_pp=9.6246,
+        lead_hours=30.0,
+        model_strategy="best_historical",
+        trade_action="BUY_NO",
+        opened_at_utc="2026-06-16T18:00:00+00:00",
+        open_metadata={},
+        winning_label="28°C",
+        outcome="NO",
+        payout_usd=14.7,
+        realized_at_utc="2026-06-17T23:00:00+00:00",
+        exit_metadata={},
+        pnl_usd=4.7,
+    )
+    probs = bucket_probs_from_trades([trade])
+    assert "28°C" in probs
+    assert probs["28°C"] == pytest.approx(0.223754, rel=1e-4)

@@ -12,12 +12,14 @@ from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.model.distribution import DistributionBuildInfo, normal_pdf
 from polytempo.visualizer.chart import (
     bucket_table_dataframe,
+    bucket_table_has_replay_mismatch,
     build_analysis_chart,
     build_pivot_dataframe,
     build_pivot_heatmap,
     compute_market_implied_summary,
     pivot_click_to_wallet_date,
 )
+from polytempo.visualizer.trades import P_FROM_TRADES_COL
 from polytempo.visualizer.styling import black_to_blue_bg, black_to_yellow_bg, cell_bg, style_bucket_table
 
 
@@ -183,10 +185,15 @@ def test_bucket_table_dataframe() -> None:
         ],
         model_strategy="ensemble_spread",
     )
-    df = bucket_table_dataframe(analysis)
-    assert list(df.columns) == ["bucket", "P", "yes_ask", "edge"]
+    df = bucket_table_dataframe(analysis, trade_p_by_bucket={"26°C": 0.39})
+    assert list(df.columns) == ["bucket", P_FROM_TRADES_COL, "P", "yes_ask", "edge"]
     assert df.iloc[0]["edge"] == pytest.approx(0.05)
     assert df.iloc[0]["yes_ask"] == 0.35
+    assert df.iloc[0][P_FROM_TRADES_COL] == 0.39
+    assert bucket_table_has_replay_mismatch(df)
+
+    matched = bucket_table_dataframe(analysis, trade_p_by_bucket={"26°C": 0.4})
+    assert not bucket_table_has_replay_mismatch(matched)
 
     styled = style_bucket_table(df)
     assert "rgb" in styled.to_html()

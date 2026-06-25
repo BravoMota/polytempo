@@ -5,11 +5,15 @@ from __future__ import annotations
 import streamlit as st
 
 from polytempo.reports.live_report import format_calibration_row
-from polytempo.visualizer.chart import build_analysis_chart, bucket_table_dataframe
+from polytempo.visualizer.chart import (
+    bucket_table_dataframe,
+    bucket_table_has_replay_mismatch,
+    build_analysis_chart,
+)
 from polytempo.visualizer.loaders import load_replay
 from polytempo.visualizer.paths import ROW_HEIGHT
 from polytempo.visualizer.styling import style_bucket_table, table_height
-from polytempo.visualizer.trades import RealizedEventGroup
+from polytempo.visualizer.trades import RealizedEventGroup, bucket_probs_from_trades
 
 
 def _render_model_summary(analysis) -> None:
@@ -118,7 +122,10 @@ def render_event_replay(
         st.subheader("Market")
         _render_market_summary(chart_bundle.market)
 
-    bucket_df = bucket_table_dataframe(replay.analysis)
+    bucket_df = bucket_table_dataframe(
+        replay.analysis,
+        trade_p_by_bucket=bucket_probs_from_trades(group.trades),
+    )
     st.dataframe(
         style_bucket_table(bucket_df),
         hide_index=True,
@@ -126,6 +133,11 @@ def render_event_replay(
         height=table_height(len(bucket_df)),
         row_height=ROW_HEIGHT,
     )
+    if bucket_table_has_replay_mismatch(bucket_df):
+        st.warning(
+            "Replay **P** does not match ledger **P (from trades)** for one or more "
+            "traded buckets (calibration CSV or snapshots may differ from OPEN time)."
+        )
 
     st.caption(
         "_Replay uses current calibration CSV on disk, "

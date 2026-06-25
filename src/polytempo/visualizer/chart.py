@@ -13,6 +13,7 @@ from polytempo.analysis import AnalysisResult
 from polytempo.markets.buckets import TemperatureBucket, parse_temperature_bucket
 from polytempo.markets.polymarket import PolymarketEvent
 from polytempo.model.distribution import normal_pdf
+from polytempo.visualizer.trades import P_FROM_TRADES_COL
 
 _HEATMAP_COLORSCALE = [
     [0.0, "rgb(255,0,0)"],
@@ -306,20 +307,45 @@ def build_analysis_chart(
     return AnalysisChartBundle(figure=fig, market=market_summary)
 
 
-def bucket_table_dataframe(analysis: AnalysisResult) -> pd.DataFrame:
+def bucket_table_dataframe(
+    analysis: AnalysisResult,
+    *,
+    trade_p_by_bucket: dict[str, float] | None = None,
+) -> pd.DataFrame:
     """Per-bucket model P, market yes_ask, and edge."""
+    trade_p = trade_p_by_bucket or {}
     rows: list[dict[str, object]] = []
     for row in analysis.rows:
         edge = row.probability - row.yes_ask if row.yes_ask is not None else None
+        p_trade = trade_p.get(row.label)
         rows.append(
             {
                 "bucket": row.label,
+                P_FROM_TRADES_COL: p_trade,
                 "P": row.probability,
                 "yes_ask": row.yes_ask,
                 "edge": edge,
             }
         )
     return pd.DataFrame(rows)
+
+
+def bucket_table_has_replay_mismatch(
+    df: pd.DataFrame,
+    *,
+    tolerance: float = 1e-4,
+) -> bool:
+    """True when ledger P and replay P differ for any bucket with both values."""
+    if P_FROM_TRADES_COL not in df.columns or "P" not in df.columns:
+        return False
+    for p_trade, p_replay in zip(df[P_FROM_TRADES_COL], df["P"], strict=True):
+        if p_trade is None or (isinstance(p_trade, float) and pd.isna(p_trade)):
+            continue
+        if p_replay is None or (isinstance(p_replay, float) and pd.isna(p_replay)):
+            continue
+        if abs(float(p_trade) - float(p_replay)) > tolerance:
+            return True
+    return False
 
 
 def model_buckets_dataframe(analysis: AnalysisResult) -> pd.DataFrame:

@@ -77,6 +77,37 @@ class RealizedEventGroup:
         return "—"
 
 
+P_FROM_TRADES_COL = "P (from trades)"
+P_REPLAY_TOLERANCE = 1e-4
+
+
+def model_p_from_trade(trade: RealizedTrade) -> float | None:
+    """Reconstruct model P at OPEN from ledger edge_pp and executable prices."""
+    if trade.edge_pp is None:
+        return None
+    edge = float(trade.edge_pp) / 100.0
+    if trade.side == "YES":
+        if trade.yes_ask is None:
+            return None
+        return float(trade.yes_ask) + edge
+    if trade.side == "NO":
+        if trade.yes_bid is None:
+            return None
+        return float(trade.yes_bid) - edge
+    return None
+
+
+def bucket_probs_from_trades(trades: list[RealizedTrade] | tuple[RealizedTrade, ...]) -> dict[str, float]:
+    """Map bucket label → model P registered on OPEN (traded buckets only)."""
+    out: dict[str, float] = {}
+    for trade in trades:
+        p = model_p_from_trade(trade)
+        if p is None or not trade.bucket_label:
+            continue
+        out.setdefault(trade.bucket_label, p)
+    return out
+
+
 def _fetch_profile_events(conn, profile_id: str) -> list[dict]:
     return conn.execute(
         """

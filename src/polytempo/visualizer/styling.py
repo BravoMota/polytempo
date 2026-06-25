@@ -113,7 +113,13 @@ def black_to_blue_bg(val: object, vmax: float) -> str:
 
 def style_bucket_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     """Gradient styling for merged bucket replay table."""
-    p_max = max(float(df["P"].max(skipna=True) or 0.0), 0.01)
+    from polytempo.visualizer.trades import P_FROM_TRADES_COL
+
+    p_cols = [c for c in (P_FROM_TRADES_COL, "P") if c in df.columns]
+    p_max = max(
+        max(float(df[c].max(skipna=True) or 0.0) for c in p_cols) if p_cols else 0.0,
+        0.01,
+    )
     ask_max = max(float(df["yes_ask"].max(skipna=True) or 0.0), 0.01)
     edge_abs = df["edge"].abs().max(skipna=True)
     edge_vmax = max(float(edge_abs) if edge_abs is not None and not pd.isna(edge_abs) else 0.0, 0.01)
@@ -121,7 +127,7 @@ def style_bucket_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     def _row_style(row: pd.Series) -> list[str]:
         styles: list[str] = []
         for col in df.columns:
-            if col == "P":
+            if col in p_cols:
                 styles.append(black_to_yellow_bg(row[col], p_max))
             elif col == "yes_ask":
                 styles.append(black_to_blue_bg(row[col], ask_max))
@@ -131,10 +137,11 @@ def style_bucket_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
                 styles.append("")
         return styles
 
-    return (
-        df.style.apply(_row_style, axis=1)
-        .format({"P": "{:.4f}", "yes_ask": "{:.4f}", "edge": "{:+.4f}"}, na_rep="·")
-    )
+    formats = {"yes_ask": "{:.4f}", "edge": "{:+.4f}"}
+    for col in p_cols:
+        formats[col] = "{:.4f}"
+
+    return df.style.apply(_row_style, axis=1).format(formats, na_rep="·")
 
 
 def style_pivot_dataframe(
