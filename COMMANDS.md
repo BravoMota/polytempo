@@ -365,6 +365,8 @@ pytest tests/test_historical_forecasts.py tests/test_http_open_meteo.py \
 
 Continuous local scraping of Wunderground HTML pages into PostgreSQL + raw files. Config: `[config/weather_collectors.yaml](config/weather_collectors.yaml)`. Raw HTML: `data/weather/raw/wunderground/`.
 
+**Contract stations collected:** London (EGLC + ILONDO288 PWS), Madrid (LEMD), Milan (LIMC) — WU obs/forecast, Open-Meteo, and Polymarket CLOB per station. Nightly calibration (`config/calibration.yaml`) remains **EGLC-only** until expanded.
+
 Set the database URL before init, migrate, or run:
 
 ```bash
@@ -392,7 +394,7 @@ Forecast-only collector: pairs rolling S3 `meta.json` (per model run init) with 
 | `open_meteo_forecast_snapshots`   | Per `(model, target_date)` Tmax + optional `run_init_utc` / `init_lead_hours` + `wall_clock_lead_hours` |
 
 
-Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). See `[docs/calibration-data.md](docs/calibration-data.md)` for SQL joins vs `calibration_forecast_records`.
+Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). Collector-level `models:` is the default (London/EGLC); Madrid and Milan override with per-station `models:` (e.g. `meteofrance_arpege_europe` for LEMD, `italia_meteo_arpae_icon_2i` for LIMC). See `[docs/calibration-data.md](docs/calibration-data.md)` for SQL joins vs `calibration_forecast_records`.
 
 Scheduling uses **UTC wall-clock slots** (not sleep-after-work). Per collector in YAML:
 

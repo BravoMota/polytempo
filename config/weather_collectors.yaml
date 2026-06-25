@@ -33,6 +33,24 @@ collectors:
         country: gb
         city_slug: london
         pws_id: ILONDO288
+      - station_id: LEMD
+        station_type: icao
+        name: Madrid-Barajas
+        timezone: Europe/Madrid
+        lat: 40.4936
+        lon: -3.5668
+        country: es
+        city_slug: madrid
+        pws_id: null
+      - station_id: LIMC
+        station_type: icao
+        name: Milan Malpensa
+        timezone: Europe/Rome
+        lat: 45.6306
+        lon: 8.7281
+        country: it
+        city_slug: milan
+        pws_id: null
 
   - name: open_meteo
     enabled: true
@@ -57,6 +75,36 @@ collectors:
         country: gb
         city_slug: london
         pws_id: null
+      - station_id: LEMD
+        station_type: icao
+        name: Madrid-Barajas
+        timezone: Europe/Madrid
+        lat: 40.4936
+        lon: -3.5668
+        country: es
+        city_slug: madrid
+        pws_id: null
+        models:
+          - meteofrance_arpege_europe
+          - icon_eu
+          - ecmwf_ifs025
+          - gfs_seamless
+          - ukmo_global_deterministic_10km
+      - station_id: LIMC
+        station_type: icao
+        name: Milan Malpensa
+        timezone: Europe/Rome
+        lat: 45.6306
+        lon: 8.7281
+        country: it
+        city_slug: milan
+        pws_id: null
+        models:
+          - italia_meteo_arpae_icon_2i
+          - icon_eu
+          - ecmwf_ifs025
+          - gfs_seamless
+          - ukmo_global_deterministic_10km
 
   - name: polymarket_clob
     enabled: true
@@ -75,4 +123,22 @@ collectors:
         lon: 0.0553
         country: gb
         city_slug: london
+        pws_id: null
+      - station_id: LEMD
+        station_type: icao
+        name: Madrid-Barajas
+        timezone: Europe/Madrid
+        lat: 40.4936
+        lon: -3.5668
+        country: es
+        city_slug: madrid
+        pws_id: null
+      - station_id: LIMC
+        station_type: icao
+        name: Milan Malpensa
+        timezone: Europe/Rome
+        lat: 45.6306
+        lon: 8.7281
+        country: it
+        city_slug: milan
         pws_id: null

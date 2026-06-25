@@ -49,6 +49,13 @@ def run_station_forecasts(
 
     mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
 
+    models = station.models or collector.models
+    if not models:
+        raise ValueError(
+            f"station {station.station_id!r} requires models "
+            "(station-level or open_meteo collector default)"
+        )
+
     try:
         target_dates = _target_dates_for_station(
             station,
@@ -59,7 +66,7 @@ def run_station_forecasts(
             latitude=station.lat,
             longitude=station.lon,
             timezone=station.timezone,
-            models=collector.models,
+            models=models,
             target_dates=target_dates,
             fetched_at_utc=now.astimezone(timezone.utc),
             client=client,

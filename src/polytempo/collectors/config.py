@@ -31,6 +31,7 @@ class StationConfig:
     country: str
     city_slug: str
     pws_id: str | None = None
+    models: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,11 @@ def _parse_station(raw: dict[str, Any]) -> StationConfig:
     lat = raw.get("lat")
     lon = raw.get("lon")
 
+    models_raw = raw.get("models") or []
+    if not isinstance(models_raw, list):
+        raise ValueError(f"station {station_id!r} models must be a list")
+    models = tuple(str(m).strip() for m in models_raw if str(m).strip())
+
     return StationConfig(
         station_id=station_id,
         station_type=station_type,
@@ -111,6 +117,7 @@ def _parse_station(raw: dict[str, Any]) -> StationConfig:
         country=str(raw["country"]).strip().lower(),
         city_slug=str(raw["city_slug"]).strip().lower(),
         pws_id=pws_id,
+        models=models,
     )
 
 

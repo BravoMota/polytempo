@@ -158,3 +158,59 @@ def test_open_meteo_run_station_forecasts_persists_rows(
         assert icon_row["predicted_tmax_c"] == pytest.approx(16.8)
         assert icon_row["init_lead_hours"] is None
         assert icon_row["wall_clock_lead_hours"] == pytest.approx(26.0)
+
+
+def test_open_meteo_uses_station_models_over_collector_default(
+    weather_db_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _bundle()
+    captured: dict[str, object] = {}
+
+    def fake_fetch(**kwargs: object) -> OpenMeteoLiveBundle:
+        captured.update(kwargs)
+        return bundle
+
+    monkeypatch.setattr(
+        "polytempo.collectors.open_meteo.fetch_open_meteo_live_bundle",
+        fake_fetch,
+    )
+
+    station = StationConfig(
+        station_id="LEMD",
+        station_type="icao",
+        name="Madrid-Barajas",
+        timezone="Europe/Madrid",
+        lat=40.4936,
+        lon=-3.5668,
+        country="es",
+        city_slug="madrid",
+        pws_id=None,
+        models=("meteofrance_arpege_europe", "icon_eu"),
+    )
+
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="LEMD",
+            name="Madrid-Barajas",
+            timezone="Europe/Madrid",
+            lat=40.4936,
+            lon=-3.5668,
+            country="es",
+        )
+        conn.commit()
+
+        class FakeClient:
+            def close(self) -> None:
+                return None
+
+        om_collector.run_station_forecasts(
+            conn,
+            _collector(),
+            station,
+            client=FakeClient(),
+            now_utc=bundle.fetched_at_utc,
+        )
+
+    assert captured["models"] == ("meteofrance_arpege_europe", "icon_eu")

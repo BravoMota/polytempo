@@ -41,6 +41,34 @@ def _pws_station() -> StationConfig:
     )
 
 
+def _madrid_station() -> StationConfig:
+    return StationConfig(
+        station_id="LEMD",
+        station_type="icao",
+        name="Madrid-Barajas",
+        timezone="Europe/Madrid",
+        lat=40.4936,
+        lon=-3.5668,
+        country="es",
+        city_slug="madrid",
+        pws_id=None,
+    )
+
+
+def _milan_station() -> StationConfig:
+    return StationConfig(
+        station_id="LIMC",
+        station_type="icao",
+        name="Milan Malpensa",
+        timezone="Europe/Rome",
+        lat=45.6306,
+        lon=8.7281,
+        country="it",
+        city_slug="milan",
+        pws_id=None,
+    )
+
+
 def _collector(**kwargs: object) -> CollectorConfig:
     defaults: dict[str, object] = {
         "name": "wunderground",
@@ -164,6 +192,16 @@ def _install_metric_api_mocks(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_build_observation_url_icao() -> None:
     url = wu.build_observation_url(_icao_station())
     assert url == "https://www.wunderground.com/weather/gb/london/EGLC"
+
+
+def test_build_observation_url_madrid() -> None:
+    url = wu.build_observation_url(_madrid_station())
+    assert url == "https://www.wunderground.com/weather/es/madrid/LEMD"
+
+
+def test_build_observation_url_milan() -> None:
+    url = wu.build_observation_url(_milan_station())
+    assert url == "https://www.wunderground.com/weather/it/milan/LIMC"
 
 
 def test_build_observation_url_pws() -> None:

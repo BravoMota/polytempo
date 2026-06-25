@@ -29,6 +29,23 @@ def test_load_default_config_shape() -> None:
     assert wu.observations_anchor_time_utc == "00:00"
     assert wu.forecast_anchor_time_utc == "00:00"
 
+    wu_ids = {s.station_id for s in wu.stations}
+    assert {"EGLC", "ILONDO288", "LEMD", "LIMC"} <= wu_ids
+
+    clob = next(c for c in config.collectors if c.name == "polymarket_clob")
+    clob_ids = {s.station_id for s in clob.stations}
+    assert {"EGLC", "LEMD", "LIMC"} <= clob_ids
+
+    om_ids = {s.station_id for s in om.stations}
+    assert {"EGLC", "LEMD", "LIMC"} <= om_ids
+
+    lemd = next(s for s in om.stations if s.station_id == "LEMD")
+    limc = next(s for s in om.stations if s.station_id == "LIMC")
+    assert "meteofrance_arpege_europe" in lemd.models
+    assert "ukmo_uk_deterministic_2km" not in lemd.models
+    assert "italia_meteo_arpae_icon_2i" in limc.models
+    assert "ukmo_uk_deterministic_2km" not in limc.models
+
 
 def test_load_config_resolves_relative_paths(tmp_path: Path) -> None:
     cfg = tmp_path / "weather_collectors.yaml"
@@ -199,3 +216,46 @@ collectors:
     )
     second = load_weather_collectors_config(cfg)
     assert second.collectors[0].observations_interval_seconds == 200
+
+
+def test_load_config_station_models_override(tmp_path: Path) -> None:
+    cfg = tmp_path / "open_meteo_station_models.yaml"
+    cfg.write_text(
+        """
+raw_base_dir: raw
+collectors:
+  - name: open_meteo
+    enabled: true
+    source: open_meteo
+    models:
+      - ukmo_uk_deterministic_2km
+      - icon_eu
+    stations:
+      - station_id: EGLC
+        station_type: icao
+        name: EGLC
+        timezone: Europe/London
+        lat: 51.5
+        lon: 0.05
+        country: gb
+        city_slug: london
+      - station_id: LEMD
+        station_type: icao
+        name: LEMD
+        timezone: Europe/Madrid
+        lat: 40.49
+        lon: -3.57
+        country: es
+        city_slug: madrid
+        models:
+          - meteofrance_arpege_europe
+          - icon_eu
+""",
+        encoding="utf-8",
+    )
+
+    collector = load_weather_collectors_config(cfg).collectors[0]
+    eglc = next(s for s in collector.stations if s.station_id == "EGLC")
+    lemd = next(s for s in collector.stations if s.station_id == "LEMD")
+    assert eglc.models == ()
+    assert lemd.models == ("meteofrance_arpege_europe", "icon_eu")
