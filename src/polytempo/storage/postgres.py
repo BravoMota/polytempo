@@ -95,6 +95,14 @@ def initialize_database(
             "ALTER TABLE calibration_observed_tmax "
             "ALTER COLUMN observed_tmax_f DROP NOT NULL"
         )
+        conn.execute(
+            "ALTER TABLE open_meteo_forecast_snapshots "
+            "ALTER COLUMN run_init_utc DROP NOT NULL"
+        )
+        conn.execute(
+            "ALTER TABLE open_meteo_forecast_snapshots "
+            "ALTER COLUMN init_lead_hours DROP NOT NULL"
+        )
         conn.commit()
 
 
@@ -525,8 +533,8 @@ def insert_open_meteo_forecast_snapshot(
     model: str,
     target_date_local: str,
     predicted_tmax_c: float,
-    run_init_utc: str,
-    init_lead_hours: float,
+    run_init_utc: str | None,
+    init_lead_hours: float | None,
     wall_clock_lead_hours: float,
     fetched_at_utc: str,
 ) -> None:

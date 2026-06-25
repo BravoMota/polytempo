@@ -74,19 +74,9 @@ def _bundle() -> OpenMeteoLiveBundle:
         daily_by_date={date(2026, 6, 11): daily},
         meta_by_model={
             "ukmo_uk_deterministic_2km": meta,
-            "icon_eu": ModelRunMeta(
-                model="icon_eu",
-                run_init_utc=init,
-                run_available_utc=avail,
-                run_modified_utc=avail,
-                update_interval_seconds=10_800,
-                temporal_resolution_seconds=3600,
-                data_end_utc=None,
-            ),
         },
         init_lead_hours={
             ("ukmo_uk_deterministic_2km", date(2026, 6, 11)): 28.0,
-            ("icon_eu", date(2026, 6, 11)): 28.0,
         },
         wall_clock_lead_hours={
             ("ukmo_uk_deterministic_2km", date(2026, 6, 11)): 26.0,
@@ -140,7 +130,7 @@ def test_open_meteo_run_station_forecasts_persists_rows(
         ).fetchone()
 
         assert cycle_count is not None and int(cycle_count["n"]) == 1
-        assert meta_count is not None and int(meta_count["n"]) == 2
+        assert meta_count is not None and int(meta_count["n"]) == 1
         assert fc_count is not None and int(fc_count["n"]) == 2
 
         row = conn.execute(
@@ -155,3 +145,16 @@ def test_open_meteo_run_station_forecasts_persists_rows(
         assert row["predicted_tmax_c"] == pytest.approx(16.4)
         assert row["init_lead_hours"] == pytest.approx(28.0)
         assert row["wall_clock_lead_hours"] == pytest.approx(26.0)
+
+        icon_row = conn.execute(
+            """
+            SELECT run_init_utc, predicted_tmax_c, init_lead_hours, wall_clock_lead_hours
+            FROM open_meteo_forecast_snapshots
+            WHERE model = 'icon_eu'
+            """
+        ).fetchone()
+        assert icon_row is not None
+        assert icon_row["run_init_utc"] is None
+        assert icon_row["predicted_tmax_c"] == pytest.approx(16.8)
+        assert icon_row["init_lead_hours"] is None
+        assert icon_row["wall_clock_lead_hours"] == pytest.approx(26.0)

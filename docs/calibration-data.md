@@ -55,9 +55,9 @@ Each `open_meteo` poll stores:
 
 | Column | Meaning |
 | --- | --- |
-| `init_lead_hours` | `compute_lead_hours(run_init_utc, target_date)` — matches calibration / Single Runs `run=` semantics |
+| `init_lead_hours` | `compute_lead_hours(run_init_utc, target_date)` when `run_init_utc` is set; **NULL** otherwise |
 | `wall_clock_lead_hours` | Hours from `fetched_at_utc` to end of target day — when the collector actually polled |
-| `run_init_utc` | From rolling `data/{model}/static/meta.json` (`last_run_initialisation_time`) |
+| `run_init_utc` | From rolling `data/{model}/static/meta.json` (`last_run_initialisation_time`); **NULL** when meta is unavailable (e.g. `icon_eu`, `gfs_seamless`) |
 | `availability_lag_hours` | Meta: hours from init to `last_run_availability_time` |
 
 Join live forecasts to Single Runs calibration rows:

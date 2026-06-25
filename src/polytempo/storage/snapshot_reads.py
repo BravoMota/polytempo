@@ -121,7 +121,10 @@ def fetch_nearest_open_meteo_forecast(
 
         models = [str(row["model"]) for row in snapshots]
         values = [float(row["predicted_tmax_c"]) for row in snapshots]
-        init_leads = [float(row["init_lead_hours"]) for row in snapshots]
+        init_leads = [
+            float(row["init_lead_hours"]) if row["init_lead_hours"] is not None else 0.0
+            for row in snapshots
+        ]
         forecast = ForecastValues(
             source="open_meteo_snapshot",
             latitude=station.latitude,

@@ -160,8 +160,8 @@ CREATE TABLE IF NOT EXISTS open_meteo_forecast_snapshots (
     model TEXT NOT NULL,
     target_date_local TEXT NOT NULL,
     predicted_tmax_c DOUBLE PRECISION NOT NULL,
-    run_init_utc TEXT NOT NULL,
-    init_lead_hours DOUBLE PRECISION NOT NULL,
+    run_init_utc TEXT,
+    init_lead_hours DOUBLE PRECISION,
     wall_clock_lead_hours DOUBLE PRECISION NOT NULL,
     fetched_at_utc TEXT NOT NULL,
     UNIQUE (fetch_cycle_id, model, target_date_local)

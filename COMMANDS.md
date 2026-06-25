@@ -389,7 +389,7 @@ Forecast-only collector: pairs rolling S3 `meta.json` (per model run init) with 
 | --------------------------------- | ----------------------------------------------------------------------------- |
 | `open_meteo_fetch_cycles`         | One row per station poll (`fetched_at_utc`, staleness flag)                   |
 | `open_meteo_model_meta_snapshots` | Per-model init / availability / lag                                           |
-| `open_meteo_forecast_snapshots`   | Per `(model, target_date)` Tmax + `init_lead_hours` + `wall_clock_lead_hours` |
+| `open_meteo_forecast_snapshots`   | Per `(model, target_date)` Tmax + optional `run_init_utc` / `init_lead_hours` + `wall_clock_lead_hours` |
 
 
 Models list lives in `weather_collectors.yaml` under the `open_meteo` collector (`models:`, `target_horizon_days:`). See `[docs/calibration-data.md](docs/calibration-data.md)` for SQL joins vs `calibration_forecast_records`.

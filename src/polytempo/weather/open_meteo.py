@@ -229,6 +229,7 @@ def fetch_rolling_meta_batch(
                 if skip_missing and exc.response.status_code == 404:
                     logger.warning(
                         "rolling meta.json missing for model %s (404); "
+                        "forecast snapshots stored without run_init; "
                         "model excluded from best_historical calibration lookup",
                         model,
                     )
@@ -546,14 +547,22 @@ def persist_open_meteo_fetch(
 
     for target_date, daily in bundle.daily_by_date.items():
         target_iso = target_date.isoformat()
-        for model in bundle.meta_by_model:
+        for model in daily.models:
             key = (model, target_date)
-            if key not in bundle.init_lead_hours:
+            if key not in bundle.wall_clock_lead_hours:
                 continue
             try:
                 index = daily.models.index(model)
             except ValueError:
                 continue
+            if model in bundle.meta_by_model and key in bundle.init_lead_hours:
+                run_init_iso = format_run_time_utc(
+                    bundle.meta_by_model[model].run_init_utc,
+                )
+                init_lead = bundle.init_lead_hours[key]
+            else:
+                run_init_iso = None
+                init_lead = None
             insert_open_meteo_forecast_snapshot(
                 conn,
                 fetch_cycle_id=cycle_id,
@@ -561,8 +570,8 @@ def persist_open_meteo_fetch(
                 model=model,
                 target_date_local=target_iso,
                 predicted_tmax_c=daily.values_c[index],
-                run_init_utc=format_run_time_utc(bundle.meta_by_model[model].run_init_utc),
-                init_lead_hours=bundle.init_lead_hours[key],
+                run_init_utc=run_init_iso,
+                init_lead_hours=init_lead,
                 wall_clock_lead_hours=bundle.wall_clock_lead_hours[key],
                 fetched_at_utc=fetched_iso,
             )
