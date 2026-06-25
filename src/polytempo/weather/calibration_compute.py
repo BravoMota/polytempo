@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+import shutil
 import statistics
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -196,6 +197,18 @@ def compute_calibration_stats(errors: list[ForecastError]) -> list[CalibrationSt
 
 def _format_lead_hours(value: float) -> str:
     return f"{value:g}"
+
+
+def archive_calibration_stats_csv_before_write(path: Path) -> Path | None:
+    """If path exists, copy to parent/historic/<stem>_<UTC-timestamp>.csv."""
+    if not path.is_file():
+        return None
+    historic_dir = path.parent / "historic"
+    historic_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(dt_timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archive_path = historic_dir / f"{path.stem}_{timestamp}{path.suffix}"
+    shutil.copy2(path, archive_path)
+    return archive_path
 
 
 def write_calibration_stats_csv(rows: list[CalibrationStatRow], path: Path) -> None:

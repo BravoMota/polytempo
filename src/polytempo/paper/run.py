@@ -22,6 +22,10 @@ from polytempo.model.lead_time import lead_hours_at_target
 from polytempo.paper.ledger import LedgerStore, OpenTrade, PostgresLedgerStore
 from polytempo.profiles.models import TradingProfile
 from polytempo.weather.schema import ForecastValues
+from polytempo.weather.calibration_stats_csv import (
+    calibration_stat_row_to_dict,
+    verified_init_lead_hours_by_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +144,13 @@ def run_profile(
         station_id=_station_id_for_city(profile.city),
         calibration_stats_path=profile.calibration_stats_path,
     )
-    audit_metadata = _analysis_audit_metadata(profile, analysis)
+    audit_metadata = _analysis_audit_metadata(
+        profile,
+        analysis,
+        forecast,
+        lead_hours=lead_hours,
+        station_id=_station_id_for_city(profile.city),
+    )
     if (
         profile.model_strategy in _BEST_HISTORICAL_STRATEGIES
         and analysis.fallback_reason is not None
@@ -274,11 +284,42 @@ def _station_id_for_city(city: str) -> str:
 def _analysis_audit_metadata(
     profile: TradingProfile,
     analysis: AnalysisResult,
+    forecast: ForecastValues,
+    *,
+    lead_hours: float | None,
+    station_id: str,
 ) -> dict[str, object]:
-    return {
+    meta: dict[str, object] = {
         "requested_model_strategy": profile.model_strategy,
         "resolved_model_strategy": analysis.model_strategy,
         "fallback_reason": analysis.fallback_reason,
         "selected_model": analysis.selected_model,
         "calibration_sigma_source": analysis.calibration_sigma_source,
+        "calibration_stats_path": profile.calibration_stats_path.name,
+        "distribution_mean_c": analysis.distribution_mean_c,
+        "distribution_sigma_c": analysis.distribution_sigma_c,
     }
+    if lead_hours is not None:
+        meta["wall_lead_hours"] = lead_hours
+
+    row = analysis.calibration_row
+    if row is not None:
+        predicted_tmax_c: float | None = None
+        if forecast.models and row.model in forecast.models:
+            index = forecast.models.index(row.model)
+            if index < len(forecast.values_c):
+                predicted_tmax_c = forecast.values_c[index]
+
+        init_leads = verified_init_lead_hours_by_model(forecast)
+        if init_leads is not None and row.model in init_leads:
+            lookup_lead_hours = init_leads[row.model]
+        else:
+            lookup_lead_hours = lead_hours
+
+        meta["calibration_selection"] = {
+            "row": calibration_stat_row_to_dict(row),
+            "predicted_tmax_c": predicted_tmax_c,
+            "lookup_lead_hours": lookup_lead_hours,
+        }
+
+    return meta

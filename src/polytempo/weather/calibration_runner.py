@@ -13,6 +13,7 @@ import httpx
 from polytempo.collectors.config import StationConfig
 from polytempo.storage.postgres import get_connection, insert_station, utc_now_iso
 from polytempo.weather.calibration_compute import (
+    archive_calibration_stats_csv_before_write,
     compute_calibration_stats,
     iter_forecast_records_from_payload,
     join_with_observations,
@@ -234,6 +235,9 @@ def recompute_stats(conn, output_path: Path) -> tuple[int, int, dict[str, object
     if not joined:
         return 0, 0, diag
     stats = compute_calibration_stats(joined)
+    archived = archive_calibration_stats_csv_before_write(output_path)
+    if archived is not None:
+        logger.info("archived previous calibration stats to %s", archived)
     write_calibration_stats_csv(stats, output_path)
     diag["stat_groups"] = len(stats)
     return len(joined), len(stats), diag

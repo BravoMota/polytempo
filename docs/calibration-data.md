@@ -11,6 +11,7 @@ Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_for
 | Postgres `calibration_*` tables | Incremental observations + forecast records + job state |
 | `raw/single-runs/` | Cached Open-Meteo Single Runs JSON (reused from V1 fetch) |
 | `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated` |
+| `statistical/historic/calibration_stats_updated_*.csv` | Timestamped archive of the previous nightly CSV before each recompute (gitignored) |
 
 **Observations:** WU station hourly observations (`units=m`); daily high = `max(observations[*].temp)` in °C, stored as integer `observed_tmax_c`. `observed_tmax_f` is null for metric fetches (legacy imperial parse paths may still populate it).
 

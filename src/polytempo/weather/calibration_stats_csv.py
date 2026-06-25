@@ -47,6 +47,20 @@ class CalibrationStatRow:
     error_std_c: float
 
 
+def calibration_stat_row_to_dict(row: CalibrationStatRow) -> dict[str, object]:
+    """Serialize one calibration CSV row for JSON audit metadata."""
+    return {
+        "station_id": row.station_id,
+        "model": row.model,
+        "lead_hours": row.lead_hours,
+        "n_samples": row.n_samples,
+        "bias_c": row.bias_c,
+        "mae_c": row.mae_c,
+        "rmse_c": row.rmse_c,
+        "error_std_c": row.error_std_c,
+    }
+
+
 def _parse_float(value: object) -> float | None:
     if value is None:
         return None
