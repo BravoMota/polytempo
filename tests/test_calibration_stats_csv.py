@@ -8,9 +8,12 @@ import pytest
 
 from polytempo.weather.calibration_stats_csv import (
     CalibrationStatRow,
+    WEIGHTED_DISAGREEMENT_WEIGHT,
+    WEIGHTED_PRECISION_EXPONENT,
     read_calibration_stats_csv,
     select_best_model,
     select_ceiling_row,
+    select_weighted_models,
 )
 
 _HEADER = "station_id,model,lead_hours,n_samples,bias_c,mae_c,rmse_c,error_std_c"
@@ -457,6 +460,84 @@ def test_select_ceiling_row_filters_by_anchor() -> None:
     assert scraped_row is not None
     assert run_init_row.error_std_c == 1.0
     assert scraped_row.error_std_c == 9.0
+
+
+def test_select_weighted_models_agreeing_models() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=1.0, bias_c=0.0),
+        _row(model="beta", lead_hours=24.0, error_std_c=1.2, bias_c=0.0),
+        _row(model="gamma", lead_hours=24.0, error_std_c=1.5, bias_c=0.0),
+    ]
+    attempt = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta", "gamma"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0, "beta": 28.2, "gamma": 27.9},
+    )
+    assert attempt.result is not None
+    result = attempt.result
+    assert result.mean_c == pytest.approx(28.05, abs=0.02)
+    assert result.sigma_c == pytest.approx(1.13, abs=0.02)
+    assert len(result.contributions) == 3
+    assert sum(c.weight for c in result.contributions) == pytest.approx(1.0)
+
+
+def test_select_weighted_models_excludes_invalid_error_std_without_rmse() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=1.0, rmse_c=2.0, bias_c=0.0),
+        _row(model="beta", lead_hours=24.0, error_std_c=0.0, rmse_c=0.7, bias_c=0.0),
+    ]
+    attempt = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0, "beta": 25.0},
+    )
+    assert attempt.result is not None
+    assert [c.model for c in attempt.result.contributions] == ["alpha"]
+    assert "beta:invalid_error_std_c" in attempt.excluded_models
+
+
+def test_select_weighted_models_no_eligible_models() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=0.0, rmse_c=1.0),
+    ]
+    attempt = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0},
+    )
+    assert attempt.result is None
+    assert attempt.excluded_models == ("alpha:invalid_error_std_c",)
+
+
+def test_select_weighted_models_disagreeing_outlier() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=1.0, bias_c=0.0),
+        _row(model="beta", lead_hours=24.0, error_std_c=1.2, bias_c=0.0),
+        _row(model="gamma", lead_hours=24.0, error_std_c=1.5, bias_c=0.0),
+    ]
+    attempt = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta", "gamma"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0, "beta": 28.2, "gamma": 30.5},
+    )
+    assert attempt.result is not None
+    result = attempt.result
+    assert result.mean_c == pytest.approx(28.35, abs=0.02)
+    assert result.sigma_c == pytest.approx(1.18, abs=0.03)
+    assert result.between_variance > result.within_variance * 0.3
+
+
+def test_weighted_precision_exponent_is_two() -> None:
+    assert WEIGHTED_PRECISION_EXPONENT == 2.0
+    assert WEIGHTED_DISAGREEMENT_WEIGHT == 0.2
 
 
 # Quiet pyflakes / linters about unused pytest import when no parametrize.

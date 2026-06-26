@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     AnalysisResult,
     analyze_event,
 )
@@ -27,12 +28,17 @@ from polytempo.weather.calibration_stats_csv import (
     effective_lead_hours_anchor,
     lookup_lead_hours_for_calibration,
     verified_init_lead_hours_by_model,
+    weighted_contribution_to_dict,
 )
 
 logger = logging.getLogger(__name__)
 
 _BEST_HISTORICAL_STRATEGIES = frozenset(
-    {MODEL_STRATEGY_BEST_HISTORICAL, MODEL_STRATEGY_BEST_HISTORICAL_UPDATED}
+    {
+        MODEL_STRATEGY_BEST_HISTORICAL,
+        MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+        MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    }
 )
 
 
@@ -303,6 +309,14 @@ def _analysis_audit_metadata(
     }
     if lead_hours is not None:
         meta["wall_lead_hours"] = lead_hours
+
+    if analysis.distribution_params is not None:
+        meta["distribution_params"] = analysis.distribution_params
+
+    if analysis.weighted_contributions:
+        meta["weighted_contributions"] = [
+            weighted_contribution_to_dict(c) for c in analysis.weighted_contributions
+        ]
 
     row = analysis.calibration_row
     if row is not None:

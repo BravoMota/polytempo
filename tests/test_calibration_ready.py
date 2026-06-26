@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from polytempo.analysis import MODEL_STRATEGY_BEST_HISTORICAL_UPDATED
+from polytempo.analysis import (
+    MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+)
 from polytempo.profiles.calibration_ready import (
     calibration_csv_ready,
     filter_profiles_by_calibration,
@@ -64,15 +67,19 @@ def test_filter_profiles_disables_bhu_when_updated_csv_missing(tmp_path: Path) -
         "EGLC,ukmo_uk_deterministic_2km,12,10,0.1,0.2,0.3,0.4\n"
     )
     profiles = [
-        _profile("ensemble_spread", static, profile_id="es"),
         _profile("best_historical", static, profile_id="bh"),
         _profile(
             MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
             tmp_path / "missing.csv",
             profile_id="bhu",
         ),
+        _profile(
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+            tmp_path / "missing.csv",
+            profile_id="whu",
+        ),
     ]
     enabled, warnings = filter_profiles_by_calibration(profiles)
-    assert [p.id for p in enabled] == ["es", "bh"]
-    assert len(warnings) == 1
-    assert "missing_calibration_csv" in warnings[0]
+    assert [p.id for p in enabled] == ["bh"]
+    assert len(warnings) == 2
+    assert all("missing_calibration_csv" in w for w in warnings)

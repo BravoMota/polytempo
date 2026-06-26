@@ -19,6 +19,7 @@ pipeline.
 from __future__ import annotations
 
 import csv
+import logging
 import math
 import shutil
 from dataclasses import dataclass
@@ -28,6 +29,12 @@ from pathlib import Path
 
 from polytempo.weather.data_dir import WEATHER_DATA_DIR
 from polytempo.weather.schema import ForecastValues
+
+logger = logging.getLogger(__name__)
+
+WEIGHTED_PRECISION_EXPONENT = 2.0
+WEIGHTED_DISAGREEMENT_WEIGHT = 0.2
+WEIGHTED_CALIBRATION_METHOD = "weighted_calibrated_mixture_p2.0"
 
 LEAD_HOURS_ANCHOR_RUN_INIT = "run_init"
 LEAD_HOURS_ANCHOR_SCRAPED_AT = "scraped_at"
@@ -71,6 +78,78 @@ class CalibrationStatRow:
     rmse_c: float
     error_std_c: float
     lead_hours_anchor: str | None = None
+
+
+@dataclass(frozen=True)
+class WeightedModelContribution:
+    """One model's inputs to the WHU precision-weighted mixture."""
+
+    model: str
+    row: CalibrationStatRow
+    error_std_c: float
+    corrected_mu_c: float
+    weight: float
+    predicted_tmax_c: float
+    lookup_lead_hours: float
+
+
+@dataclass(frozen=True)
+class WeightedSelectionResult:
+    """Blended WHU distribution parameters and per-model audit trail."""
+
+    contributions: tuple[WeightedModelContribution, ...]
+    mean_c: float
+    sigma_c: float
+    within_variance: float
+    between_variance: float
+    sigma_squared: float
+
+
+@dataclass(frozen=True)
+class WeightedSelectionAttempt:
+    """Outcome of ``select_weighted_models`` including exclusions."""
+
+    result: WeightedSelectionResult | None
+    excluded_models: tuple[str, ...]
+
+
+def weighted_contribution_to_dict(
+    contribution: WeightedModelContribution,
+) -> dict[str, object]:
+    """Serialize one WHU contributor for JSON audit metadata."""
+    return {
+        "model": contribution.model,
+        "weight": contribution.weight,
+        "predicted_tmax_c": contribution.predicted_tmax_c,
+        "bias_c": contribution.row.bias_c,
+        "corrected_mu_c": contribution.corrected_mu_c,
+        "error_std_c": contribution.error_std_c,
+        "lookup_lead_hours": contribution.lookup_lead_hours,
+        "lead_hours_anchor": effective_lead_hours_anchor(contribution.row),
+        "calibration_row": calibration_stat_row_to_dict(contribution.row),
+    }
+
+
+def build_weighted_distribution_params(
+    result: WeightedSelectionResult,
+    *,
+    excluded_models: tuple[str, ...] = (),
+) -> dict[str, object]:
+    """Audit payload for a successful WHU fit."""
+    return {
+        "method": WEIGHTED_CALIBRATION_METHOD,
+        "precision_exponent": WEIGHTED_PRECISION_EXPONENT,
+        "disagreement_weight": WEIGHTED_DISAGREEMENT_WEIGHT,
+        "mean_c": result.mean_c,
+        "sigma_c": result.sigma_c,
+        "within_variance": result.within_variance,
+        "between_variance": result.between_variance,
+        "sigma_squared": result.sigma_squared,
+        "contributions": [
+            weighted_contribution_to_dict(c) for c in result.contributions
+        ],
+        "excluded_models": list(excluded_models),
+    }
 
 
 def calibration_stat_row_to_dict(row: CalibrationStatRow) -> dict[str, object]:
@@ -368,3 +447,120 @@ def select_best_model(
 
     winner = min(candidates, key=lambda entry: entry[1])
     return winner[0], winner[2]
+
+
+def _error_std_for_weighted(row: CalibrationStatRow) -> float | None:
+    """WHU sigma source: ``error_std_c`` only (no ``rmse_c`` fallback)."""
+    if math.isfinite(row.error_std_c) and row.error_std_c > 0:
+        return row.error_std_c
+    return None
+
+
+def select_weighted_models(
+    rows: list[CalibrationStatRow],
+    station_id: str,
+    available_models: list[str],
+    current_lead_hours: float,
+    predicted_tmax_by_model: dict[str, float],
+    *,
+    init_lead_hours_by_model: dict[str, float] | None = None,
+) -> WeightedSelectionAttempt:
+    """Build a precision-weighted mixture over eligible calibrated models.
+
+    Weights use ``(1 / error_std_c²) ** WEIGHTED_PRECISION_EXPONENT``. Sigma uses
+    mixture variance: within (historical error) + between (model disagreement).
+    """
+    excluded: list[str] = []
+    pending: list[tuple[str, CalibrationStatRow, float, float, float]] = []
+
+    for model in available_models:
+        if model not in predicted_tmax_by_model:
+            excluded.append(f"{model}:missing_live_prediction")
+            continue
+        anchor = resolve_lead_hours_anchor(rows, station_id=station_id, model=model)
+        lead = lookup_lead_hours_for_calibration(
+            model=model,
+            lead_hours_anchor=anchor,
+            wall_lead_hours=current_lead_hours,
+            init_lead_hours_by_model=init_lead_hours_by_model,
+        )
+        if lead is None:
+            excluded.append(f"{model}:no_lookup_lead_hours")
+            continue
+        row = select_ceiling_row(
+            rows,
+            station_id,
+            model,
+            lead,
+            lead_hours_anchor=anchor,
+        )
+        if row is None:
+            excluded.append(f"{model}:no_ceiling_row")
+            continue
+        error_std = _error_std_for_weighted(row)
+        if error_std is None:
+            logger.warning(
+                "whu: excluding %s: invalid error_std_c (station=%s lead=%s)",
+                model,
+                station_id,
+                current_lead_hours,
+            )
+            excluded.append(f"{model}:invalid_error_std_c")
+            continue
+        predicted = predicted_tmax_by_model[model]
+        corrected_mu = predicted - row.bias_c
+        pending.append((model, row, error_std, corrected_mu, lead))
+
+    if not pending:
+        logger.error(
+            "whu: no eligible models for station=%s lead=%s (excluded=%s)",
+            station_id,
+            current_lead_hours,
+            excluded,
+        )
+        return WeightedSelectionAttempt(result=None, excluded_models=tuple(excluded))
+
+    raw_weights = [
+        (1.0 / (error_std**2)) ** WEIGHTED_PRECISION_EXPONENT
+        for _, _, error_std, _, _ in pending
+    ]
+    weight_sum = sum(raw_weights)
+    normalized = [raw / weight_sum for raw in raw_weights]
+
+    mean_c = sum(w * corrected for w, (_, _, _, corrected, _) in zip(normalized, pending, strict=True))
+    within = sum(
+        w * (error_std**2)
+        for w, (_, _, error_std, _, _) in zip(normalized, pending, strict=True)
+    )
+    between = sum(
+        w * (corrected - mean_c) ** 2
+        for w, (_, _, _, corrected, _) in zip(normalized, pending, strict=True)
+    )
+    sigma_squared = within + WEIGHTED_DISAGREEMENT_WEIGHT * between
+    sigma_c = math.sqrt(sigma_squared)
+
+    contributions = tuple(
+        WeightedModelContribution(
+            model=model,
+            row=row,
+            error_std_c=error_std,
+            corrected_mu_c=corrected,
+            weight=weight,
+            predicted_tmax_c=predicted_tmax_by_model[model],
+            lookup_lead_hours=lookup_lead,
+        )
+        for (model, row, error_std, corrected, lookup_lead), weight in zip(
+            pending,
+            normalized,
+            strict=True,
+        )
+    )
+    result = WeightedSelectionResult(
+        contributions=contributions,
+        mean_c=mean_c,
+        sigma_c=sigma_c,
+        within_variance=within,
+        between_variance=between,
+        sigma_squared=sigma_squared,
+    )
+    return WeightedSelectionAttempt(result=result, excluded_models=tuple(excluded))

@@ -14,6 +14,7 @@ Exposes the `polytempo` command:
 
 from __future__ import annotations
 
+import math
 import sys
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
@@ -32,6 +33,7 @@ from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     AnalysisInput,
     AnalysisResult,
     analyze,
@@ -62,7 +64,9 @@ from polytempo.reports.live_report import (
     format_lead_hours_md,
     format_open_meteo_md,
     format_strategy_analysis_md,
+    format_weighted_calibration_md,
     resolve_calibration_selection,
+    resolve_weighted_calibration_selection,
 )
 from polytempo.paper.ledger import PostgresLedgerStore, default_ledger_store
 from polytempo.paper.bot_log import format_run_summary
@@ -113,6 +117,7 @@ class ModelStrategy(str, Enum):
     ENSEMBLE_SPREAD = MODEL_STRATEGY_ENSEMBLE_SPREAD
     BEST_HISTORICAL = MODEL_STRATEGY_BEST_HISTORICAL
     BEST_HISTORICAL_UPDATED = MODEL_STRATEGY_BEST_HISTORICAL_UPDATED
+    WEIGHTED_HISTORICAL_UPDATED = MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
 
 
 class LiveMode(str, Enum):
@@ -456,29 +461,40 @@ def _run_live_one_day(
                 wall_lead_hours=lead_hours,
             )
             cal_path = DEFAULT_CALIBRATION_STATS_CSV_PATH
-            if model_strategy is ModelStrategy.BEST_HISTORICAL_UPDATED:
+            if model_strategy in (
+                ModelStrategy.BEST_HISTORICAL_UPDATED,
+                ModelStrategy.WEIGHTED_HISTORICAL_UPDATED,
+            ):
                 cal_path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
 
-            calibration_body = "\n\n".join(
-                [
-                    format_calibration_selection_md(static_selection),
-                    format_calibration_selection_md(updated_selection),
-                    "#### Per-model ceiling rows (static csv)",
-                    format_calibration_per_model_md(
-                        csv_path=DEFAULT_CALIBRATION_STATS_CSV_PATH,
-                        station_id=station.icao,
-                        forecast=forecast,
-                        wall_lead_hours=lead_hours,
-                    ),
-                    "#### Per-model ceiling rows (updated csv)",
-                    format_calibration_per_model_md(
-                        csv_path=DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
-                        station_id=station.icao,
-                        forecast=forecast,
-                        wall_lead_hours=lead_hours,
-                    ),
-                ]
+            weighted_selection = resolve_weighted_calibration_selection(
+                csv_path=DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+                label="weighted_historical_updated (calibration_stats_updated.csv)",
+                station_id=station.icao,
+                forecast=forecast,
+                wall_lead_hours=lead_hours,
             )
+
+            calibration_sections = [
+                format_calibration_selection_md(static_selection),
+                format_calibration_selection_md(updated_selection),
+                format_weighted_calibration_md(weighted_selection),
+                "#### Per-model ceiling rows (static csv)",
+                format_calibration_per_model_md(
+                    csv_path=DEFAULT_CALIBRATION_STATS_CSV_PATH,
+                    station_id=station.icao,
+                    forecast=forecast,
+                    wall_lead_hours=lead_hours,
+                ),
+                "#### Per-model ceiling rows (updated csv)",
+                format_calibration_per_model_md(
+                    csv_path=DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+                    station_id=station.icao,
+                    forecast=forecast,
+                    wall_lead_hours=lead_hours,
+                ),
+            ]
+            calibration_body = "\n\n".join(calibration_sections)
             reporter.section("Calibration", calibration_body)
 
             preview_result = analyze_event(
@@ -497,6 +513,15 @@ def _run_live_one_day(
                 typer.echo(
                     f"warning: --model-strategy {model_strategy.value} fell back to "
                     f"ensemble_spread ({preview_result.fallback_reason}).",
+                    err=True,
+                )
+            if (
+                model_strategy is ModelStrategy.WEIGHTED_HISTORICAL_UPDATED
+                and preview_result.fallback_reason is not None
+            ):
+                typer.echo(
+                    f"error: --model-strategy {model_strategy.value} could not build "
+                    f"distribution ({preview_result.fallback_reason}).",
                     err=True,
                 )
             reporter.section(
@@ -604,6 +629,7 @@ def _run_live_one_day(
             if model_strategy in (
                 ModelStrategy.BEST_HISTORICAL,
                 ModelStrategy.BEST_HISTORICAL_UPDATED,
+                ModelStrategy.WEIGHTED_HISTORICAL_UPDATED,
             ):
                 typer.echo(f"calibration per-model ceiling ({cal_path.name}):")
                 typer.echo(
@@ -614,11 +640,20 @@ def _run_live_one_day(
                         wall_lead_hours=lead_hours,
                     )
                 )
-            typer.echo(
-                f"distribution ({preview_result.model_strategy}): "
-                f"mean={preview_result.distribution_mean_c:.2f}°C "
-                f"sigma={preview_result.distribution_sigma_c:.2f}°C"
-            )
+            if (
+                not math.isnan(preview_result.distribution_mean_c)
+                and not math.isnan(preview_result.distribution_sigma_c)
+            ):
+                typer.echo(
+                    f"distribution ({preview_result.model_strategy}): "
+                    f"mean={preview_result.distribution_mean_c:.2f}°C "
+                    f"sigma={preview_result.distribution_sigma_c:.2f}°C"
+                )
+            else:
+                typer.echo(
+                    f"distribution ({preview_result.model_strategy}): unavailable "
+                    f"({preview_result.fallback_reason})"
+                )
             if profile_result is not None and profile_result.analysis is not None:
                 buys = [
                     row

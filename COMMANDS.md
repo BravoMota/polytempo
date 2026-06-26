@@ -48,6 +48,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run **all ac
     | --------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
     | `best_historical` (default) | selected model's prediction `- bias_c`                                           | selected model's `error_std_c`, falling back to `rmse_c`                   |
     | `best_historical_updated`   | same as `best_historical`, but reads the nightly `calibration_stats_updated.csv` | same                                                                       |
+    | `weighted_historical_updated` | precision-weighted blend of eligible models: `w_i ∝ (1/error_std_c²)^2`; `μ = Σ w_i(pred_i − bias_i)` | damped mixture variance: `σ² = within + 0.2 × between`, where `within = Σ w_i σ_i²` and `between = Σ w_i(μ_i − μ)²`; `error_std_c` only (no `rmse_c` fallback); no `ensemble_spread` fallback on failure |
     | `ensemble_spread`           | mean across live models                                                          | spread across live models, combined in quadrature with the lead-time floor |
 
      `best_historical` reads `data/weather/statistical/calibration_stats.csv` (produced by step 6 below) and, **per available live model**, picks the row whose `lead_hours` is the smallest value `>=` the current live lead time. Live and calibration `lead_hours` share the same end-of-target-date UTC anchor, so the ceiling lookup is exact. It then chooses the model with the lowest valid `error_std_c` (falling back to `rmse_c` when std is missing/zero/non-finite) and `n_samples > 0`. If the CSV is missing, no model has a qualifying ceiling row, the live forecast lost model identity, or `station_id`/`lead_hours` are unknown, the command silently falls back to `ensemble_spread` and reports the reason via `fallback_reason` (`selected_model`, `sigma_source`, `calibration_row`, `fallback_reason` appear in the report).
@@ -70,7 +71,7 @@ Unified entrypoint: fetch a Polymarket event + Open-Meteo forecast, run **all ac
 | `--event-id`                  | Pin a specific Gamma event id (one day only; not compatible with `--day both`).                                                                                      |
 | `--city`                      | Contract station registry key (default `london`).                                                                                                                    |
 | `--limit`                     | Max events to scan when `--event-id` is not set (default `20`).                                                                                                      |
-| `--model-strategy`            | `best_historical` (default), `best_historical_updated`, or `ensemble_spread`. Affects the report's Distribution section only; profiles use their own model strategy. |
+| `--model-strategy`            | `best_historical` (default), `best_historical_updated`, `weighted_historical_updated`, or `ensemble_spread`. Affects the report's Distribution section only; profiles use their own model strategy. |
 
 
 ### Examples
@@ -93,7 +94,7 @@ polytempo live --mode preview --days-ahead 3 --city london
 
 ## paper (PostgreSQL profiles)
 
-Paper trading uses **378 trading profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|es}_{trade}_{leadN}` (e.g. `bh_dist_arb_lead30`, `bhu_topk_no_lead12`); each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
+Paper trading uses **378 trading profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates) defined in `config/paper_profiles.yaml`. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|whu}_{trade}_{leadN}` (e.g. `bh_dist_arb_lead30`, `bhu_topk_no_lead12`, `whu_mid_band_lead24`); each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
 
 ### Database setup (one-time)
 
@@ -126,7 +127,7 @@ python scripts/run_paper_bot.py --config config/paper_profiles.yaml
 
 Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need the paper DB.
 
-**BHU calibration guard:** profiles using `best_historical_updated` are disabled when `data/weather/statistical/calibration_stats_updated.csv` is missing, empty, or older than 48 hours; BH and ES profiles keep running. If a `best_historical` or `best_historical_updated` profile would fall back to `ensemble_spread` at entry time (e.g. no qualifying calibration row), the bot logs a warning, records a `GATE_SKIP` with reason `model_strategy_fallback`, and does **not** open a trade. OPEN/TICK ledger rows store the **resolved** `model_strategy` plus audit metadata (`requested_model_strategy`, `fallback_reason`, `selected_model`, `calibration_selection` with the chosen CSV row + Open-Meteo `predicted_tmax_c`, `distribution_mean_c` / `distribution_sigma_c`, …).
+**BHU/WHU calibration guard:** profiles using `best_historical_updated` or `weighted_historical_updated` are disabled when `data/weather/statistical/calibration_stats_updated.csv` is missing, empty, or older than 48 hours; BH profiles keep running. If a `best_historical` or `best_historical_updated` profile would fall back to `ensemble_spread` at entry time (e.g. no qualifying calibration row), the bot logs a warning, records a `GATE_SKIP` with reason `model_strategy_fallback`, and does **not** open a trade. `weighted_historical_updated` does **not** fall back to `ensemble_spread`; on failure it skips with the requested strategy preserved. OPEN/TICK ledger rows store the **resolved** `model_strategy` plus audit metadata (`requested_model_strategy`, `fallback_reason`, `selected_model`, `distribution_params`, `weighted_contributions`, `calibration_selection` with the chosen CSV row + Open-Meteo `predicted_tmax_c`, `distribution_mean_c` / `distribution_sigma_c`, …).
 
 **Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` uses **per-model init lead** only for models with rolling `meta.json` (others are excluded from selection — see `[docs/calibration-data.md](docs/calibration-data.md)`). **Restart `run_paper_bot.py` after deploying this change.**
 
@@ -559,6 +560,7 @@ Model strategies:
 | ------------------------- | ------------------------------------------------------------------ |
 | `best_historical`         | `data/weather/statistical/calibration_stats.csv` (frozen, in git)  |
 | `best_historical_updated` | `data/weather/statistical/calibration_stats_updated.csv` (nightly) |
+| `weighted_historical_updated` | `data/weather/statistical/calibration_stats_updated.csv` (nightly) |
 | `ensemble_spread`         | *(none)*                                                           |
 
 

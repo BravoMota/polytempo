@@ -23,6 +23,7 @@ def test_live_command_help_documents_model_strategy_flag() -> None:
     assert "--strategy" in result.stdout
     assert "ensemble_spread" in result.stdout
     assert "best_historical" in result.stdout
+    assert "weighted" in result.stdout
 
 
 def test_live_command_help_documents_days_ahead_flag() -> None:

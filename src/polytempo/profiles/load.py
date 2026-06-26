@@ -20,6 +20,7 @@ DEFAULT_PROFILES_PATH = Path("config/paper_profiles.yaml")
 _MODEL_ABBREV = {
     "best_historical": "bh",
     "best_historical_updated": "bhu",
+    "weighted_historical_updated": "whu",
     "ensemble_spread": "es",
 }
 
@@ -36,7 +37,10 @@ def _calibration_path_for_strategy(
     static_path: Path,
     updated_path: Path,
 ) -> Path:
-    if model_strategy == "best_historical_updated":
+    if model_strategy in (
+        "best_historical_updated",
+        "weighted_historical_updated",
+    ):
         return updated_path
     return static_path
 

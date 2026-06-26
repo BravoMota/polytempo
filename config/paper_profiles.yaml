@@ -34,8 +34,8 @@ lead_gates:
 
 model_strategies:
   - best_historical
-  - ensemble_spread
   - best_historical_updated
+  - weighted_historical_updated
 
 trade_strategies:
   - argmax_yes
@@ -53,8 +53,8 @@ trade_strategies:
   - dist_arb_kelly
   - tail_fade
 
-# Profile ids generated as: {bh|bhu|es}_{trade}_{leadN}
-# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, es_mid_band_lead24
+# Profile ids generated as: {bh|bhu|whu}_{trade}_{leadN}
+# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, whu_mid_band_lead24
 
 # Active-sell experiment (Phase D). The TP/SL exit bracket is an orthogonal
 # layer bolted onto existing entry strategies: each combo below becomes a

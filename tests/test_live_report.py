@@ -235,3 +235,38 @@ def test_format_distribution_md_includes_signed_edge_table() -> None:
     assert "0.3500" in md
     assert "+0.1500" in md
     assert "-0.2300" in md
+
+
+def test_resolve_weighted_calibration_selection(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats_updated.csv"
+    csv_path.write_text(
+        "station_id,model,lead_hours,n_samples,bias_c,mae_c,rmse_c,error_std_c\n"
+        "EGLC,alpha,24,40,0.0,1.0,1.2,1.0\n"
+        "EGLC,beta,24,40,0.0,0.9,1.0,1.2\n",
+        encoding="utf-8",
+    )
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 14),
+        values_c=[28.0, 28.2],
+        models=["alpha", "beta"],
+    )
+    from polytempo.reports.live_report import (
+        format_weighted_calibration_md,
+        resolve_weighted_calibration_selection,
+    )
+
+    selection = resolve_weighted_calibration_selection(
+        csv_path=csv_path,
+        label="whu",
+        station_id="EGLC",
+        forecast=forecast,
+        wall_lead_hours=12.0,
+    )
+    assert selection.contributions is not None
+    assert selection.mean_c is not None
+    text = format_weighted_calibration_md(selection)
+    assert "| `alpha` |" in text
+    assert "mean_c" in text

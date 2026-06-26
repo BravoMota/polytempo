@@ -8,13 +8,17 @@ from pathlib import Path
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     AnalysisResult,
     AnalysisRow,
 )
 from polytempo.model.distribution import DistributionBuildInfo
 from polytempo.paper.run import _analysis_audit_metadata
 from polytempo.profiles.models import EntryGate, TradingProfile
-from polytempo.weather.calibration_stats_csv import CalibrationStatRow
+from polytempo.weather.calibration_stats_csv import (
+    CalibrationStatRow,
+    WeightedModelContribution,
+)
 from polytempo.weather.schema import ForecastValues
 
 
@@ -154,3 +158,60 @@ def test_analysis_audit_metadata_omits_calibration_selection_for_ensemble() -> N
     assert "calibration_selection" not in meta
     assert meta["calibration_stats_path"] == "calibration_stats.csv"
     assert meta["distribution_mean_c"] == 24.0
+
+
+def test_analysis_audit_metadata_includes_distribution_params_for_whu() -> None:
+    cal_path = Path("data/weather/statistical/calibration_stats_updated.csv")
+    row = CalibrationStatRow(
+        station_id="EGLC",
+        model="alpha",
+        lead_hours=24.0,
+        n_samples=40,
+        bias_c=0.0,
+        mae_c=1.0,
+        rmse_c=1.2,
+        error_std_c=1.0,
+    )
+    contribution = WeightedModelContribution(
+        model="alpha",
+        row=row,
+        error_std_c=1.0,
+        corrected_mu_c=28.0,
+        weight=1.0,
+        predicted_tmax_c=28.0,
+        lookup_lead_hours=24.0,
+    )
+    distribution_params = {
+        "method": "weighted_calibrated_mixture_p2.0",
+        "precision_exponent": 2.0,
+        "disagreement_weight": 0.2,
+        "mean_c": 28.0,
+        "sigma_c": 1.0,
+        "within_variance": 1.0,
+        "between_variance": 0.0,
+        "contributions": [],
+    }
+    analysis = AnalysisResult(
+        distribution_mean_c=28.0,
+        distribution_sigma_c=1.0,
+        distribution_build=_distribution_build(),
+        rows=[],
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        selected_model="alpha",
+        calibration_row=row,
+        calibration_sigma_source="error_std_c",
+        fallback_reason=None,
+        weighted_contributions=(contribution,),
+        distribution_params=distribution_params,
+    )
+
+    meta = _analysis_audit_metadata(
+        _profile(model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED, cal_path=cal_path),
+        analysis,
+        _forecast(),
+        lead_hours=24.0,
+        station_id="EGLC",
+    )
+
+    assert meta["distribution_params"] == distribution_params
+    assert meta["weighted_contributions"][0]["model"] == "alpha"

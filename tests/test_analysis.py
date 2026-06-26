@@ -8,6 +8,7 @@ import pytest
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     AnalysisInput,
     analyze,
     analyze_event,
@@ -726,3 +727,53 @@ def _event(
             for i, label in enumerate(labels)
         ],
     )
+
+
+def test_analyze_event_weighted_historical_updated_blends_models(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats_updated.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,24,40,0.0,1.5,1.8,1.0",
+            "EGLC,beta,24,40,0.0,0.9,1.0,1.2",
+            "EGLC,gamma,24,40,0.0,1.0,1.2,1.5",
+        ],
+    )
+    forecast = _forecast([28.0, 28.2, 27.9], models=["alpha", "beta", "gamma"])
+
+    result = analyze_event(
+        forecast,
+        _event(["28°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+    assert result.fallback_reason is None
+    assert result.distribution_mean_c == pytest.approx(28.05, abs=0.02)
+    assert result.distribution_sigma_c == pytest.approx(1.13, abs=0.02)
+    assert result.weighted_contributions is not None
+    assert len(result.weighted_contributions) == 3
+    assert result.distribution_params is not None
+    assert result.distribution_params["method"] == "weighted_calibrated_mixture_p2.0"
+
+
+def test_analyze_event_weighted_historical_updated_failure_stays_whu(tmp_path: Path) -> None:
+    forecast = _forecast([28.0], models=["alpha"])
+
+    result = analyze_event(
+        forecast,
+        _event(["28°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        station_id="EGLC",
+        calibration_stats_path=tmp_path / "missing.csv",
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+    assert result.fallback_reason == "no_calibration_csv"
+    assert result.rows == []
+    assert result.distribution_params is not None
+    assert result.distribution_params["error"] == "no_calibration_csv"

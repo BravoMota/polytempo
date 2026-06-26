@@ -6,15 +6,21 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from polytempo.analysis import AnalysisResult
+from polytempo.analysis import (
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    AnalysisResult,
+)
 from polytempo.model.distribution import DistributionBuildInfo
 from polytempo.weather.calibration_stats_csv import (
     CalibrationStatRow,
+    WeightedModelContribution,
+    build_weighted_distribution_params,
     lookup_lead_hours_for_calibration,
     read_calibration_stats_csv,
     resolve_lead_hours_anchor,
     select_best_model,
     select_ceiling_row,
+    select_weighted_models,
     verified_init_lead_hours_by_model,
 )
 from polytempo.weather.open_meteo import (
@@ -37,6 +43,20 @@ class CalibrationSelection:
     lookup_lead_hours: float | None
     predicted_tmax_c: float | None = None
     fallback_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class WeightedCalibrationSelection:
+    """WHU weighted mixture for one calibration CSV."""
+
+    csv_path: Path
+    label: str
+    contributions: tuple[WeightedModelContribution, ...] | None
+    mean_c: float | None
+    sigma_c: float | None
+    distribution_params: dict[str, object] | None
+    fallback_reason: str | None = None
+    excluded_models: tuple[str, ...] = ()
 
 
 def _predicted_tmax_by_model(forecast: ForecastValues) -> dict[str, float]:
@@ -117,6 +137,107 @@ def resolve_calibration_selection(
         lookup_lead_hours=lookup_lead,
         predicted_tmax_c=tmax_by_model.get(row.model),
     )
+
+
+def resolve_weighted_calibration_selection(
+    *,
+    csv_path: Path,
+    label: str,
+    station_id: str,
+    forecast: ForecastValues,
+    wall_lead_hours: float,
+) -> WeightedCalibrationSelection:
+    """Build the WHU weighted mixture from one calibration stats CSV."""
+    rows = read_calibration_stats_csv(csv_path)
+    if not rows:
+        return WeightedCalibrationSelection(
+            csv_path=csv_path,
+            label=label,
+            contributions=None,
+            mean_c=None,
+            sigma_c=None,
+            distribution_params={"error": "no_calibration_csv"},
+            fallback_reason="no_calibration_csv",
+        )
+    if not forecast.models:
+        return WeightedCalibrationSelection(
+            csv_path=csv_path,
+            label=label,
+            contributions=None,
+            mean_c=None,
+            sigma_c=None,
+            distribution_params={"error": "forecast_missing_model_identity"},
+            fallback_reason="forecast_missing_model_identity",
+        )
+
+    init_leads = _init_lead_by_model(forecast)
+    attempt = select_weighted_models(
+        rows,
+        station_id=station_id,
+        available_models=list(forecast.models),
+        current_lead_hours=wall_lead_hours,
+        predicted_tmax_by_model=_predicted_tmax_by_model(forecast),
+        init_lead_hours_by_model=init_leads,
+    )
+    if attempt.result is None:
+        return WeightedCalibrationSelection(
+            csv_path=csv_path,
+            label=label,
+            contributions=None,
+            mean_c=None,
+            sigma_c=None,
+            distribution_params={
+                "error": "no_eligible_models",
+                "excluded_models": list(attempt.excluded_models),
+            },
+            fallback_reason="no_eligible_models",
+            excluded_models=attempt.excluded_models,
+        )
+
+    result = attempt.result
+    return WeightedCalibrationSelection(
+        csv_path=csv_path,
+        label=label,
+        contributions=result.contributions,
+        mean_c=result.mean_c,
+        sigma_c=result.sigma_c,
+        distribution_params=build_weighted_distribution_params(
+            result,
+            excluded_models=attempt.excluded_models,
+        ),
+    )
+
+
+def format_weighted_calibration_md(selection: WeightedCalibrationSelection) -> str:
+    lines = [
+        f"### {selection.label}",
+        f"- csv: `{selection.csv_path}`",
+    ]
+    if selection.contributions is None:
+        reason = selection.fallback_reason or "unknown"
+        lines.append(f"- fit: _failed_ (`{reason}`)")
+        if selection.excluded_models:
+            lines.append(f"- excluded_models: `{list(selection.excluded_models)}`")
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"- mean_c: **{selection.mean_c:.2f}**",
+            f"- sigma_c: **{selection.sigma_c:.2f}**",
+            "",
+            "| model | weight | predicted_tmax_c | corrected_mu_c | error_std_c | lookup_lead_h |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for entry in selection.contributions:
+        lines.append(
+            f"| `{entry.model}` | {entry.weight:.3f} | {entry.predicted_tmax_c:.2f} | "
+            f"{entry.corrected_mu_c:.2f} | {entry.error_std_c:.3f} | "
+            f"{entry.lookup_lead_hours:g} |"
+        )
+    if selection.excluded_models:
+        lines.append(f"- excluded_models: `{list(selection.excluded_models)}`")
+    return "\n".join(lines)
 
 
 def _format_optional(value: float | None, fmt: str) -> str:
@@ -379,6 +500,15 @@ def format_distribution_md(
     lines = [
         f"- model_strategy: `{model_strategy}`",
     ]
+    if (
+        model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+        and result.fallback_reason is not None
+    ):
+        lines.append(f"- error: `{result.fallback_reason}`")
+        if result.distribution_params is not None:
+            lines.append(f"- distribution_params: `{result.distribution_params}`")
+        return "\n".join(lines)
+
     if result.selected_model is not None:
         lines.append(f"- selected_model: `{result.selected_model}`")
         if forecast is not None:
@@ -392,6 +522,28 @@ def format_distribution_md(
         lines.append(f"- sigma_source: `{result.calibration_sigma_source}`")
     if result.fallback_reason is not None:
         lines.append(f"- fallback: `{result.fallback_reason}`")
+    if result.distribution_params is not None:
+        params = result.distribution_params
+        lines.extend(
+            [
+                f"- precision_exponent: `{params.get('precision_exponent')}`",
+                f"- within_variance: `{params.get('within_variance')}`",
+                f"- between_variance: `{params.get('between_variance')}`",
+            ]
+        )
+    if result.weighted_contributions:
+        lines.extend(
+            [
+                "",
+                "| model | weight | corrected_mu_c | error_std_c |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for entry in result.weighted_contributions:
+            lines.append(
+                f"| `{entry.model}` | {entry.weight:.3f} | "
+                f"{entry.corrected_mu_c:.2f} | {entry.error_std_c:.3f} |"
+            )
     lines.extend(
         [
             f"- method: `{info.method}`",
@@ -399,7 +551,7 @@ def format_distribution_md(
             f"- sigma_c: **{info.sigma_c:.2f}**",
         ]
     )
-    if info.method != "calibrated_single_model":
+    if info.method not in ("calibrated_single_model", "weighted_calibrated_mixture_p2.0"):
         lines.append(f"- values_used_c: `{info.values_used_c}`")
     lines.extend(["", _format_bucket_edges_table(result)])
     return "\n".join(lines)

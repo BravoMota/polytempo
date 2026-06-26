@@ -30,6 +30,19 @@ def test_generate_all_twelve_profiles_count() -> None:
     assert "es_mid_band_lead24" in ids
 
 
+def test_weighted_historical_updated_uses_updated_calibration_path() -> None:
+    profiles = generate_all_twelve_profiles(
+        lead_gates={"lead30": {"target_lead_hours": 30}},
+        model_strategies=["weighted_historical_updated"],
+        trade_strategies=["dist_arb"],
+    )
+    assert len(profiles) == 1
+    assert profiles[0].id == "whu_dist_arb_lead30"
+    assert profiles[0].calibration_stats_path == (
+        REPO_ROOT / DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+    ).resolve()
+
+
 def test_best_historical_updated_uses_updated_calibration_path() -> None:
     profiles = generate_all_twelve_profiles(
         lead_gates={"lead30": {"target_lead_hours": 30}},
@@ -78,6 +91,8 @@ def test_load_paper_profiles_from_repo_config() -> None:
     xsell = [p for p in profiles if p.exit_policy is not None]
     assert len(hold) == 378
     assert len(xsell) == 16
+    assert not any(p.id.startswith("es_") for p in hold)
+    assert any(p.id.startswith("whu_") for p in hold)
 
 
 def test_config_trade_strategies_are_registered() -> None:

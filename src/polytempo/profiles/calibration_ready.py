@@ -8,6 +8,7 @@ from pathlib import Path
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
 )
 from polytempo.profiles.models import TradingProfile
 from polytempo.weather.calibration_stats_csv import read_calibration_stats_csv
@@ -43,7 +44,10 @@ def filter_profiles_by_calibration(
     seen_warning_keys: set[str] = set()
 
     for profile in profiles:
-        if profile.model_strategy == MODEL_STRATEGY_BEST_HISTORICAL_UPDATED:
+        if profile.model_strategy in (
+            MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        ):
             ready, reason = calibration_csv_ready(
                 profile.calibration_stats_path,
                 max_age_hours=bhu_max_age_hours,

@@ -1,8 +1,8 @@
 # Calibration data
 
-Weather calibration artifacts live under **`data/weather/`** at the repository root. There are two paths: the **frozen V1 manual pipeline** (`best_historical`) and the **automated updated store** (`best_historical_updated`).
+Weather calibration artifacts live under **`data/weather/`** at the repository root. There are three model-selection paths using calibration CSVs: **frozen V1** (`best_historical`), **automated updated single-winner** (`best_historical_updated`), and **automated updated weighted mixture** (`weighted_historical_updated`).
 
-## Updated path (automated, `best_historical_updated`)
+## Updated path (automated, `best_historical_updated` / `weighted_historical_updated`)
 
 Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_forecast_records`, `calibration_job_state`). Runtime output is `statistical/calibration_stats_updated.csv` (gitignored, regenerated nightly).
 
@@ -10,7 +10,7 @@ Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_for
 | --- | --- |
 | Postgres `calibration_*` tables | Incremental observations + forecast records + job state |
 | `raw/single-runs/` | Cached Open-Meteo Single Runs JSON (reused from V1 fetch) |
-| `statistical/calibration_stats_updated.csv` | Nightly CSV for `polytempo live --model-strategy best_historical_updated`: Open-Meteo rows (`lead_hours_anchor=run_init`) plus WU rows (`lead_hours_anchor=scraped_at`) |
+| `statistical/calibration_stats_updated.csv` | Nightly CSV for `best_historical_updated` and `weighted_historical_updated`: Open-Meteo rows (`lead_hours_anchor=run_init`) plus WU rows (`lead_hours_anchor=scraped_at`) |
 | `statistical/historic/calibration_stats_updated_*.csv` | Timestamped archive of the previous nightly CSV before each recompute (gitignored) |
 
 **Observations:** WU station hourly observations (`units=m`); daily high = `max(observations[*].temp)` in °C, stored as integer `observed_tmax_c`. `observed_tmax_f` is null for metric fetches (legacy imperial parse paths may still populate it).
@@ -25,6 +25,18 @@ Canonical store is **PostgreSQL** (`calibration_observed_tmax`, `calibration_for
 Config: `config/calibration.yaml` — stations resolved from `config/weather_collectors.yaml`; models and cadence baked in (no `capabilities_csv` at runtime).
 
 **Not used by the updated path:** `observed_tmax.jsonl`, `observed_tmax.csv`, `processed/forecast_records.csv`, `statistical/forecast_errors.csv`, `statistical/calibration_stats.csv`.
+
+### `weighted_historical_updated` (WHU)
+
+Uses the same `calibration_stats_updated.csv` and eligibility rules as BHU, but builds a **precision-weighted mixture** over all eligible models instead of picking a single winner:
+
+- Weights: `w_i ∝ (1 / error_std_c²)^2` (normalized); **`error_std_c` only** — no `rmse_c` fallback.
+- Mean: `μ = Σ w_i · (pred_i − bias_i)`.
+- Sigma: damped mixture variance `σ² = within + 0.2 × between`, where `within = Σ w_i σ_i²` and `between = Σ w_i (μ_i − μ)²`.
+- On failure: logs warning/error, **no** `ensemble_spread` substitution; paper bot skips trade with `model_strategy_fallback`.
+- Audit metadata includes `distribution_params` (within/between variance, per-model contributions).
+
+Paper profiles use `{bh|bhu|whu}_{trade}_{leadN}` — `ensemble_spread` is CLI-only, not in the paper bot grid.
 
 ## Frozen V1 path (`best_historical`)
 
@@ -83,7 +95,7 @@ Canonical for forecast records, error joins, and `calibration_stats*.csv`:
 **Paper bot (`fetch_market_context`):**
 
 - **Entry gates / ledger:** wall-clock lead from `now` to end of target day (`lead_hours_to_end_of_target_day`).
-- **`best_historical_updated`:** Open-Meteo models use init lead (`run_init` anchor); **Wunderground** uses wall-clock lead (`scraped_at` anchor) with live adjusted Tmax from Weather.com hourly forecast + same-day v1 history obs.
+- **`best_historical_updated` / `weighted_historical_updated`:** Open-Meteo models use init lead (`run_init` anchor); **Wunderground** uses wall-clock lead (`scraped_at` anchor) with live adjusted Tmax from Weather.com hourly forecast + same-day v1 history obs.
 - **`best_historical` CSV lookup:** per-model init lead from rolling `meta.json` (`compute_lead_hours(run_init_utc, target_date)`), carried on `ForecastValues.init_lead_hours`.
 
 ### `best_historical` and models without rolling meta
