@@ -48,6 +48,37 @@ class ExitPolicy:
 
 
 @dataclass(frozen=True)
+class ActiveParams:
+    """Knobs for an active (edge-following) wallet.
+
+    At each lead-gate tick the controller re-prices each open leg against a
+    fresh forecast + live book: it scales in while the leg edge stays
+    ``>= add_edge_pp`` (one ramp ticket per tick, capped so a leg's total stake
+    never exceeds ``max_position_fraction`` of the wallet balance) and flattens
+    the whole leg when its edge drops below ``exit_edge_pp``. A leg is skipped
+    this tick when its quote is wider than ``max_spread`` or thinner than
+    ``min_liquidity_usd``. Presence of this object marks a profile as active
+    (no entry gate); ``None`` is a normal hold/gated profile.
+    """
+
+    add_edge_pp: float = 5.0
+    exit_edge_pp: float = 0.0
+    max_position_fraction: float = 0.15
+    max_spread: float = 0.05
+    min_liquidity_usd: float = 100.0
+
+    def __post_init__(self) -> None:
+        if self.add_edge_pp < self.exit_edge_pp:
+            raise ValueError(
+                f"add_edge_pp ({self.add_edge_pp}) must be >= exit_edge_pp ({self.exit_edge_pp})"
+            )
+        if not 0.0 < self.max_position_fraction <= 1.0:
+            raise ValueError(
+                f"max_position_fraction must be in (0, 1], got {self.max_position_fraction}"
+            )
+
+
+@dataclass(frozen=True)
 class TradingProfile:
     """One global paper-trading profile (model + action + entry timing)."""
 
@@ -60,10 +91,16 @@ class TradingProfile:
     target_day: str = "tomorrow"
     enabled: bool = True
     exit_policy: ExitPolicy | None = None
+    active_params: ActiveParams | None = None
 
     def __post_init__(self) -> None:
         if not self.id or "/" in self.id or "\\" in self.id:
             raise ValueError(f"invalid profile id: {self.id!r}")
+
+    @property
+    def is_active(self) -> bool:
+        """True for edge-following wallets managed by the active controller."""
+        return self.active_params is not None
 
     def strategy_instance(self) -> Strategy:
         from polytempo.profiles.registry import trade_strategy_for_name

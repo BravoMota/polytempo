@@ -131,7 +131,27 @@ Continuous mode requires `POLYTEMPO_PAPER_DATABASE_URL`. `--once` does not need 
 
 **Init-lead (Phase 2):** the bot fetches rolling Open-Meteo metadata + forecast via `fetch_open_meteo_live_bundle`. Entry gates and ledger `lead_hours` stay **wall-clock**; `best_historical` uses **per-model init lead** only for models with rolling `meta.json` (others are excluded from selection — see `[docs/calibration-data.md](docs/calibration-data.md)`). **Restart `run_paper_bot.py` after deploying this change.**
 
-No live orders. No active-sell / profit-taking yet (deferred — trades settle at event resolution only).
+No live orders. The bot also runs an **active sweep at each lead-gate instant** (the same
+clock as the hold wallets) for any `active_wallets` profiles — see `paper active-monitor` below.
+
+### paper active-monitor (edge-following wallets, dry-run)
+
+The `active_wallets` block in `config/paper_profiles.yaml` defines 42 `{model}_{trade}_active`
+wallets (model × strat, **no lead gate**). At each lead-gate tick (lead hours
+12/15/18/24/30/36/42/48/54) the bot re-prices each open leg against a
+fresh forecast + live book and **scales in** while the leg edge stays `>= add_edge_pp`
+(one ramp ticket per tick, capped at `max_position_fraction` of balance per leg) or **flattens the
+leg** when its edge drops below `exit_edge_pp` (taking profit or cutting losses). Entry-side selection
+is the base trade strategy's job; once held, management follows that leg's own edge. Re-entry is
+allowed if the edge returns. Fills are taker; wide/illiquid quotes are skipped that tick.
+
+`active-monitor` runs **one sweep in dry-run** (no DB writes) and prints the adds/flattens/opens the
+controller would make right now:
+
+```bash
+polytempo paper active-monitor
+polytempo paper active-monitor --config config/paper_profiles.yaml
+```
 
 ### probe_open_meteo_schedule (API demand study)
 

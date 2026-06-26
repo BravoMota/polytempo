@@ -78,3 +78,38 @@ xsell_wallets:
   lead_gates:
     - lead42
     - lead48
+
+# Active edge-following experiment. Each {model} x {trade} combo below is one
+# $1000 wallet `{model}_{trade}_active` with NO lead gate: at each lead-gate
+# tick (lead hours 12/15/18/24/30/36/42/48/54 — the hold wallets' clock) it
+# re-prices its open legs against a fresh forecast + live book, scales in while
+# a leg's edge stays >= add_edge_pp (one ramp ticket per tick, capped at
+# max_position_fraction of balance per leg) and flattens the leg when its edge
+# drops below exit_edge_pp. Lead is the decision clock, not a partition ->
+# wallets = model x strat (3 x 14 = 42).
+active_wallets:
+  knobs:
+    add_edge_pp: 5.0          # scale-in floor (don't add into spread noise)
+    exit_edge_pp: 0.0         # flatten the leg when edge drops below this
+    max_position_fraction: 0.15  # cap per-leg stake at 15% of wallet balance
+    max_spread: 0.05          # skip a leg this tick if the quote is wider
+    min_liquidity_usd: 100.0
+  models:
+    - best_historical
+    - best_historical_updated
+    - weighted_historical_updated
+  trade_strategies:
+    - argmax_yes
+    - argmax_no
+    - dist_arb
+    - mid_band
+    - topk_yes
+    - topk_no
+    - max_edge
+    - edge_band
+    - book_arb
+    - coverage_band
+    - max_roi
+    - dist_arb_tight
+    - dist_arb_kelly
+    - tail_fade

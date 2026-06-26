@@ -980,6 +980,45 @@ def paper_status(
                 )
 
 
+@paper_app.command("active-monitor")
+def paper_active_monitor(
+    config: Path = typer.Option(
+        DEFAULT_PROFILES_PATH,
+        "--config",
+        help="Path to paper_profiles.yaml",
+    ),
+) -> None:
+    """Dry-run one active-management sweep (no DB writes).
+
+    Prints, per active wallet, the adds/flattens/opens the edge controller
+    would make right now against the live forecast + order book.
+    """
+    from polytempo.paper.active_controller import manage_active_wallets
+
+    store = default_ledger_store()
+    profiles = _load_profiles(config)
+    active = [p for p in profiles if p.active_params is not None]
+    if not active:
+        typer.echo("no active wallets configured (add an active_wallets block)")
+        return
+
+    result = manage_active_wallets(store, active, dry_run=True)
+    typer.echo(result.summary())
+    for d in result.decisions:
+        if d.action not in ("OPEN", "ADD", "FLATTEN"):
+            continue
+        size = (
+            f"${d.stake_usd:.2f}"
+            if d.stake_usd is not None
+            else (f"@{d.exit_price:.3f}" if d.exit_price is not None else "")
+        )
+        edge = f"{d.edge_pp:+.1f}pp" if d.edge_pp is not None else "  n/a"
+        typer.echo(
+            f"  {d.profile_id:<26} {d.action:<8} {d.bucket_label:<16} "
+            f"{d.side:<3} edge={edge:<8} {size} {d.reason}"
+        )
+
+
 @paper_app.command("scenarios")
 def paper_scenarios(
     event_id: str | None = typer.Option(

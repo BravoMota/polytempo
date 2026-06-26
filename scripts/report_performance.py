@@ -189,7 +189,15 @@ def _attach_profile_meta(perfs: list[ProfilePerf], config: Path) -> list[Profile
         if meta is None:
             out.append(perf)
             continue
-        exit_mode = "xsell" if meta.exit_policy is not None else "hold"
+        if meta.active_params is not None:
+            exit_mode = "active"
+            lead_hours = None  # active wallets span every lead tick
+        elif meta.exit_policy is not None:
+            exit_mode = "xsell"
+            lead_hours = meta.entry_gate.target_lead_hours
+        else:
+            exit_mode = "hold"
+            lead_hours = meta.entry_gate.target_lead_hours
         out.append(
             ProfilePerf(
                 profile_id=perf.profile_id,
@@ -198,7 +206,7 @@ def _attach_profile_meta(perfs: list[ProfilePerf], config: Path) -> list[Profile
                 since=perf.since,
                 balance_usd=perf.balance_usd,
                 daily=perf.daily,
-                lead_hours=meta.entry_gate.target_lead_hours,
+                lead_hours=lead_hours,
                 exit_mode=exit_mode,
             )
         )

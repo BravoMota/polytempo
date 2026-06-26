@@ -23,6 +23,7 @@ from polytempo.model.lead_time import (
     lead_hours_missed_target,
     lead_hours_to_end_of_target_day,
 )
+from polytempo.paper.active_controller import manage_active_wallets
 from polytempo.paper.bot_log import format_profile_line, format_preview_report, format_tick_box, PreviewDateSection
 from polytempo.paper.ledger import LedgerStore, OpenTrade, PostgresLedgerStore
 from polytempo.paper.market_context import (
@@ -33,7 +34,7 @@ from polytempo.paper.market_context import (
 from polytempo.paper.run import open_event_ids, run_profile, run_profiles
 from polytempo.profiles.load import load_paper_profiles
 from polytempo.profiles.models import TradingProfile
-from polytempo.storage.paper_postgres import upsert_bot_state
+from polytempo.storage.paper_postgres import fetch_bot_state, upsert_bot_state
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ ACTIVE_EXIT_POLL_INTERVAL = timedelta(minutes=3)
 LONDON_TZ = ZoneInfo("Europe/London")
 # Local hour from which the peak window opens (covers ~12:00-14:00 peak + settle).
 ACTIVE_EXIT_WINDOW_START_HOUR = 10
+
+# Edge-following active wallets re-evaluate at each lead-gate instant — the same
+# decision clock as the hold wallets (lead hours 12/15/18/24/30/36/42/48/54),
+# deduped on the gate instant so each tick fires the sweep exactly once.
+ACTIVE_SWEEP_STATE_KEY = "active_sweep_instant"
+ACTIVE_SWEEP_LOOKBACK_DAYS = 1
+ACTIVE_SWEEP_LOOKAHEAD_DAYS = 3
 
 
 @dataclass
@@ -152,7 +160,8 @@ def compute_next_wake(
     now: datetime,
 ) -> datetime:
     wakes = [state.next_settle_wake]
-    gate_wake, _ = next_gate_wake_utc(state.profiles, now)
+    gated = [p for p in state.profiles if p.active_params is None]
+    gate_wake, _ = next_gate_wake_utc(gated, now)
     if gate_wake is not None:
         wakes.append(gate_wake)
     valid = [w for w in wakes if w is not None and w > now]
@@ -263,6 +272,68 @@ def sweep_active_exits(
     return ActiveExitResult(closed=closed, fast_poll=fast_poll)
 
 
+def latest_due_gate_instant(
+    profiles: list[TradingProfile],
+    now: datetime,
+) -> datetime | None:
+    """Most recent lead-gate instant at/just before ``now``.
+
+    Uses the hold wallets' gate values (lead hours) across the in-window target
+    days, so the active sweep shares the hold wallets' decision clock. Returns
+    ``None`` if no gate instant has passed yet.
+    """
+    gate_values = {
+        p.entry_gate.target_lead_hours for p in profiles if p.active_params is None
+    }
+    if not gate_values:
+        return None
+    start = now.date() - timedelta(days=ACTIVE_SWEEP_LOOKBACK_DAYS)
+    span = ACTIVE_SWEEP_LOOKBACK_DAYS + ACTIVE_SWEEP_LOOKAHEAD_DAYS + 1
+    passed: list[datetime] = []
+    for offset in range(span):
+        target = start + timedelta(days=offset)
+        for lead in gate_values:
+            instant = gate_target_utc(target, lead)
+            if instant <= now:
+                passed.append(instant)
+    return max(passed) if passed else None
+
+
+def run_active_sweep(
+    store: PostgresLedgerStore,
+    profiles: list[TradingProfile],
+    *,
+    now: datetime,
+):
+    """Run the active-wallet sweep once per lead-gate instant; else None.
+
+    Fires when a new lead-gate instant has passed since the last sweep (caught at
+    the gate wake, or within the next 15-min settle sweep), deduped on the instant.
+    """
+    active = [p for p in profiles if p.active_params is not None]
+    if not active:
+        return None
+    instant = latest_due_gate_instant(profiles, now)
+    if instant is None:
+        return None
+    key = instant.isoformat()
+    from polytempo.storage.paper_postgres import get_paper_connection
+
+    with get_paper_connection(store.database_url) as conn:
+        last = fetch_bot_state(conn, ACTIVE_SWEEP_STATE_KEY)
+    if last is not None and last.get("instant") == key:
+        return None
+    try:
+        result = manage_active_wallets(store, active, now=now)
+    except Exception:
+        logger.exception("active sweep failed")
+        return None
+    with get_paper_connection(store.database_url) as conn:
+        upsert_bot_state(conn, ACTIVE_SWEEP_STATE_KEY, {"instant": key}, now.isoformat())
+        conn.commit()
+    return result
+
+
 def run_preview(
     profiles: list[TradingProfile],
     *,
@@ -347,20 +418,28 @@ def run_tick(
 ) -> TickResult:
     """One bot iteration: settle, then attempt opens for gated profiles."""
     now = datetime.now(timezone.utc)
+    # Active wallets are managed by the edge controller, not the entry-gate
+    # path; keep them out of work-unit discovery and gate-wake scheduling.
+    gated_profiles = [p for p in profiles if p.active_params is None]
     settle_count = settle_resolved_open_events(store, profiles)
     exit_result = sweep_active_exits(store, profiles, now=now)
+    active_result = run_active_sweep(store, profiles, now=now)
 
     profile_lines: list[str] = []
     if exit_result.closed:
         profile_lines.append(f"active-sell: closed {exit_result.closed} position(s)")
+    if active_result is not None and (
+        active_result.opened or active_result.added or active_result.flattened
+    ):
+        profile_lines.append(active_result.summary())
     no_event_dates: list[date] = []
     gate_retry_at: datetime | None = None
-    units = work_units_for_profiles(profiles, now=now)
+    units = work_units_for_profiles(gated_profiles, now=now)
 
     for unit in units:
         unit_profiles = [
             p
-            for p in profiles
+            for p in gated_profiles
             if p.city == unit.city
             and unit.target_date in _profile_settlement_dates(p, now)
         ]
@@ -423,7 +502,7 @@ def run_tick(
         skipped = ", ".join(d.isoformat() for d in sorted(set(no_event_dates)))
         profile_lines.append(f"(skipped unlisted dates: {skipped})")
 
-    gate_wake, gate_pid = next_gate_wake_utc(profiles, now)
+    gate_wake, gate_pid = next_gate_wake_utc(gated_profiles, now)
     next_settle = now + SETTLE_SWEEP_INTERVAL
     box = format_tick_box(
         now=now,

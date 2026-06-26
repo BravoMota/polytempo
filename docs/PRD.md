@@ -8,7 +8,7 @@ The system should answer:
 
 > Given weather forecasts and market prices, is any bucket mispriced enough to justify a trade?
 
-Current progress: all plan phases (0-10) are complete — Polymarket ingestion (Gamma discovery + live CLOB order-book prices), Open-Meteo forecast ingestion, calibration (frozen + nightly-updated), edge/decision with 14 trade strategies (YES and NO sides), Markdown run reports, and profile-based paper trading: 378 profiles (3 model × 14 trade × 9 lead gates) with per-profile $1000 bankrolls in PostgreSQL, driven by an always-on bot.
+Current progress: all plan phases (0-10) are complete — Polymarket ingestion (Gamma discovery + live CLOB order-book prices), Open-Meteo forecast ingestion, calibration (frozen + nightly-updated), edge/decision with 14 trade strategies (YES and NO sides), Markdown run reports, and profile-based paper trading: 378 profiles (3 model × 14 trade × 9 lead gates) with per-profile $1000 bankrolls in PostgreSQL, driven by an always-on bot, plus 42 edge-following "active" wallets (model × trade, no lead gate) that scale in/out at each lead-gate tick.
 
 ## Non-goals
 

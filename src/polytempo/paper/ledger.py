@@ -237,6 +237,98 @@ class PostgresLedgerStore:
             conn.commit()
         return opened
 
+    def add_position(
+        self,
+        profile_id: str,
+        event_id: str,
+        *,
+        bucket_label: str,
+        side: str,
+        stake: float,
+        entry_price: float,
+        edge_pp: float,
+        yes_bid: float | None,
+        yes_ask: float | None,
+        lead_hours: float | None,
+        model_strategy: str | None,
+        metadata: dict | None = None,
+        trade_action: str = "ACTIVE_ADD",
+    ) -> OpenTrade:
+        """Append one OPEN ticket on a (possibly already-held) leg (scale-in).
+
+        Unlike ``open_trades_from_analysis`` this does not dedupe against held
+        legs, so the active controller can stack increments on the same
+        bucket/side. Returns the new :class:`OpenTrade`.
+        """
+        stake = round(stake, 2)
+        shares = round(stake / entry_price, 4)
+        trade = OpenTrade(
+            trade_id=uuid.uuid4().hex[:12],
+            event_id=event_id,
+            bucket_label=bucket_label,
+            yes_ask=yes_ask if yes_ask is not None else 0.0,
+            edge_pp=edge_pp,
+            stake_usd=stake,
+            shares=shares,
+            side=side,
+            entry_price=entry_price,
+        )
+        with get_paper_connection(self._database_url) as conn:
+            insert_paper_event(
+                conn,
+                PaperEventRow(
+                    profile_id=profile_id,
+                    event_type="OPEN",
+                    trade_id=trade.trade_id,
+                    ts_utc=_now_iso(),
+                    polymarket_event_id=event_id,
+                    bucket_label=bucket_label,
+                    side=side,
+                    entry_price=entry_price,
+                    stake_usd=stake,
+                    shares=shares,
+                    edge_pp=edge_pp,
+                    yes_bid=yes_bid,
+                    yes_ask=yes_ask,
+                    lead_hours=lead_hours,
+                    model_strategy=model_strategy,
+                    trade_action=trade_action,
+                    metadata=metadata or {},
+                ),
+            )
+            conn.commit()
+        return trade
+
+    def flatten_leg(
+        self,
+        profile_id: str,
+        event_id: str,
+        bucket_label: str,
+        side: str,
+        exit_price: float,
+        *,
+        reason: str,
+    ) -> list[OpenTrade]:
+        """Close every open ticket on one (event, bucket, side) leg at the live mark.
+
+        Reuses ``close_position`` per ticket; ``reason`` (e.g. ``TAKE_PROFIT`` /
+        ``CUT_LOSS``) is recorded on each CLOSE row. Returns the closed trades.
+        """
+        legs = [
+            t
+            for t in self.read_state(profile_id).open_trades
+            if t.event_id == event_id
+            and t.bucket_label == bucket_label
+            and t.side == side
+        ]
+        closed: list[OpenTrade] = []
+        for trade in legs:
+            if self.close_position(
+                profile_id, trade.trade_id, exit_price, reason=reason
+            ) is not None:
+                closed.append(trade)
+        return closed
+
     def settle_event(
         self,
         profile_id: str,

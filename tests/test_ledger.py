@@ -102,6 +102,43 @@ def test_close_position_unknown_trade_returns_none(store: PostgresLedgerStore) -
     assert store.close_position(PROFILE, "missing", 0.5, reason="TP") is None
 
 
+def _add(store: PostgresLedgerStore, *, stake: float, entry: float) -> None:
+    store.add_position(
+        PROFILE,
+        "evt-1",
+        bucket_label="23°C",
+        side="YES",
+        stake=stake,
+        entry_price=entry,
+        edge_pp=10.0,
+        yes_bid=entry - 0.02,
+        yes_ask=entry,
+        lead_hours=42.0,
+        model_strategy="best_historical",
+    )
+
+
+def test_add_position_stacks_tickets_on_same_leg(store: PostgresLedgerStore) -> None:
+    _add(store, stake=20.0, entry=0.40)
+    _add(store, stake=30.0, entry=0.50)  # scale-in: no held-dedupe
+    state = store.read_state(PROFILE)
+    legs = [t for t in state.open_trades if t.bucket_label == "23°C" and t.side == "YES"]
+    assert len(legs) == 2
+    assert state.balance_usd == pytest.approx(STARTING_BALANCE_USD - 20.0 - 30.0)
+    assert {round(t.shares, 4) for t in legs} == {50.0, 60.0}  # 20/0.40, 30/0.50
+
+
+def test_flatten_leg_closes_all_tickets_at_exit_price(store: PostgresLedgerStore) -> None:
+    _add(store, stake=20.0, entry=0.40)  # 50 shares
+    _add(store, stake=30.0, entry=0.50)  # 60 shares
+    closed = store.flatten_leg(PROFILE, "evt-1", "23°C", "YES", 0.60, reason="TAKE_PROFIT")
+    assert len(closed) == 2
+    state = store.read_state(PROFILE)
+    assert not [t for t in state.open_trades if t.bucket_label == "23°C"]
+    # proceeds = 110 shares * 0.60 = 66.0; stakes spent = 50.0
+    assert state.balance_usd == pytest.approx(STARTING_BALANCE_USD - 50.0 + 110.0 * 0.60)
+
+
 def _row(
     label: str,
     *,

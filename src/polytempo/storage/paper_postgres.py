@@ -154,6 +154,15 @@ def upsert_bot_state(conn: Connection, key: str, value: dict[str, Any], ts_utc: 
     )
 
 
+def fetch_bot_state(conn: Connection, key: str) -> dict[str, Any] | None:
+    """Read one ``paper_bot_state`` value (jsonb → dict), or None if absent."""
+    row = conn.execute(
+        "SELECT value_json FROM paper_bot_state WHERE key = %(k)s",
+        {"k": key},
+    ).fetchone()
+    return row["value_json"] if row else None
+
+
 def fetch_open_event_ids(conn: Connection, profile_id: str | None = None) -> list[str]:
     """Distinct polymarket event ids with open positions."""
     if profile_id:

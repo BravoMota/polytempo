@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 from polytempo.analysis import MODEL_STRATEGIES
-from polytempo.profiles.models import EntryGate, ExitPolicy, TradingProfile
+from polytempo.profiles.models import ActiveParams, EntryGate, ExitPolicy, TradingProfile
 from polytempo.profiles.registry import known_trade_strategies
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
@@ -170,6 +170,61 @@ def generate_xsell_profiles(
     return profiles
 
 
+def generate_active_profiles(
+    spec: dict | None,
+    *,
+    calibration_stats_path: Path = DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    updated_calibration_stats_path: Path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
+    city: str = "london",
+    target_day: str = "tomorrow",
+) -> list[TradingProfile]:
+    """Expand the ``active_wallets`` block into edge-following profiles.
+
+    Each ``{model} x {trade}`` combo becomes one ``{abbrev}_{trade}_active``
+    wallet with shared :class:`ActiveParams` and **no** lead gate (the active
+    controller manages it across every lead tick, not at a single instant).
+    """
+    if not spec:
+        return []
+    static_path = _resolve_repo_path(calibration_stats_path)
+    updated_path = _resolve_repo_path(updated_calibration_stats_path)
+    knobs = spec.get("knobs") or {}
+    params = ActiveParams(
+        add_edge_pp=float(knobs.get("add_edge_pp", 5.0)),
+        exit_edge_pp=float(knobs.get("exit_edge_pp", 0.0)),
+        max_position_fraction=float(knobs.get("max_position_fraction", 0.15)),
+        max_spread=float(knobs.get("max_spread", 0.05)),
+        min_liquidity_usd=float(knobs.get("min_liquidity_usd", 100.0)),
+    )
+    models = list(spec.get("models") or [])
+    trades = list(spec.get("trade_strategies") or [])
+    _validate_trade_strategy_names(trades)
+
+    profiles: list[TradingProfile] = []
+    for model in models:
+        for trade in trades:
+            abbrev = _MODEL_ABBREV.get(model, model)
+            profiles.append(
+                TradingProfile(
+                    id=f"{abbrev}_{trade}_active",
+                    model_strategy=model,
+                    trade_strategy=trade,
+                    # Placeholder gate (active wallets are not gate-driven; the
+                    # controller ignores entry_gate and works the 6h cadence).
+                    entry_gate=EntryGate(target_lead_hours=54.0),
+                    calibration_stats_path=_calibration_path_for_strategy(
+                        model,
+                        static_path=static_path,
+                        updated_path=updated_path,
+                    ),
+                    city=city,
+                    target_day=target_day,
+                    active_params=params,
+                )
+            )
+    return profiles
+
+
 def load_paper_profiles(
     path: Path = DEFAULT_PROFILES_PATH,
 ) -> list[TradingProfile]:
@@ -224,9 +279,20 @@ def load_paper_profiles(
         target_day=target_day,
     )
 
+    # Edge-following active wallets (model x trade, no lead gate).
+    active_wallets = generate_active_profiles(
+        raw.get("active_wallets"),
+        calibration_stats_path=cal_path,
+        updated_calibration_stats_path=updated_cal_path,
+        city=city,
+        target_day=target_day,
+    )
+
+    extra = xsell + active_wallets
+
     active = raw.get("active_profiles")
     if active == "all_twelve" or active is None:
-        return [p for p in all_profiles if p.enabled] + xsell
+        return [p for p in all_profiles if p.enabled] + extra
 
     if isinstance(active, list):
         out: list[TradingProfile] = []
@@ -234,6 +300,6 @@ def load_paper_profiles(
             if pid not in by_id:
                 raise ValueError(f"unknown profile id in active_profiles: {pid!r}")
             out.append(by_id[pid])
-        return out + xsell
+        return out + extra
 
     raise ValueError(f"invalid active_profiles: {active!r}")
