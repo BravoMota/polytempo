@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -34,21 +36,25 @@ def read_csv_raw(path: Path) -> tuple[pd.DataFrame, str | None]:
     return df, generated
 
 
+def _use_env_wrapper() -> bool:
+    """The bash wrapper (sources .env, picks venv python) only runs on POSIX."""
+    return os.name != "nt" and RUN_WITH_ENV.is_file()
+
+
 def export_command(csv_path: Path) -> list[str]:
-    return [
-        str(RUN_WITH_ENV),
-        str(EXPORT_SCRIPT),
-        "--all",
-        "--csv",
-        str(csv_path),
-    ]
+    head = (
+        [str(RUN_WITH_ENV), str(EXPORT_SCRIPT)]
+        if _use_env_wrapper()
+        else [sys.executable, str(EXPORT_SCRIPT)]
+    )
+    return [*head, "--all", "--csv", str(csv_path)]
 
 
 def run_export(csv_path: Path) -> tuple[bool, str]:
-    if not RUN_WITH_ENV.is_file():
-        return False, f"Missing {RUN_WITH_ENV}"
     if not EXPORT_SCRIPT.is_file():
         return False, f"Missing {EXPORT_SCRIPT}"
+    if os.name != "nt" and not RUN_WITH_ENV.is_file():
+        return False, f"Missing {RUN_WITH_ENV}"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         export_command(csv_path),

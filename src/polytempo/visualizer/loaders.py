@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import streamlit as st
 
 from polytempo.visualizer.csv_data import read_csv_raw
+from polytempo.visualizer.distribution_data import (
+    build_distribution_view,
+    list_cities,
+    list_resolution_dates,
+)
 from polytempo.visualizer.replay import replay_event_analysis
 from polytempo.visualizer.trades import fetch_realized_trades
 
@@ -50,4 +55,31 @@ def load_replay(
         model_strategy=model_strategy,
         open_bucket_prices=open_bucket_prices or None,
         weather_database_url=weather_database_url,
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_cities(weather_url: str):
+    return list_cities(weather_url)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_resolution_dates(city: str, weather_url: str):
+    return list_resolution_dates(city, weather_url)
+
+
+@st.cache_data(show_spinner=False, ttl=300)
+def load_distribution_view(
+    city: str,
+    settlement_date: date,
+    at_utc_iso: str,
+    weather_url: str,
+    calibration_source: str,
+):
+    return build_distribution_view(
+        city=city,
+        settlement_date=settlement_date,
+        at_utc=datetime.fromisoformat(at_utc_iso),
+        weather_url=weather_url,
+        calibration_source=Path(calibration_source),
     )

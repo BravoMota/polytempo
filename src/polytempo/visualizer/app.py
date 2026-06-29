@@ -10,6 +10,7 @@ import streamlit as st
 
 from polytempo.visualizer.csv_data import csv_mtime, run_export, visible_settlement_dates
 from polytempo.visualizer.detail import render_trade_detail
+from polytempo.visualizer.distribution_page import render_distribution_page
 from polytempo.visualizer.loaders import load_csv
 from polytempo.visualizer.paths import DEFAULT_CSV, REPO_ROOT
 from polytempo.visualizer.styling import inject_no_inner_scroll_css
@@ -20,12 +21,11 @@ from polytempo.visualizer.summary import (
 )
 
 
-def main() -> None:
+def render_performance_page() -> None:
     default_path = DEFAULT_CSV
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         default_path = Path(sys.argv[1])
 
-    st.set_page_config(page_title="Paper performance", layout="wide")
     inject_no_inner_scroll_css()
     st.title("Paper wallet performance")
 
@@ -121,3 +121,12 @@ def main() -> None:
     else:
         render_pivot_table(filtered, days=days, data_max=data_max)
         render_trade_detail(filtered, visible_settlement_dates(filtered))
+
+
+def main() -> None:
+    st.set_page_config(page_title="PolyTempo", layout="wide")
+    pages = [
+        st.Page(render_performance_page, title="Paper performance", url_path="performance"),
+        st.Page(render_distribution_page, title="Distribution", url_path="distribution"),
+    ]
+    st.navigation(pages).run()
