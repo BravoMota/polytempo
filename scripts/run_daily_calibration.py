@@ -18,7 +18,7 @@ from polytempo.collectors.schedule import (  # noqa: E402
     is_slot_due,
     next_scheduled_instant_utc,
 )
-from polytempo.storage.postgres import initialize_database, resolve_database_url  # noqa: E402
+from polytempo.storage.postgres import resolve_database_url  # noqa: E402
 from polytempo.weather.calibration_config import (  # noqa: E402
     DEFAULT_CALIBRATION_CONFIG_PATH,
     load_calibration_config,
@@ -39,7 +39,6 @@ def _handle_signal(signum: int, _frame: object) -> None:
 
 
 def _run_once(config_path: Path, database_url: str) -> int:
-    initialize_database(database_url)
     config = load_calibration_config(config_path)
     om_code = run_daily(config, database_url)
     wu_code = run_wu_daily(config, database_url)
