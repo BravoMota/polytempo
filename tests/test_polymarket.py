@@ -249,6 +249,56 @@ def test_first_parseable_weather_event_filters_by_settlement_date() -> None:
     assert picked is right_day
 
 
+def test_first_parseable_weather_event_skips_lowest_temperature_event() -> None:
+    settlement = date(2026, 7, 2)
+    # Lowest market is listed first (Gamma ranks it above by volume) but must be skipped.
+    lowest = parse_event_payload(
+        {
+            "id": "650120",
+            "title": "Lowest temperature in London on July 2?",
+            "slug": "lowest-temperature-in-london-on-july-2-2026",
+            "endDate": f"{settlement.isoformat()}T12:00:00Z",
+            "markets": [{"id": "m", "groupItemTitle": "12°C or below"}],
+        }
+    )
+    highest = parse_event_payload(
+        {
+            "id": "650208",
+            "title": "Highest temperature in London on July 2?",
+            "slug": "highest-temperature-in-london-on-july-2-2026",
+            "endDate": f"{settlement.isoformat()}T12:00:00Z",
+            "markets": [{"id": "m", "groupItemTitle": "25°C"}],
+        }
+    )
+
+    picked = first_parseable_weather_event(
+        [lowest, highest],
+        city="london",
+        settlement_date=settlement,
+    )
+    assert picked is highest
+
+
+def test_first_parseable_weather_event_returns_none_when_only_lowest() -> None:
+    settlement = date(2026, 7, 2)
+    lowest = parse_event_payload(
+        {
+            "id": "650120",
+            "title": "Lowest temperature in London on July 2?",
+            "slug": "lowest-temperature-in-london-on-july-2-2026",
+            "endDate": f"{settlement.isoformat()}T12:00:00Z",
+            "markets": [{"id": "m", "groupItemTitle": "12°C or below"}],
+        }
+    )
+
+    picked = first_parseable_weather_event(
+        [lowest],
+        city="london",
+        settlement_date=settlement,
+    )
+    assert picked is None
+
+
 def test_fetch_event_calls_expected_url(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 

@@ -23,6 +23,9 @@ from polytempo.analysis import (
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
+    fetch_weather_events,
+    first_parseable_weather_event,
+    is_lowest_temperature_event,
     strip_untradeable_bucket_prices,
     winning_label_from_event,
 )
@@ -158,20 +161,44 @@ def list_resolution_dates(city: str, weather_url: str) -> list[date]:
 
 
 def event_id_for(city: str, settlement_date: date, weather_url: str) -> str | None:
-    """Most-sampled CLOB event for one (city, settlement date)."""
+    """Resolve the highest-temperature event id for one (city, settlement date).
+
+    Live Gamma discovery is the source of truth so the page self-heals once correct
+    CLOB snapshots exist. If discovery fails (offline / API error), fall back to the
+    most-sampled stored event id, skipping any lowest-temperature events that earlier
+    collector bugs may have persisted.
+    """
+    try:
+        events = fetch_weather_events(end_on_date=settlement_date)
+        found = first_parseable_weather_event(
+            events, city=city, settlement_date=settlement_date
+        )
+        if found is not None:
+            return found.event_id
+    except Exception:
+        pass
+
     with get_connection(resolve_database_url(override=weather_url)) as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
             SELECT polymarket_event_id, COUNT(*) AS n
             FROM clob_bucket_snapshots
             WHERE city_slug = %(city)s AND settlement_date = %(date)s
             GROUP BY polymarket_event_id
             ORDER BY n DESC
-            LIMIT 1
             """,
             {"city": city, "date": settlement_date.isoformat()},
-        ).fetchone()
-    return str(row["polymarket_event_id"]) if row else None
+        ).fetchall()
+
+    for row in rows:
+        event_id = str(row["polymarket_event_id"])
+        try:
+            if is_lowest_temperature_event(_cached_event(event_id)):
+                continue
+        except Exception:
+            pass
+        return event_id
+    return None
 
 
 def model_overlays(

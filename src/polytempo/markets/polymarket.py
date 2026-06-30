@@ -354,6 +354,15 @@ def fetch_weather_events(
     return [parse_event_payload(event_payload) for event_payload in payload]
 
 
+def is_lowest_temperature_event(event: PolymarketEvent) -> bool:
+    """True for Polymarket *lowest* daily-temperature markets.
+
+    These settle on the daily minimum temperature; this project resolves daily
+    highest (Tmax) markets only, so they must never be selected.
+    """
+    return "lowest" in f"{event.title} {event.slug}".lower()
+
+
 def first_parseable_weather_event(
     events: list[PolymarketEvent],
     *,
@@ -361,6 +370,10 @@ def first_parseable_weather_event(
     settlement_date: date | None = None,
 ) -> PolymarketEvent | None:
     """Return the first event whose bucket labels parse as Celsius temperature buckets.
+
+    This project resolves daily *highest* temperature markets only; lowest-temperature
+    events (e.g. "Lowest temperature in London on July 2?") are always ignored, even
+    when Gamma ranks them above the matching highest market by volume.
 
     If ``city`` is set, only events whose title or slug contains that substring
     (case-insensitive) are considered.
@@ -370,6 +383,8 @@ def first_parseable_weather_event(
     excluded).
     """
     from polytempo.markets.buckets import parse_temperature_bucket
+
+    events = [event for event in events if not is_lowest_temperature_event(event)]
 
     if city is not None:
         needle = city.strip().lower()
