@@ -387,7 +387,11 @@ def _run_live_one_day(
                         err=True,
                     )
             else:
-                events = fetch_weather_events(limit=limit, end_on_date=target_date)
+                events = fetch_weather_events(
+                    limit=limit,
+                    end_on_date=target_date,
+                    city=city,
+                )
                 event = first_parseable_weather_event(
                     events,
                     city=city,
@@ -1181,7 +1185,7 @@ def paper_list_london(
 ) -> None:
     """List active London weather events from Polymarket."""
     end_on = date.fromisoformat(target_date) if target_date else None
-    events = fetch_weather_events(limit=limit, end_on_date=end_on)
+    events = fetch_weather_events(limit=limit, end_on_date=end_on, city="london")
     matches = [e for e in events if "london" in e.title.lower()]
     if not matches:
         typer.echo("no active London events found")

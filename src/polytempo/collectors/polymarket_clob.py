@@ -114,7 +114,10 @@ def run_station_snapshots(
         all_rows: list[dict[str, object]] = []
 
         for target_date in target_dates:
-            events = fetch_weather_events(end_on_date=target_date)
+            events = fetch_weather_events(
+                end_on_date=target_date,
+                city=station.city_slug,
+            )
             found = first_parseable_weather_event(
                 events,
                 city=station.city_slug,

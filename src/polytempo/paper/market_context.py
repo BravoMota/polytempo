@@ -129,7 +129,11 @@ def fetch_market_context(
     if event_id:
         event = hydrate_prices(fetch_event(event_id.strip()))
     else:
-        events = fetch_weather_events(limit=events_limit, end_on_date=target_date)
+        events = fetch_weather_events(
+            limit=events_limit,
+            end_on_date=target_date,
+            city=city,
+        )
         found = first_parseable_weather_event(
             events,
             city=city,

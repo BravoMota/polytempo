@@ -320,11 +320,15 @@ def fetch_weather_events(
     base_url: str = "https://gamma-api.polymarket.com",
     *,
     end_on_date: date | None = None,
+    city: str | None = None,
 ) -> list[PolymarketEvent]:
     """Fetch active weather-tagged events, ordered as popular by volume.
 
     When ``end_on_date`` is set, asks Gamma for events whose ``endDate`` falls on
     that UTC calendar day (``end_date_min`` / ``end_date_max`` query params).
+
+    When ``city`` is set, passes ``title_search`` so Gamma narrows results to that
+    city instead of only the global top ``limit`` weather events by volume.
     """
     if limit <= 0:
         raise ValueError("limit must be positive")
@@ -341,6 +345,10 @@ def fetch_weather_events(
         day = end_on_date.isoformat()
         params["end_date_min"] = f"{day}T00:00:00Z"
         params["end_date_max"] = f"{day}T23:59:59Z"
+    if city is not None:
+        needle = city.strip().lower()
+        if needle:
+            params["title_search"] = needle
 
     url = f"{base_url.rstrip('/')}/events"
     response = httpx.get(

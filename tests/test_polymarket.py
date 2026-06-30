@@ -363,6 +363,35 @@ def test_fetch_weather_events_calls_expected_url_and_params(
     ]
 
 
+def test_fetch_weather_events_city_adds_title_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return [_payload()]
+
+    def fake_get(url: str, params: dict) -> FakeResponse:
+        calls.append(params)
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    fetch_weather_events(
+        limit=10,
+        base_url="https://example.test/",
+        end_on_date=date(2026, 7, 2),
+        city="London",
+    )
+
+    assert calls[0]["title_search"] == "london"
+    assert calls[0]["end_date_min"] == "2026-07-02T00:00:00Z"
+
+
 def test_fetch_weather_events_end_on_date_adds_end_date_range_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

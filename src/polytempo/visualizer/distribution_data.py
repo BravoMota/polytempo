@@ -170,7 +170,7 @@ def event_id_for(city: str, settlement_date: date, weather_url: str) -> str | No
     collector bugs may have persisted.
     """
     try:
-        events = fetch_weather_events(end_on_date=settlement_date)
+        events = fetch_weather_events(end_on_date=settlement_date, city=city)
         found = first_parseable_weather_event(
             events, city=city, settlement_date=settlement_date
         )
