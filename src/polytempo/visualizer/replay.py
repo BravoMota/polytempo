@@ -17,11 +17,13 @@ from polytempo.profiles.models import TradingProfile
 from polytempo.storage.snapshot_reads import (
     fetch_nearest_clob_snapshot,
     fetch_nearest_open_meteo_forecast,
+    fetch_nearest_wunderground_adjusted_tmax,
     hydrate_event_from_clob_snapshot,
     missing_open_meteo_forecast_reason,
     overlay_open_trade_prices,
 )
 from polytempo.weather.stations import get_station
+from polytempo.weather.wu_live_forecast import append_wunderground_snapshot_forecast
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -111,9 +113,23 @@ def replay_event_analysis(
     else:
         return None, "no CLOB snapshot at trade time and no OPEN prices to overlay"
 
+    forecast = om_bundle.forecast
+    wu_snapshot = fetch_nearest_wunderground_adjusted_tmax(
+        station,
+        settlement_date,
+        at_utc,
+        database_url=weather_database_url,
+    )
+    if wu_snapshot is not None:
+        forecast = append_wunderground_snapshot_forecast(
+            forecast,
+            predicted_tmax_c=wu_snapshot.predicted_tmax_c,
+            as_of_utc=at_utc,
+        )
+
     resolved_strategy = model_strategy or profile.model_strategy
     analysis = analyze_event(
-        om_bundle.forecast,
+        forecast,
         event,
         strategy=profile.strategy_instance(),
         lead_hours=lead_hours,

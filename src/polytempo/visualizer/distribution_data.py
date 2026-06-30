@@ -51,6 +51,7 @@ from polytempo.weather.calibration_stats_csv import (
 )
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import get_station
+from polytempo.weather.wu_live_forecast import append_wunderground_snapshot_forecast
 
 # Mirrors profiles.load._calibration_path_for_strategy (single source of truth for
 # which CSV each model strategy reads). Kept inline to avoid importing a private.
@@ -444,8 +445,15 @@ def build_distribution_view(
             warnings.append("No WU calibration row matched this lead.")
 
     if event is not None and forecast is not None:
+        forecast_for_strats = forecast
+        if wu_snapshot is not None:
+            forecast_for_strats = append_wunderground_snapshot_forecast(
+                forecast,
+                predicted_tmax_c=wu_snapshot.predicted_tmax_c,
+                as_of_utc=at_utc,
+            )
         overlays_strats, skipped = strat_overlays(
-            forecast,
+            forecast_for_strats,
             event,
             station_id=station.icao,
             lead_hours=lead_hours,

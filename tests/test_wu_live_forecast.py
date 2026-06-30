@@ -62,6 +62,31 @@ def test_append_wunderground_forecast_adds_model(monkeypatch: pytest.MonkeyPatch
     assert merged.model_run_init_utc == ["2026-06-09T10:00:00Z", ""]
 
 
+def test_append_wunderground_snapshot_forecast_adds_model() -> None:
+    from polytempo.weather.wu_live_forecast import append_wunderground_snapshot_forecast
+
+    base = ForecastValues(
+        source="open_meteo_snapshot",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 10),
+        values_c=[20.0],
+        models=["ecmwf_ifs025"],
+        init_lead_hours=[36.0],
+        model_run_init_utc=["2026-06-09T10:00:00Z"],
+    )
+    as_of = datetime(2026, 6, 9, 12, 0, tzinfo=timezone.utc)
+
+    merged = append_wunderground_snapshot_forecast(
+        base,
+        predicted_tmax_c=22.5,
+        as_of_utc=as_of,
+    )
+    assert merged.models == ["ecmwf_ifs025", WU_FORECAST_MODEL]
+    assert merged.values_c == [20.0, 22.5]
+    assert merged.model_run_init_utc == ["2026-06-09T10:00:00Z", ""]
+
+
 def test_append_wunderground_forecast_without_run_init_utc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

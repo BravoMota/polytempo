@@ -138,10 +138,22 @@ def fetch_nearest_open_meteo_forecast(
 
         models = [str(row["model"]) for row in snapshots]
         values = [float(row["predicted_tmax_c"]) for row in snapshots]
-        init_leads = [
-            float(row["init_lead_hours"]) if row["init_lead_hours"] is not None else 0.0
-            for row in snapshots
-        ]
+        init_leads: list[float] = []
+        run_inits: list[str] = []
+        for row in snapshots:
+            run_init_raw = row["run_init_utc"]
+            if run_init_raw is not None and str(run_init_raw).strip():
+                run_inits.append(str(run_init_raw))
+                init_leads.append(
+                    float(row["init_lead_hours"])
+                    if row["init_lead_hours"] is not None
+                    else 0.0
+                )
+            else:
+                # Match live ``daily_to_forecast_values``: empty run_init excludes
+                # the model from init-lead calibration lookup.
+                run_inits.append("")
+                init_leads.append(0.0)
         forecast = ForecastValues(
             source="open_meteo_snapshot",
             latitude=station.latitude,
@@ -150,6 +162,7 @@ def fetch_nearest_open_meteo_forecast(
             values_c=values,
             models=models,
             init_lead_hours=init_leads,
+            model_run_init_utc=run_inits,
         )
         return OpenMeteoSnapshotBundle(
             fetch_cycle_id=int(cycle["id"]),

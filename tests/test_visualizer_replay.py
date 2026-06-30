@@ -70,6 +70,7 @@ def test_profile_by_id_finds_known_wallet() -> None:
     assert profile.trade_strategy == "argmax_yes"
 
 
+@patch("polytempo.visualizer.replay.fetch_nearest_wunderground_adjusted_tmax")
 @patch("polytempo.visualizer.replay.analyze_event")
 @patch("polytempo.visualizer.replay.fetch_event")
 @patch("polytempo.visualizer.replay.fetch_nearest_clob_snapshot")
@@ -83,9 +84,11 @@ def test_replay_event_analysis_returns_result(
     mock_clob,
     mock_fetch_event,
     mock_analyze,
+    mock_wu,
 ) -> None:
     mock_profile.return_value = _profile()
     mock_dates.return_value = {"evt-1": date(2026, 6, 17)}
+    mock_wu.return_value = None
     mock_om.return_value = OpenMeteoSnapshotBundle(
         fetch_cycle_id=1,
         fetched_at_utc="2026-06-16T18:00:00Z",
@@ -127,6 +130,7 @@ def test_replay_event_analysis_returns_result(
     mock_analyze.assert_called_once()
 
 
+@patch("polytempo.visualizer.replay.fetch_nearest_wunderground_adjusted_tmax")
 @patch("polytempo.visualizer.replay.analyze_event")
 @patch("polytempo.visualizer.replay.fetch_event")
 @patch("polytempo.visualizer.replay.fetch_nearest_clob_snapshot")
@@ -140,9 +144,11 @@ def test_replay_falls_back_to_open_prices_when_no_clob(
     mock_clob,
     mock_fetch_event,
     mock_analyze,
+    mock_wu,
 ) -> None:
     mock_profile.return_value = _profile()
     mock_dates.return_value = {"evt-1": date(2026, 6, 17)}
+    mock_wu.return_value = None
     mock_om.return_value = OpenMeteoSnapshotBundle(
         fetch_cycle_id=1,
         fetched_at_utc="2026-06-16T18:00:00Z",
@@ -175,6 +181,7 @@ def test_replay_falls_back_to_open_prices_when_no_clob(
     assert event_passed.buckets[0].yes_ask == 0.18
 
 
+@patch("polytempo.visualizer.replay.fetch_nearest_wunderground_adjusted_tmax")
 @patch("polytempo.visualizer.replay.analyze_event")
 @patch("polytempo.visualizer.replay.fetch_event")
 @patch("polytempo.visualizer.replay.fetch_nearest_clob_snapshot")
@@ -188,9 +195,11 @@ def test_replay_strips_resolved_gamma_prices(
     mock_clob,
     mock_fetch_event,
     mock_analyze,
+    mock_wu,
 ) -> None:
     mock_profile.return_value = _profile()
     mock_dates.return_value = {"evt-1": date(2026, 6, 17)}
+    mock_wu.return_value = None
     mock_om.return_value = OpenMeteoSnapshotBundle(
         fetch_cycle_id=1,
         fetched_at_utc="2026-06-16T18:00:00Z",

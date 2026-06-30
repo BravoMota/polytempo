@@ -142,6 +142,72 @@ def test_fetch_nearest_open_meteo_forecast(weather_db_url: str) -> None:
     assert bundle is not None
     assert bundle.fetch_cycle_id == early_id
     assert bundle.forecast.values_c == [24.0]
+    assert bundle.forecast.model_run_init_utc == ["2026-06-16T12:00:00Z"]
+    assert bundle.forecast.init_lead_hours == [30.0]
+
+
+def test_fetch_nearest_open_meteo_forecast_marks_no_meta_models_ineligible(
+    weather_db_url: str,
+) -> None:
+    from polytempo.weather.calibration_stats_csv import verified_init_lead_hours_by_model
+
+    station = get_station("london")
+    target = date(2026, 6, 17)
+    at_utc = datetime(2026, 6, 16, 18, 5, tzinfo=timezone.utc)
+
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="EGLC",
+            name="London City Airport",
+            timezone="Europe/London",
+            lat=station.latitude,
+            lon=station.longitude,
+        )
+        cycle_id = insert_open_meteo_fetch_cycle(
+            conn,
+            station_id="EGLC",
+            fetched_at_utc="2026-06-16T18:00:00Z",
+            requested_lat=station.latitude,
+            requested_lon=station.longitude,
+            returned_lat=station.latitude,
+            returned_lon=station.longitude,
+            collector_name="open_meteo",
+            meta_staleness_detected=False,
+        )
+        insert_open_meteo_forecast_snapshot(
+            conn,
+            fetch_cycle_id=cycle_id,
+            station_id="EGLC",
+            model="gfs_seamless",
+            target_date_local=target.isoformat(),
+            predicted_tmax_c=36.0,
+            run_init_utc=None,
+            init_lead_hours=None,
+            wall_clock_lead_hours=30.0,
+            fetched_at_utc="2026-06-16T18:00:00Z",
+        )
+        insert_open_meteo_forecast_snapshot(
+            conn,
+            fetch_cycle_id=cycle_id,
+            station_id="EGLC",
+            model="ecmwf_ifs025",
+            target_date_local=target.isoformat(),
+            predicted_tmax_c=35.0,
+            run_init_utc="2026-06-16T12:00:00Z",
+            init_lead_hours=36.0,
+            wall_clock_lead_hours=30.0,
+            fetched_at_utc="2026-06-16T18:00:00Z",
+        )
+        conn.commit()
+
+    bundle = fetch_nearest_open_meteo_forecast(
+        station, target, at_utc, database_url=weather_db_url
+    )
+    assert bundle is not None
+    assert bundle.forecast.model_run_init_utc == ["", "2026-06-16T12:00:00Z"]
+    eligible = verified_init_lead_hours_by_model(bundle.forecast)
+    assert eligible == {"ecmwf_ifs025": 36.0}
 
 
 def test_fetch_nearest_open_meteo_uses_nearest_cycle_not_older_with_target(
