@@ -13,6 +13,15 @@ from polytempo.markets.polymarket import (
     is_untradeable_market_price,
 )
 from polytempo.storage.postgres import get_connection, resolve_database_url
+from polytempo.weather.calibration_storage import (
+    load_wu_history_observations_for_day,
+)
+from polytempo.weather.calibration_wu_forecasts import (
+    ForecastHourRow,
+    adjusted_predicted_tmax_c,
+    is_oclock_scrape,
+    normalize_scrape_time,
+)
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
 
@@ -61,6 +70,14 @@ def _pick_nearest_at_or_before(
         if best is None or age < best[0]:
             best = (age, row)
     return None if best is None else best[1]
+
+
+@dataclass(frozen=True)
+class WundergroundForecastSnapshot:
+    """Adjusted daily Tmax from nearest o'clock WU ``forecast_snapshots`` scrape."""
+
+    scraped_at_utc: str
+    predicted_tmax_c: float
 
 
 @dataclass(frozen=True)
@@ -138,6 +155,103 @@ def fetch_nearest_open_meteo_forecast(
             fetch_cycle_id=int(cycle["id"]),
             fetched_at_utc=str(cycle["fetched_at_utc"]),
             forecast=forecast,
+        )
+
+    if conn is not None:
+        return _query(conn)
+
+    url = resolve_database_url(override=database_url)
+    with get_connection(url) as connection:
+        return _query(connection)
+
+
+def fetch_nearest_wunderground_adjusted_tmax(
+    station: Station,
+    target_date: date,
+    at_utc: datetime,
+    *,
+    database_url: str | None = None,
+    conn: Connection | None = None,
+) -> WundergroundForecastSnapshot | None:
+    """Load WU hourly scrapes from ``forecast_snapshots`` and compute adjusted Tmax.
+
+    Uses the newest o'clock scrape at or before ``at_utc``, then applies the same
+    obs+forecast merge as the calibration pipeline with ``as_of_utc=at_utc``.
+    """
+    target_s = target_date.isoformat()
+
+    def _query(connection: Connection) -> WundergroundForecastSnapshot | None:
+        scrape_rows = connection.execute(
+            """
+            SELECT DISTINCT scraped_at_utc
+            FROM forecast_snapshots
+            WHERE station_id = %(station_id)s
+              AND source = 'wunderground'
+              AND target_date_local = %(target_date)s
+            ORDER BY scraped_at_utc ASC
+            """,
+            {"station_id": station.icao, "target_date": target_s},
+        ).fetchall()
+        oclock_scrapes = [
+            row
+            for row in scrape_rows
+            if is_oclock_scrape(_parse_ts(str(row["scraped_at_utc"])))
+        ]
+        picked = _pick_nearest_at_or_before(
+            oclock_scrapes,
+            ts_column="scraped_at_utc",
+            at_utc=at_utc,
+        )
+        if picked is None:
+            return None
+
+        scraped_at = normalize_scrape_time(_parse_ts(str(picked["scraped_at_utc"])))
+        scraped_text = scraped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        hourly_rows = connection.execute(
+            """
+            SELECT target_time_utc, temp_c
+            FROM forecast_snapshots
+            WHERE station_id = %(station_id)s
+              AND source = 'wunderground'
+              AND target_date_local = %(target_date)s
+              AND scraped_at_utc = %(scraped_at)s
+              AND target_time_utc IS NOT NULL
+              AND temp_c IS NOT NULL
+            ORDER BY target_time_utc ASC
+            """,
+            {
+                "station_id": station.icao,
+                "target_date": target_s,
+                "scraped_at": str(picked["scraped_at_utc"]),
+            },
+        ).fetchall()
+        if not hourly_rows:
+            return None
+
+        forecast_hours = [
+            ForecastHourRow(
+                target_time_utc=_parse_ts(str(row["target_time_utc"])),
+                temp_c=float(row["temp_c"]),
+            )
+            for row in hourly_rows
+        ]
+        history_obs = load_wu_history_observations_for_day(
+            connection,
+            station_id=station.icao,
+            target_date=target_date,
+        )
+        predicted = adjusted_predicted_tmax_c(
+            target_date=target_date,
+            as_of_utc=at_utc,
+            hourly_forecast_rows=forecast_hours,
+            history_observations=history_obs,
+        )
+        if predicted is None:
+            return None
+        return WundergroundForecastSnapshot(
+            scraped_at_utc=scraped_text,
+            predicted_tmax_c=predicted,
         )
 
     if conn is not None:

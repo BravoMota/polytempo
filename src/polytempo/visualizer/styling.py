@@ -25,6 +25,20 @@ def inject_no_inner_scroll_css() -> None:
     )
 
 
+def inject_distribution_explorer_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .dist-overlay-disabled {
+            opacity: 0.42;
+            filter: grayscale(0.85);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def table_height(n_rows: int) -> int:
     return HEADER_HEIGHT + max(n_rows, 1) * ROW_HEIGHT
 

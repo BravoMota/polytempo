@@ -9,13 +9,16 @@ import pytest
 from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.storage.postgres import (
     get_connection,
+    insert_forecast_snapshot,
     insert_open_meteo_fetch_cycle,
     insert_open_meteo_forecast_snapshot,
     insert_station,
+    upsert_wu_history_daily_observation,
 )
 from polytempo.storage.snapshot_reads import (
     fetch_nearest_clob_snapshot,
     fetch_nearest_open_meteo_forecast,
+    fetch_nearest_wunderground_adjusted_tmax,
     hydrate_event_from_clob_snapshot,
     missing_open_meteo_forecast_reason,
 )
@@ -323,6 +326,70 @@ def test_fetch_nearest_clob_snapshot_ignores_future_only_slots(weather_db_url: s
         "evt-future", at_utc, database_url=weather_db_url
     )
     assert bundle is None
+
+
+def test_fetch_nearest_wunderground_adjusted_tmax(weather_db_url: str) -> None:
+    station = get_station("london")
+    target = date(2026, 6, 17)
+    at_utc = datetime(2026, 6, 16, 18, 30, tzinfo=timezone.utc)
+    scrape = "2026-06-16T18:00:00Z"
+
+    with get_connection(weather_db_url) as conn:
+        insert_station(
+            conn,
+            station_id="EGLC",
+            name="London City Airport",
+            timezone="Europe/London",
+            lat=station.latitude,
+            lon=station.longitude,
+        )
+        upsert_wu_history_daily_observation(
+            conn,
+            station_id="EGLC",
+            target_date=target.isoformat(),
+            observed_at_utc="2026-06-16T14:00:00Z",
+            observed_at_local="2026-06-16T15:00:00+0100",
+            temp_c=22.0,
+            fetched_at_utc="2026-06-16T14:05:00Z",
+        )
+        insert_forecast_snapshot(
+            conn,
+            station_id="EGLC",
+            source="wunderground",
+            scraped_at_utc=scrape,
+            target_date_local=target.isoformat(),
+            station_timezone="Europe/London",
+            target_time_utc="2026-06-16T19:00:00Z",
+            temp_c=24.0,
+        )
+        insert_forecast_snapshot(
+            conn,
+            station_id="EGLC",
+            source="wunderground",
+            scraped_at_utc=scrape,
+            target_date_local=target.isoformat(),
+            station_timezone="Europe/London",
+            target_time_utc="2026-06-16T20:00:00Z",
+            temp_c=25.5,
+        )
+        insert_forecast_snapshot(
+            conn,
+            station_id="EGLC",
+            source="wunderground",
+            scraped_at_utc="2026-06-16T20:00:00Z",
+            target_date_local=target.isoformat(),
+            station_timezone="Europe/London",
+            target_time_utc="2026-06-16T21:00:00Z",
+            temp_c=99.0,
+        )
+        conn.commit()
+
+    snapshot = fetch_nearest_wunderground_adjusted_tmax(
+        station, target, at_utc, database_url=weather_db_url
+    )
+    assert snapshot is not None
+    assert snapshot.scraped_at_utc == scrape
+    assert snapshot.predicted_tmax_c == pytest.approx(25.5)
 
 
 def test_fetch_nearest_clob_snapshot_rejects_stale_slot(weather_db_url: str) -> None:

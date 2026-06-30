@@ -62,6 +62,42 @@ def test_append_wunderground_forecast_adds_model(monkeypatch: pytest.MonkeyPatch
     assert merged.model_run_init_utc == ["2026-06-09T10:00:00Z", ""]
 
 
+def test_append_wunderground_forecast_without_run_init_utc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DB snapshots omit model_run_init_utc; append must not synthesize a short list."""
+    base = ForecastValues(
+        source="open_meteo_snapshot",
+        latitude=51.5,
+        longitude=0.05,
+        target_date=date(2026, 6, 10),
+        values_c=[20.0, 21.0, 22.0, 23.0, 24.0],
+        models=[
+            "ecmwf_ifs025",
+            "gfs_seamless",
+            "icon_eu",
+            "ukmo_global_deterministic_10km",
+            "ukmo_uk_deterministic_2km",
+        ],
+        init_lead_hours=[36.0, 36.0, 36.0, 36.0, 36.0],
+        model_run_init_utc=None,
+    )
+    station = get_station("london")
+    as_of = datetime(2026, 6, 9, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(
+        "polytempo.weather.wu_live_forecast.fetch_wu_adjusted_tmax_c",
+        lambda *args, **kwargs: 22.5,
+    )
+
+    merged = append_wunderground_forecast(base, station, as_of_utc=as_of)
+    assert merged.models is not None
+    assert len(merged.models) == 6
+    assert merged.model_run_init_utc is None
+    assert merged.init_lead_hours is not None
+    assert len(merged.init_lead_hours) == 6
+
+
 def test_select_best_model_picks_wunderground_with_scraped_at_lead() -> None:
     rows = [
         CalibrationStatRow(

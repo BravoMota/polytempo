@@ -132,6 +132,12 @@ def fetch_wu_adjusted_tmax_c(
             http.close()
 
 
+def _pad_to_model_count(items: list, n_models: int, fill) -> list:
+    if len(items) >= n_models:
+        return items[:n_models]
+    return [*items, *[fill] * (n_models - len(items))]
+
+
 def append_wunderground_forecast(
     forecast: ForecastValues,
     station: Station,
@@ -171,6 +177,19 @@ def append_wunderground_forecast(
         return forecast
 
     wall_lead = lead_hours_to_end_of_target_day(forecast.target_date, now=as_of_utc)
+    n_models = len(forecast.models)
+    init_leads = _pad_to_model_count(
+        list(forecast.init_lead_hours or []), n_models, 0.0
+    )
+    init_leads.append(wall_lead)
+
+    run_inits: list[str] | None
+    if forecast.model_run_init_utc is None:
+        run_inits = None
+    else:
+        run_inits = _pad_to_model_count(list(forecast.model_run_init_utc), n_models, "")
+        run_inits.append("")
+
     return ForecastValues(
         source=forecast.source,
         latitude=forecast.latitude,
@@ -178,6 +197,6 @@ def append_wunderground_forecast(
         target_date=forecast.target_date,
         values_c=[*forecast.values_c, predicted],
         models=[*forecast.models, WU_FORECAST_MODEL],
-        init_lead_hours=[*(forecast.init_lead_hours or []), wall_lead],
-        model_run_init_utc=[*(forecast.model_run_init_utc or []), ""],
+        init_lead_hours=init_leads,
+        model_run_init_utc=run_inits,
     )

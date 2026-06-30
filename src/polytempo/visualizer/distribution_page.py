@@ -6,19 +6,26 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-from polytempo.analysis import MODEL_STRATEGIES
 from polytempo.model.lead_time import (
     end_of_target_day_utc,
     lead_hours_to_end_of_target_day,
 )
 from polytempo.storage.postgres import resolve_database_url
 from polytempo.visualizer.distribution_chart import build_distribution_chart
+from polytempo.visualizer.distribution_panel import (
+    read_overlay_state,
+    render_overlay_controls,
+    render_overlay_info,
+)
 from polytempo.visualizer.loaders import (
     load_cities,
     load_distribution_view,
     load_resolution_dates,
 )
-from polytempo.visualizer.styling import inject_no_inner_scroll_css
+from polytempo.visualizer.styling import (
+    inject_distribution_explorer_css,
+    inject_no_inner_scroll_css,
+)
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
@@ -48,6 +55,7 @@ def _weather_url() -> str | None:
 
 def render_distribution_page() -> None:
     inject_no_inner_scroll_css()
+    inject_distribution_explorer_css()
     st.title("Distribution explorer")
 
     weather_url = _weather_url()
@@ -77,62 +85,60 @@ def render_distribution_page() -> None:
     )
     calibration_source = _CALIBRATION_SOURCES[source_label]
 
-    st.sidebar.header("Overlays")
-    show_models = st.sidebar.toggle("Metadata models (PDF + mean)", value=True)
-    show_strats = st.sidebar.toggle("Distribution strategies (PDF + mean + bars)", value=True)
-    strat_filter = (
-        st.sidebar.multiselect("strategies", list(MODEL_STRATEGIES), default=list(MODEL_STRATEGIES))
-        if show_strats
-        else []
-    )
-    show_market = st.sidebar.toggle("Market (yes_ask bars + mean)", value=True)
-    show_resolved = st.sidebar.toggle("Resolved bucket", value=True)
+    render_overlay_controls()
+    overlay_state = read_overlay_state()
 
-    # Time slider anchored to resolution: right edge = lead 0 (clamped to now),
-    # left edge = lead 72h. at_utc decreases lead as it moves right. Bounds are
-    # floored to the slider grid so an unresolved day's right edge (= now) does
-    # not drift every rerun — otherwise Streamlit treats the slider as a new
-    # widget and snaps it back to the right (the "slider won't move" bug).
+    # Time slider: right edge = 24:00 UTC on settlement date (lead 0). Left = 72h before.
+    # Bounds are floored to the slider grid so widget keys stay stable across reruns.
     end_of_day = end_of_target_day_utc(settlement_date)
     now = datetime.now(timezone.utc)
-    t_right = _floor_to_step(min(now, end_of_day))
-    t_left = end_of_day - timedelta(hours=72)
-    if t_left >= t_right:  # resolution >72h away: fall back to a now-anchored window
+    t_right = _floor_to_step(end_of_day)
+    t_left = _floor_to_step(end_of_day - timedelta(hours=72))
+    if t_left >= t_right:
         t_left = t_right - timedelta(hours=72)
 
+    default_at = _floor_to_step(min(now, t_right))
+    if default_at < t_left:
+        default_at = t_left
+
+    slider_key = f"dist_slider_{city}_{settlement_date.isoformat()}"
+    if slider_key not in st.session_state:
+        st.session_state[slider_key] = default_at
+
     at_utc = st.slider(
-        "snapshot time (UTC) — right = resolution / lead 0",
+        "snapshot time (UTC)",
         min_value=t_left,
         max_value=t_right,
-        value=t_right,
         step=_SLIDER_STEP,
         format="MMM DD, HH:mm",
-        key=f"dist_slider_{city}_{settlement_date.isoformat()}",
+        key=slider_key,
+        help="Right edge = resolution at 24:00 UTC on the settlement date (lead 0).",
     )
     lead = lead_hours_to_end_of_target_day(settlement_date, now=at_utc)
+
+    lead_col, time_col = st.columns([1, 3])
+    lead_col.metric("Lead to resolution", f"{lead:.1f} h")
+    time_col.caption(
+        f"Scrubbing **{at_utc.strftime('%Y-%m-%d %H:%M')} UTC** · "
+        f"window **{t_left.strftime('%b %d %H:%M')}** → "
+        f"**{t_right.strftime('%b %d %H:%M')}** (lead 0 at right edge)"
+    )
 
     view = load_distribution_view(
         city, settlement_date, at_utc.isoformat(), weather_url, str(calibration_source)
     )
 
-    prov = [f"lead **{lead:.1f} h**"]
-    if view.om_fetched_at_utc:
-        prov.append(f"OM cycle `{view.om_fetched_at_utc}`")
-    if view.clob_poll_slot_utc:
-        prov.append(f"CLOB slot `{view.clob_poll_slot_utc}`")
-    if view.resolved_label:
-        prov.append(f"resolved → **{view.resolved_label}**")
-    st.caption(" · ".join(prov))
-
     fig = build_distribution_chart(
         view,
-        show_models=show_models,
-        show_strats=show_strats,
-        strat_filter=set(strat_filter),
-        show_market=show_market,
-        show_resolved=show_resolved,
+        show_models=overlay_state.show_forecasts,
+        show_strats=bool(overlay_state.enabled_strats),
+        strat_filter=set(overlay_state.enabled_strats),
+        show_market=overlay_state.show_market,
+        show_resolved=overlay_state.show_resolved,
     )
     st.plotly_chart(fig, width="stretch")
+
+    render_overlay_info(view, overlay_state)
 
     for warning in view.warnings:
         st.caption(f"⚠️ {warning}")

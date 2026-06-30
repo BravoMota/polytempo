@@ -22,16 +22,17 @@ from polytempo.model.distribution import normal_pdf
 from polytempo.visualizer.bucket_math import bucket_center_c
 from polytempo.visualizer.distribution_data import DistributionView
 
-_STRAT_COLORS = {
+STRAT_COLORS = {
     "ensemble_spread": "#ff7f0e",
     "best_historical": "#2ca02c",
     "best_historical_updated": "#17becf",
     "weighted_historical_updated": "#e377c2",
 }
+FORECAST_COLORS = {"wunderground": "#9467bd"}
 _MARKET_COLOR = "#4da6ff"
 _RESOLVED_COLOR = "#66ff99"
 _EDGE_COLOR = "#555555"
-_MODEL_PALETTE = [
+MODEL_PALETTE = [
     "#ffd24d", "#c2c2c2", "#9edae5", "#f7b6d2", "#dbdb8d",
     "#c5b0d5", "#ff9896", "#98df8a", "#aec7e8", "#ffbb78",
 ]
@@ -67,6 +68,12 @@ def _empty_figure(message: str) -> go.Figure:
     )
     fig.update_layout(height=320, xaxis=dict(visible=False), yaxis=dict(visible=False))
     return fig
+
+
+def _strat_label(o) -> str:
+    if o.selected_model:
+        return f"{o.strategy} · {o.selected_model} (μ{o.mean_c:.1f} σ{o.sigma_c:.1f})"
+    return f"{o.strategy} (μ{o.mean_c:.1f} σ{o.sigma_c:.1f})"
 
 
 def build_distribution_chart(
@@ -114,7 +121,7 @@ def build_distribution_chart(
 
     panels = [name for name, want in (("pdf", want_pdf), ("bar", want_bar)) if want]
     if not panels:
-        return _empty_figure("No overlays selected — toggle one in the sidebar.")
+        return _empty_figure("No overlays selected — enable one in the sidebar.")
 
     row_of = {name: i + 1 for i, name in enumerate(panels)}
     titles = {
@@ -136,24 +143,24 @@ def build_distribution_chart(
         r = row_of["pdf"]
         if model_active:
             for idx, o in enumerate(view.model_overlays):
-                color = _MODEL_PALETTE[idx % len(_MODEL_PALETTE)]
+                color = FORECAST_COLORS.get(o.model, MODEL_PALETTE[idx % len(MODEL_PALETTE)])
                 fig.add_trace(
                     go.Scatter(
                         x=xs, y=[normal_pdf(x, o.mean_c, o.sigma_c) for x in xs],
                         mode="lines", name=f"{o.model} (μ{o.mean_c:.1f} σ{o.sigma_c:.1f})",
                         line=dict(color=color, width=1.3), opacity=0.8,
-                        legendgroup="models", legendgrouptitle_text="Metadata models",
+                        legendgroup="models", legendgrouptitle_text="Forecasts",
                         hovertemplate=f"{o.model}<br>%{{x:.2f}}°C · %{{y:.3f}}<extra></extra>",
                     ),
                     row=r, col=1,
                 )
                 fig.add_vline(x=o.mean_c, line_width=1, line_color=color, opacity=0.35, row=r, col=1)
         for o in active_strats:
-            color = _STRAT_COLORS.get(o.strategy, "#888888")
+            color = STRAT_COLORS.get(o.strategy, "#888888")
             fig.add_trace(
                 go.Scatter(
                     x=xs, y=[normal_pdf(x, o.mean_c, o.sigma_c) for x in xs],
-                    mode="lines", name=f"{o.strategy} (μ{o.mean_c:.1f} σ{o.sigma_c:.1f})",
+                    mode="lines", name=_strat_label(o),
                     line=dict(color=color, width=2.6),
                     legendgroup="strats", legendgrouptitle_text="Strategies",
                     hovertemplate=f"{o.strategy}<br>%{{x:.2f}}°C · %{{y:.3f}}<extra></extra>",
@@ -173,7 +180,9 @@ def build_distribution_chart(
         for o in active_strats:
             by_label = dict(o.bucket_probs)
             aligned = [by_label.get(lbl, 0.0) for lbl in view.bucket_labels]
-            bar_series.append((o.strategy, aligned, _STRAT_COLORS.get(o.strategy, "#888888"), "strats"))
+            bar_series.append(
+                (_strat_label(o), aligned, STRAT_COLORS.get(o.strategy, "#888888"), "strats")
+            )
 
         if bar_series and centers:
             spacing = _center_spacing(centers)

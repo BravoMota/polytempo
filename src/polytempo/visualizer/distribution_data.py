@@ -14,7 +14,12 @@ from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
 
-from polytempo.analysis import MODEL_STRATEGIES, analyze_event
+from polytempo.analysis import (
+    MODEL_STRATEGIES,
+    MODEL_STRATEGY_BEST_HISTORICAL,
+    MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    analyze_event,
+)
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
@@ -26,8 +31,10 @@ from polytempo.storage.postgres import get_connection, resolve_database_url
 from polytempo.storage.snapshot_reads import (
     fetch_nearest_clob_snapshot,
     fetch_nearest_open_meteo_forecast,
+    fetch_nearest_wunderground_adjusted_tmax,
     hydrate_event_from_clob_snapshot,
 )
+from polytempo.weather.calibration_storage import WU_FORECAST_MODEL
 from polytempo.visualizer.bucket_math import compute_market_implied_summary
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
@@ -46,6 +53,9 @@ from polytempo.weather.stations import get_station
 # which CSV each model strategy reads). Kept inline to avoid importing a private.
 _UPDATED_CSV_STRATEGIES = frozenset(
     {"best_historical_updated", "weighted_historical_updated"}
+)
+_BEST_HISTORICAL_STRATEGIES = frozenset(
+    {MODEL_STRATEGY_BEST_HISTORICAL, MODEL_STRATEGY_BEST_HISTORICAL_UPDATED}
 )
 
 
@@ -75,6 +85,7 @@ class ModelDistOverlay:
     predicted_c: float
     bias_c: float
     lookup_lead_hours: float
+    detail: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +96,7 @@ class StratDistOverlay:
     mean_c: float
     sigma_c: float
     bucket_probs: list[tuple[str, float]]
+    selected_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +124,7 @@ class DistributionView:
     warnings: list[str]
     om_fetched_at_utc: str | None
     clob_poll_slot_utc: str | None
+    wu_scraped_at_utc: str | None
 
 
 @lru_cache(maxsize=256)
@@ -218,6 +231,54 @@ def model_overlays(
     return sorted(overlays, key=lambda o: o.model)
 
 
+def wunderground_model_overlay(
+    *,
+    predicted_c: float,
+    station_id: str,
+    lead_hours: float,
+    calibration_rows: list[CalibrationStatRow],
+    scraped_at_utc: str,
+) -> ModelDistOverlay | None:
+    """Calibrated WU forecast from ``forecast_snapshots`` (scraped_at lead lookup)."""
+    anchor = resolve_lead_hours_anchor(
+        calibration_rows, station_id=station_id, model=WU_FORECAST_MODEL
+    )
+    lookup_lead = lookup_lead_hours_for_calibration(
+        model=WU_FORECAST_MODEL,
+        lead_hours_anchor=anchor,
+        wall_lead_hours=lead_hours,
+        init_lead_hours_by_model=None,
+    )
+    if lookup_lead is None:
+        return None
+    row = select_ceiling_row(
+        calibration_rows,
+        station_id,
+        WU_FORECAST_MODEL,
+        lookup_lead,
+        lead_hours_anchor=anchor,
+    )
+    if row is None:
+        return None
+    sigma_info = _sigma_from_row(row)
+    if sigma_info is None:
+        return None
+    sigma, source = sigma_info
+    return ModelDistOverlay(
+        model=WU_FORECAST_MODEL,
+        mean_c=predicted_c - row.bias_c,
+        sigma_c=sigma,
+        sigma_source=source,
+        predicted_c=predicted_c,
+        bias_c=row.bias_c,
+        lookup_lead_hours=lookup_lead,
+        detail=(
+            f"forecast_snapshots · scrape `{scraped_at_utc}` · "
+            f"scraped_at anchor `{anchor}`"
+        ),
+    )
+
+
 def strat_overlays(
     forecast: ForecastValues,
     event: PolymarketEvent,
@@ -253,6 +314,11 @@ def strat_overlays(
                 mean_c=mean,
                 sigma_c=sigma,
                 bucket_probs=[(r.label, r.probability) for r in result.rows],
+                selected_model=(
+                    result.selected_model
+                    if model_strategy in _BEST_HISTORICAL_STRATEGIES
+                    else None
+                ),
             )
         )
     return overlays, skipped
@@ -293,6 +359,12 @@ def build_distribution_view(
     if forecast is None:
         warnings.append("No Open-Meteo forecast snapshot near this time.")
 
+    wu_snapshot = fetch_nearest_wunderground_adjusted_tmax(
+        station, settlement_date, at_utc, database_url=weather_url
+    )
+    if wu_snapshot is None:
+        warnings.append("No Wunderground forecast snapshot near this time.")
+
     event_id = event_id_for(city, settlement_date, weather_url)
     event = None
     clob_poll_slot: str | None = None
@@ -320,19 +392,38 @@ def build_distribution_view(
 
     if forecast is not None:
         calibration_rows = read_calibration_stats_csv(calibration_source)
-        overlays_models = model_overlays(
+        om_overlays = model_overlays(
             forecast,
             station_id=station.icao,
             lead_hours=lead_hours,
             calibration_rows=calibration_rows,
         )
-        if not overlays_models:
-            warnings.append("No calibration rows matched the live models at this lead.")
-        if event is not None:
-            overlays_strats, skipped = strat_overlays(
-                forecast, event, station_id=station.icao, lead_hours=lead_hours
-            )
-            warnings.extend(f"strat skipped — {s}" for s in skipped)
+        overlays_models = list(om_overlays)
+        if not om_overlays:
+            warnings.append("No Open-Meteo calibration rows matched this lead.")
+
+    if wu_snapshot is not None:
+        wu_cal_rows = read_calibration_stats_csv(DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH)
+        wu_overlay = wunderground_model_overlay(
+            predicted_c=wu_snapshot.predicted_tmax_c,
+            station_id=station.icao,
+            lead_hours=lead_hours,
+            calibration_rows=wu_cal_rows,
+            scraped_at_utc=wu_snapshot.scraped_at_utc,
+        )
+        if wu_overlay is not None:
+            overlays_models = sorted([*overlays_models, wu_overlay], key=lambda o: o.model)
+        else:
+            warnings.append("No WU calibration row matched this lead.")
+
+    if event is not None and forecast is not None:
+        overlays_strats, skipped = strat_overlays(
+            forecast,
+            event,
+            station_id=station.icao,
+            lead_hours=lead_hours,
+        )
+        warnings.extend(f"strat skipped — {s}" for s in skipped)
 
     return DistributionView(
         city=city,
@@ -347,4 +438,5 @@ def build_distribution_view(
         warnings=warnings,
         om_fetched_at_utc=forecast_bundle.fetched_at_utc if forecast_bundle else None,
         clob_poll_slot_utc=clob_poll_slot,
+        wu_scraped_at_utc=wu_snapshot.scraped_at_utc if wu_snapshot else None,
     )
