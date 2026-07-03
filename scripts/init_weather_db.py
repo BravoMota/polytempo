@@ -41,14 +41,12 @@ def main() -> int:
     config = load_weather_collectors_config(args.config)
 
     initialize_database(database_url)
-    (config.raw_base_dir / "wunderground").mkdir(parents=True, exist_ok=True)
 
     with get_connection(database_url) as conn:
         sync_stations_from_config(conn, config)
         conn.commit()
 
     print(f"initialized database={database_url.split('@')[-1]}")
-    print(f"raw_dir={config.raw_base_dir / 'wunderground'}")
     return 0
 
 

@@ -228,23 +228,10 @@ def test_lead_hours_to_day_end() -> None:
     assert lead == pytest.approx(36.0)
 
 
-def test_save_raw_response_writes_html_and_meta(tmp_path: Path) -> None:
+def test_compute_content_hash() -> None:
     body = b"<html>test</html>"
-    scraped = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
-    path, content_hash = wu.save_raw_response(
-        tmp_path,
-        "EGLC",
-        "observation",
-        scraped,
-        body,
-        "https://example.test",
-    )
-    assert path.exists()
-    meta_path = path.with_suffix(".meta.json")
-    assert meta_path.name.endswith(".meta.json")
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["content_hash"] == content_hash
-    assert meta["page_kind"] == "observation"
+    assert wu.compute_content_hash(body) == wu.compute_content_hash(body)
+    assert wu.compute_content_hash(body) != wu.compute_content_hash(b"other")
 
 
 def test_parse_observation_page_icao() -> None:
@@ -309,7 +296,7 @@ def test_parse_observation_page_missing_state_raises() -> None:
         )
 
 
-def test_run_station_cycle_saves_files_and_inserts_rows(
+def test_run_station_cycle_inserts_rows(
     weather_db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     raw_base = tmp_path / "raw"
@@ -342,10 +329,7 @@ def test_run_station_cycle_saves_files_and_inserts_rows(
             now_utc=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
         )
 
-    html_files = list((raw_base / "wunderground").glob("*.html"))
-    meta_files = list((raw_base / "wunderground").glob("*.meta.json"))
-    assert len(html_files) == 3
-    assert len(meta_files) == 3
+    assert not (raw_base / "wunderground").exists()
 
     with get_connection(weather_db_url) as conn:
         state = conn.execute(
@@ -416,7 +400,7 @@ def test_run_station_observations_only(
     assert fc_count["n"] == 0
 
 
-def test_run_station_cycle_one_failure_still_saves_others(
+def test_run_station_cycle_one_failure_still_inserts_others(
     weather_db_url: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -453,8 +437,7 @@ def test_run_station_cycle_one_failure_still_saves_others(
             now_utc=datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
         )
 
-    html_files = list((raw_base / "wunderground").glob("*.html"))
-    assert len(html_files) == 2
+    assert not (raw_base / "wunderground").exists()
 
     with get_connection(weather_db_url) as conn:
         row = conn.execute(

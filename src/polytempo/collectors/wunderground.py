@@ -1,7 +1,6 @@
 """Wunderground HTML page collector (observation + hourly forecast).
 
-Scrapes wunderground.com pages, saves raw HTML under
-``data/weather/raw/wunderground/``, and parses the embedded Angular
+Scrapes wunderground.com pages and parses the embedded Angular
 ``app-root-state`` JSON cache into observation and forecast snapshot rows.
 Imperial (°F) comes from the HTML embed; metric (°C) from a separate
 Weather.com API call (``units=m``).
@@ -102,53 +101,6 @@ def fetch_raw_page(url: str, *, client: httpx.Client | None = None) -> bytes:
         )
     response.raise_for_status()
     return response.content
-
-
-def _scraped_at_compact(scraped_at_utc: datetime) -> str:
-    return scraped_at_utc.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-
-def save_raw_response(
-    raw_dir: Path,
-    station_id: str,
-    page_kind: str,
-    scraped_at: datetime,
-    body: bytes,
-    url: str,
-    *,
-    target_date_local: date | None = None,
-) -> tuple[Path, str]:
-    """Write raw HTML and a JSON meta sidecar; return (html_path, content_hash)."""
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    content_hash = compute_content_hash(body)
-    ts = _scraped_at_compact(scraped_at)
-    date_part = f"_{target_date_local.isoformat()}" if target_date_local else ""
-    stem = f"{station_id}_{page_kind}{date_part}_{ts}_{content_hash[:12]}"
-    html_path = raw_dir / f"{stem}.html"
-    html_path.write_bytes(body)
-
-    scraped_iso = scraped_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    meta: dict[str, Any] = {
-        "station_id": station_id,
-        "page_kind": page_kind,
-        "scraped_at_utc": scraped_iso,
-        "url": url,
-        "content_hash": content_hash,
-        "raw_file_path": str(html_path),
-    }
-    if target_date_local is not None:
-        meta["target_date_local"] = target_date_local.isoformat()
-
-    meta_path = raw_dir / f"{stem}.meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    logger.info(
-        "saved raw %s station=%s hash=%s path=%s",
-        page_kind,
-        station_id,
-        content_hash[:12],
-        html_path.name,
-    )
-    return html_path, content_hash
 
 
 @dataclass(frozen=True)
@@ -338,28 +290,11 @@ def parse_hourly_forecast_page(
     return hours
 
 
-def _fetch_and_save(
-    *,
-    raw_dir: Path,
-    station: StationConfig,
-    page_kind: str,
-    url: str,
-    scraped_at: datetime,
-    client: httpx.Client,
-    target_date_local: date | None = None,
-) -> tuple[bytes, Path, str]:
+def _fetch_page(url: str, *, client: httpx.Client) -> tuple[bytes, str]:
     body = fetch_raw_page(url, client=client)
-    path, content_hash = save_raw_response(
-        raw_dir,
-        station.station_id,
-        page_kind,
-        scraped_at,
-        body,
-        url,
-        target_date_local=target_date_local,
-    )
-    logger.debug("fetched %s -> %s (%s)", url, path.name, content_hash[:12])
-    return body, path, content_hash
+    content_hash = compute_content_hash(body)
+    logger.debug("fetched %s (%s)", url, content_hash[:12])
+    return body, content_hash
 
 
 def run_station_observations(
@@ -376,7 +311,6 @@ def run_station_observations(
     scraped_at = now.astimezone(timezone.utc)
     scraped_iso = scraped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     source = collector.source
-    raw_dir = raw_base_dir / source
 
     mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
 
@@ -391,14 +325,7 @@ def run_station_observations(
             client=client,
         )
         obs_url = build_observation_url(station)
-        body, path, content_hash = _fetch_and_save(
-            raw_dir=raw_dir,
-            station=station,
-            page_kind="observation",
-            url=obs_url,
-            scraped_at=scraped_at,
-            client=client,
-        )
+        body, content_hash = _fetch_page(obs_url, client=client)
         obs = parse_observation_page(body, station, scraped_at, metric_body=metric_body)
         insert_observation_snapshot(
             conn,
@@ -412,7 +339,6 @@ def run_station_observations(
             temp_f=obs.temp_f,
             temp_c=obs.temp_c,
             raw_temp_text=obs.raw_temp_text,
-            raw_file_path=str(path),
             content_hash=content_hash,
         )
     except Exception as exc:
@@ -451,7 +377,6 @@ def run_station_forecasts(
     scraped_at = now.astimezone(timezone.utc)
     scraped_iso = scraped_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     source = collector.source
-    raw_dir = raw_base_dir / source
 
     mark_collector_started(conn, COLLECTOR_NAME, station.station_id, source, now_utc=utc_now_iso())
 
@@ -475,15 +400,7 @@ def run_station_forecasts(
     for target_day in (today_local, tomorrow_local):
         try:
             fc_url = build_hourly_forecast_url(station, target_day)
-            body, path, content_hash = _fetch_and_save(
-                raw_dir=raw_dir,
-                station=station,
-                page_kind="hourly_forecast",
-                url=fc_url,
-                scraped_at=scraped_at,
-                client=client,
-                target_date_local=target_day,
-            )
+            body, content_hash = _fetch_page(fc_url, client=client)
             for hour in parse_hourly_forecast_page(
                 body, station, target_day, scraped_at, metric_body=metric_body
             ):
@@ -504,7 +421,6 @@ def run_station_forecasts(
                     raw_temp_text=hour.raw_temp_text,
                     requested_lat=station.lat,
                     requested_lon=station.lon,
-                    raw_file_path=str(path),
                     content_hash=content_hash,
                 )
         except Exception as exc:
