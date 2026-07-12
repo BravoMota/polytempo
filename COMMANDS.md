@@ -277,6 +277,71 @@ On mac0 the viewer runs as LaunchDaemon on **127.0.0.1:8501** (SSH tunnel: `ssh 
 
 Active-sell A/B vs hold twins: `deploy/bin/run-with-env.sh scripts/report_xsell.py`.
 
+## backtest (hold-to-settlement simulation)
+
+Replays historical London weather events between `--start` and `--end` and simulates paper trading for each profile at its lead gate — **without writing to `polytempo` or `polytempo_paper`**. It reuses the live decision path end-to-end (`run_profile` for entry gate + one-open-per-event/profile dedupe + `best_historical*` model-strategy fallback skip, `analyze_event` for the model × trade strategy) and the ledger bankroll math (`stake_fraction` 2–5% edge ramp, flat `stake_usd` ticket, `stake_fraction` Kelly override). Only persistence is swapped: an in-memory ledger replaces `PostgresLedgerStore`.
+
+### What happens per event × profile
+
+1. **Discover events** from stored CLOB snapshots (`clob_bucket_snapshots` — `city_slug` + `settlement_date`), so resolved/closed historical events are included. Each event id is then fetched from Gamma for its bucket structure + winning outcome. (Only dates with CLOB snapshots produce trades — London coverage currently starts **2026-06-20**.)
+2. **Gate instant** = UTC time when `lead_hours == profile.entry_gate.target_lead_hours` (`gate_target_utc`).
+3. **Point-in-time inputs** at that instant (weather DB snapshot reads):
+   - Open-Meteo forecast — `fetch_nearest_open_meteo_forecast`
+   - CLOB prices — `fetch_nearest_clob_snapshot`
+   - Wunderground adjusted Tmax if available — `fetch_nearest_wunderground_adjusted_tmax`
+   - **Calibration CSV as-of that date** — the archived `data/weather/statistical/historic/calibration_stats_updated_<UTC>.csv` that was live at the gate instant (not today's file); falls back to the current file when the instant is newer than every archive.
+4. **OPEN** via `run_profile` on the pre-settlement (unresolved) event view hydrated with the gate-instant CLOB snapshot — same guards as paper.
+5. **SETTLE** hold-to-resolution against the resolved Gamma winning bucket. Bankroll compounds chronologically across events; each profile keeps an independent $1000 start.
+
+Scope v1: **hold-to-settlement only** (no active ADD/FLATTEN). Active (`active_wallets`) profiles are skipped.
+
+### Flags
+
+| Flag                | Meaning                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `--start`           | First settlement date `YYYY-MM-DD` (required)                                      |
+| `--end`             | Last settlement date `YYYY-MM-DD`, inclusive (required)                            |
+| `--config`          | Path to `paper_profiles.yaml` (default `config/paper_profiles.yaml`)               |
+| `--profiles`        | Restrict to these profile ids (space-separated)                                    |
+| `--trade-strategy`  | Restrict to profiles with this trade strategy (e.g. `dist_arb`)                    |
+| `--model-strategy`  | Restrict to profiles with this distribution model (`best_historical`, `best_historical_updated`, `weighted_historical_updated`, `ensemble_spread`). Composes with `--trade-strategy` (AND). |
+| `--city`            | Contract station registry key (default `london`)                                   |
+| `--database-url`    | Weather DB URL override (read-only; defaults to `POLYTEMPO_DATABASE_URL`)          |
+| `--no-wunderground` | Skip the Wunderground snapshot forecast in the input reconstruction               |
+| `--csv`             | Write per-profile summary CSV                                                       |
+| `--daily`           | Also print the per-day PnL breakdown                                               |
+
+Reads the weather DB (CLOB / Open-Meteo / WU snapshots) and Gamma (winning bucket). Output: per-profile PnL, trade count, win rate, final balance, max drawdown, plus a summed "no-open reasons" list so empty runs are diagnosable. Running all ~330 profiles over a wide window is slow (many per-gate DB reads); filter with `--profiles` / `--trade-strategy` for quick iterations.
+
+```bash
+export POLYTEMPO_DATABASE_URL='postgresql://…/polytempo'   # weather DB (read-only)
+
+# one profile, quick sanity window (fast)
+python scripts/backtest.py --start 2026-06-25 --end 2026-06-30 \
+  --profiles bh_dist_arb_lead24
+
+# one trade strategy across the settled window + per-day breakdown, dump CSV
+python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
+  --trade-strategy dist_arb --daily --csv reports/backtest/dist_arb.csv
+
+# lock ONLY the distribution model (every trade strategy on best_historical_updated)
+python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
+  --model-strategy best_historical_updated
+
+# lock BOTH the model and the trade strategy (one exact cell of the matrix)
+python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
+  --model-strategy weighted_historical_updated --trade-strategy dist_arb
+
+# all hold profiles (slow — full profile matrix)
+python scripts/backtest.py --start 2026-06-20 --end 2026-07-10
+```
+
+Tests (in-memory, no DB / no network):
+
+```bash
+pytest tests/test_backtest.py
+```
+
 ## fetch-historical-forecasts
 
 Fetch Open-Meteo Single Runs and cache **full API JSON** under `data/weather/raw/single-runs/`. In date-range mode, also append parsed Tmax rows to JSONL. Offline only — not used by `polytempo live`.

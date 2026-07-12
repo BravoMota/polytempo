@@ -399,6 +399,55 @@ def fetch_nearest_clob_snapshot(
         return _query(connection)
 
 
+def fetch_backtest_event_ids(
+    city_slug: str,
+    start: date,
+    end: date,
+    *,
+    database_url: str | None = None,
+    conn: Connection | None = None,
+) -> dict[date, str]:
+    """Map settlement date → Polymarket event id from stored CLOB snapshots.
+
+    This is the historical-event source for the backtest harness: only events
+    that actually have CLOB snapshots in ``[start, end]`` for ``city_slug`` are
+    returned (resolved/closed events are included — unlike Gamma's active feed).
+    When more than one event shares a settlement date, the one with the most
+    snapshot rows wins.
+    """
+    start_s = start.isoformat()
+    end_s = end.isoformat()
+
+    def _query(connection: Connection) -> dict[date, str]:
+        rows = connection.execute(
+            """
+            SELECT settlement_date, polymarket_event_id, COUNT(*) AS n
+            FROM clob_bucket_snapshots
+            WHERE city_slug = %(city)s
+              AND settlement_date >= %(start)s
+              AND settlement_date <= %(end)s
+            GROUP BY settlement_date, polymarket_event_id
+            ORDER BY settlement_date ASC, n DESC
+            """,
+            {"city": city_slug, "start": start_s, "end": end_s},
+        ).fetchall()
+        out: dict[date, str] = {}
+        for row in rows:
+            settlement = date.fromisoformat(str(row["settlement_date"]))
+            # Rows are ordered by descending snapshot count, so the first entry
+            # per date is the most-tracked event.
+            if settlement not in out:
+                out[settlement] = str(row["polymarket_event_id"])
+        return out
+
+    if conn is not None:
+        return _query(conn)
+
+    url = resolve_database_url(override=database_url)
+    with get_connection(url) as connection:
+        return _query(connection)
+
+
 def hydrate_event_from_clob_snapshot(
     event: PolymarketEvent,
     clob_rows: list[dict] | tuple[dict, ...],
