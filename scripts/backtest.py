@@ -27,6 +27,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+import yaml  # noqa: E402
+
 from polytempo.analysis import MODEL_STRATEGIES  # noqa: E402
 from polytempo.paper.backtest import (  # noqa: E402
     BacktestResult,
@@ -35,9 +37,11 @@ from polytempo.paper.backtest import (  # noqa: E402
 )
 from polytempo.profiles.load import (  # noqa: E402
     DEFAULT_PROFILES_PATH,
+    generate_all_twelve_profiles,
     load_paper_profiles,
 )
 from polytempo.profiles.models import TradingProfile  # noqa: E402
+from polytempo.profiles.registry import known_trade_strategies  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,76 @@ def _select_profiles(
     if trade_strategy:
         selected = [p for p in selected if p.trade_strategy == trade_strategy]
     return selected
+
+
+def _synthesize_profiles(
+    config: Path,
+    *,
+    trade_strategy: str | None,
+    model_strategy: str | None,
+    lead_gate_keys: list[str] | None,
+) -> list[TradingProfile]:
+    """Build hold-to-settlement profiles for a strategy selection, in-memory.
+
+    Reads only the ``lead_gates`` / city / calibration metadata (and the
+    default strategy lists) from ``config`` and generates the
+    ``{model} x {trade} x {lead}`` grid, overriding whichever dimension the
+    caller pins with ``--trade-strategy`` / ``--model-strategy``. An unpinned
+    dimension falls back to the config's declared list (all registered
+    strategies if the config omits it).
+
+    These profiles are never written to ``paper_profiles.yaml`` and never reach
+    the live paper bot or ledger — the backtest always simulates against an
+    in-memory store, so any strategy (including ones not in the config) can be
+    tested without touching production.
+    """
+    if not config.is_file():
+        raise SystemExit(f"config not found: {config}")
+    raw = yaml.safe_load(config.read_text(encoding="utf-8")) or {}
+
+    lead_gates = raw.get("lead_gates") or {}
+    if not lead_gates:
+        raise SystemExit(f"no lead_gates defined in {config}")
+    if lead_gate_keys:
+        unknown = [k for k in lead_gate_keys if k not in lead_gates]
+        if unknown:
+            raise SystemExit(
+                f"unknown lead gate(s): {unknown}; known: {sorted(lead_gates)}"
+            )
+        lead_gates = {k: lead_gates[k] for k in lead_gate_keys}
+
+    if model_strategy:
+        model_list = [model_strategy]
+    else:
+        model_list = list(raw.get("model_strategies") or MODEL_STRATEGIES)
+    if trade_strategy:
+        trade_list = [trade_strategy]
+    else:
+        trade_list = list(raw.get("trade_strategies") or known_trade_strategies())
+
+    unknown_trades = sorted(set(trade_list) - set(known_trade_strategies()))
+    if unknown_trades:
+        raise SystemExit(
+            f"unknown trade strategy(ies): {unknown_trades}; "
+            f"known: {sorted(known_trade_strategies())}"
+        )
+
+    kwargs: dict = {}
+    if "calibration_stats_path" in raw:
+        kwargs["calibration_stats_path"] = Path(raw["calibration_stats_path"])
+    if "updated_calibration_stats_path" in raw:
+        kwargs["updated_calibration_stats_path"] = Path(
+            raw["updated_calibration_stats_path"]
+        )
+
+    return generate_all_twelve_profiles(
+        lead_gates=lead_gates,
+        model_strategies=model_list,
+        trade_strategies=trade_list,
+        city=str(raw.get("city", "london")),
+        target_day=str(raw.get("target_day", "tomorrow")),
+        **kwargs,
+    )
 
 
 def _fmt_pct(value: float | None) -> str:
@@ -171,13 +245,27 @@ def main() -> int:
     parser.add_argument(
         "--trade-strategy",
         default=None,
-        help="Restrict to profiles with this trade strategy",
+        help=(
+            "Backtest this trade strategy (any registered name, even one not in "
+            "paper_profiles.yaml). Combined with the config's model strategies "
+            "unless --model-strategy is also given. Never touches the ledger."
+        ),
     )
     parser.add_argument(
         "--model-strategy",
         default=None,
         choices=list(MODEL_STRATEGIES),
-        help="Restrict to profiles with this distribution model strategy",
+        help=(
+            "Backtest this distribution model strategy. Combined with the "
+            "config's trade strategies unless --trade-strategy is also given. "
+            "Never touches the ledger."
+        ),
+    )
+    parser.add_argument(
+        "--lead-gates",
+        nargs="+",
+        default=None,
+        help="Restrict to these lead gate keys (e.g. lead24 lead42)",
     )
     parser.add_argument("--city", default="london", help="City (default: london)")
     parser.add_argument(
@@ -201,13 +289,29 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    all_profiles = load_paper_profiles(args.config)
-    profiles = _select_profiles(
-        all_profiles,
-        ids=args.profiles,
-        trade_strategy=args.trade_strategy,
-        model_strategy=args.model_strategy,
-    )
+    if args.profiles:
+        all_profiles = load_paper_profiles(args.config)
+        profiles = _select_profiles(
+            all_profiles,
+            ids=args.profiles,
+            trade_strategy=args.trade_strategy,
+            model_strategy=args.model_strategy,
+        )
+    elif args.trade_strategy or args.model_strategy or args.lead_gates:
+        profiles = _synthesize_profiles(
+            args.config,
+            trade_strategy=args.trade_strategy,
+            model_strategy=args.model_strategy,
+            lead_gate_keys=args.lead_gates,
+        )
+    else:
+        all_profiles = load_paper_profiles(args.config)
+        profiles = _select_profiles(
+            all_profiles,
+            ids=None,
+            trade_strategy=None,
+            model_strategy=None,
+        )
     if not profiles:
         raise SystemExit("no profiles selected after filters")
 
