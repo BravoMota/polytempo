@@ -36,6 +36,9 @@ model_strategies:
   - best_historical
   - best_historical_updated
   - weighted_historical_updated
+  # Registered but not wired into paper wallets (opt-in via backtest):
+  # - weighted_historical_market_sigma
+  # - ensemble_spread
 
 trade_strategies:
   - argmax_yes
@@ -52,6 +55,8 @@ trade_strategies:
   - dist_arb_tight
   - dist_arb_kelly
   - tail_fade
+  # Registered but not wired into paper wallets (opt-in via backtest):
+  # - mass_side
 
 # Profile ids generated as: {bh|bhu|whu}_{trade}_{leadN}
 # e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, whu_mid_band_lead24
@@ -75,6 +80,8 @@ xsell_wallets:
     - dist_arb
     - edge_band
     - topk_yes
+    # Registered but not wired:
+    # - mass_side
   lead_gates:
     - lead42
     - lead48
@@ -113,3 +120,5 @@ active_wallets:
     - dist_arb_tight
     - dist_arb_kelly
     - tail_fade
+    # Registered but not wired:
+    # - mass_side

@@ -9,6 +9,7 @@ from polytempo.strategy.dist_arb import DistArbConfig, DistArbStrategy
 from polytempo.strategy.dist_arb_kelly import DistArbKellyConfig, DistArbKellyStrategy
 from polytempo.strategy.dist_arb_tight import DistArbTightConfig, DistArbTightStrategy
 from polytempo.strategy.edge_band import EdgeBandConfig, EdgeBandStrategy
+from polytempo.strategy.mass_side import MassSideConfig, MassSideStrategy
 from polytempo.strategy.max_edge import MaxEdgeStrategy
 from polytempo.strategy.max_roi import MaxRoiConfig, MaxRoiStrategy
 from polytempo.strategy.mid_band import MidBandConfig, MidBandStrategy
@@ -29,6 +30,8 @@ __all__ = [
     "DistArbKellyConfig",
     "DistArbTightStrategy",
     "DistArbTightConfig",
+    "MassSideStrategy",
+    "MassSideConfig",
     "MaxRoiStrategy",
     "MaxRoiConfig",
     "MidBandStrategy",

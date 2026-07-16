@@ -13,6 +13,7 @@ from polytempo.strategy import (
     DistArbStrategy,
     DistArbTightStrategy,
     EdgeBandStrategy,
+    MassSideStrategy,
     MaxEdgeStrategy,
     MaxRoiStrategy,
     MidBandStrategy,
@@ -38,6 +39,7 @@ _TRADE_STRATEGIES: dict[str, Callable[[], Strategy]] = {
     "dist_arb_tight": DistArbTightStrategy,
     "dist_arb_kelly": DistArbKellyStrategy,
     "tail_fade": TailFadeStrategy,
+    "mass_side": MassSideStrategy,
 }
 
 
