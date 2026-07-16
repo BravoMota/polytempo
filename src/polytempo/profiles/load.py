@@ -21,6 +21,7 @@ _MODEL_ABBREV = {
     "best_historical": "bh",
     "best_historical_updated": "bhu",
     "weighted_historical_updated": "whu",
+    "weighted_historical_market_sigma": "whums",
     "ensemble_spread": "es",
 }
 
@@ -40,6 +41,7 @@ def _calibration_path_for_strategy(
     if model_strategy in (
         "best_historical_updated",
         "weighted_historical_updated",
+        "weighted_historical_market_sigma",
     ):
         return updated_path
     return static_path

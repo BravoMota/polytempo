@@ -30,6 +30,19 @@ def test_generate_all_twelve_profiles_count() -> None:
     assert "es_mid_band_lead24" in ids
 
 
+def test_weighted_historical_market_sigma_uses_updated_calibration_path() -> None:
+    profiles = generate_all_twelve_profiles(
+        lead_gates={"lead30": {"target_lead_hours": 30}},
+        model_strategies=["weighted_historical_market_sigma"],
+        trade_strategies=["dist_arb"],
+    )
+    assert len(profiles) == 1
+    assert profiles[0].id == "whums_dist_arb_lead30"
+    assert profiles[0].calibration_stats_path == (
+        REPO_ROOT / DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
+    ).resolve()
+
+
 def test_weighted_historical_updated_uses_updated_calibration_path() -> None:
     profiles = generate_all_twelve_profiles(
         lead_gates={"lead30": {"target_lead_hours": 30}},

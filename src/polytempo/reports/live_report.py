@@ -551,7 +551,11 @@ def format_distribution_md(
             f"- sigma_c: **{info.sigma_c:.2f}**",
         ]
     )
-    if info.method not in ("calibrated_single_model", "weighted_calibrated_mixture_p2.0"):
+    if info.method not in (
+        "calibrated_single_model",
+        "weighted_calibrated_mixture_p2.0",
+        "weighted_historical_market_sigma_cap",
+    ):
         lines.append(f"- values_used_c: `{info.values_used_c}`")
     lines.extend(["", _format_bucket_edges_table(result)])
     return "\n".join(lines)

@@ -8,6 +8,7 @@ from pathlib import Path
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
 )
 from polytempo.profiles.models import TradingProfile
@@ -47,6 +48,7 @@ def filter_profiles_by_calibration(
         if profile.model_strategy in (
             MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
             MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
         ):
             ready, reason = calibration_csv_ready(
                 profile.calibration_stats_path,

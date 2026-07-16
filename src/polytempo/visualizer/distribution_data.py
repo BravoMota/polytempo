@@ -56,7 +56,11 @@ from polytempo.weather.wu_live_forecast import append_wunderground_snapshot_fore
 # Mirrors profiles.load._calibration_path_for_strategy (single source of truth for
 # which CSV each model strategy reads). Kept inline to avoid importing a private.
 _UPDATED_CSV_STRATEGIES = frozenset(
-    {"best_historical_updated", "weighted_historical_updated"}
+    {
+        "best_historical_updated",
+        "weighted_historical_updated",
+        "weighted_historical_market_sigma",
+    }
 )
 _BEST_HISTORICAL_STRATEGIES = frozenset(
     {MODEL_STRATEGY_BEST_HISTORICAL, MODEL_STRATEGY_BEST_HISTORICAL_UPDATED}

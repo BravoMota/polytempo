@@ -24,6 +24,7 @@ from polytempo.strategy.argmax_yes import ArgmaxYesStrategy
 from polytempo.strategy.base import Strategy
 from polytempo.strategy.decision import DecisionConfig
 from polytempo.strategy.edge import MarketPrice, ProbabilityQuote, calculate_bucket_edges
+from polytempo.visualizer.bucket_math import cap_sigma_to_market
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     WEIGHTED_CALIBRATION_METHOD,
@@ -43,11 +44,13 @@ MODEL_STRATEGY_ENSEMBLE_SPREAD = "ensemble_spread"
 MODEL_STRATEGY_BEST_HISTORICAL = "best_historical"
 MODEL_STRATEGY_BEST_HISTORICAL_UPDATED = "best_historical_updated"
 MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED = "weighted_historical_updated"
+MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA = "weighted_historical_market_sigma"
 MODEL_STRATEGIES: tuple[str, ...] = (
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
 )
 
 _BEST_HISTORICAL_STRATEGIES = frozenset(
@@ -58,8 +61,16 @@ _BEST_HISTORICAL_STRATEGIES = frozenset(
 )
 _CALIBRATED_STRATEGIES = _BEST_HISTORICAL_STRATEGIES | {
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
 }
+_WEIGHTED_HISTORICAL_STRATEGIES = frozenset(
+    {
+        MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+    }
+)
 _SKIP_ON_FALLBACK_STRATEGIES = _CALIBRATED_STRATEGIES
+WEIGHTED_HISTORICAL_MARKET_SIGMA_METHOD = "weighted_historical_market_sigma_cap"
 
 
 @dataclass(frozen=True)
@@ -193,15 +204,16 @@ def _failure_distribution_build(*, method: str) -> DistributionBuildInfo:
     )
 
 
-def _whu_failure(
+def _weighted_historical_failure(
     reason: str,
     *,
+    strategy: str,
     distribution_params: dict[str, object] | None = None,
 ) -> _StrategyResolution:
-    logger.warning("weighted_historical_updated failed: %s", reason)
+    logger.warning("%s failed: %s", strategy, reason)
     params = distribution_params if distribution_params is not None else {"error": reason}
     return _StrategyResolution(
-        strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        strategy=strategy,
         selected_model=None,
         calibration_row=None,
         sigma_source=None,
@@ -209,6 +221,18 @@ def _whu_failure(
         calibrated_mu=None,
         calibrated_sigma=None,
         distribution_params=params,
+    )
+
+
+def _whu_failure(
+    reason: str,
+    *,
+    distribution_params: dict[str, object] | None = None,
+) -> _StrategyResolution:
+    return _weighted_historical_failure(
+        reason,
+        strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        distribution_params=distribution_params,
     )
 
 
@@ -238,6 +262,64 @@ def _validate_calibration_prerequisites(
     return None, init_lead_hours_by_model
 
 
+def _resolve_weighted_historical(
+    *,
+    forecast: ForecastValues,
+    station_id: str,
+    current_lead_hours: float,
+    calibration_stats_path: Path,
+    resolved_strategy: str,
+) -> _StrategyResolution:
+    """Shared WHU / WHU+market-sigma resolution path."""
+    prereq_reason, init_lead_hours_by_model = _validate_calibration_prerequisites(
+        forecast=forecast,
+        station_id=station_id,
+        current_lead_hours=current_lead_hours,
+    )
+    if prereq_reason is not None:
+        return _weighted_historical_failure(prereq_reason, strategy=resolved_strategy)
+
+    rows = read_calibration_stats_csv(calibration_stats_path)
+    if not rows:
+        return _weighted_historical_failure("no_calibration_csv", strategy=resolved_strategy)
+
+    attempt = select_weighted_models(
+        rows,
+        station_id=station_id,
+        available_models=list(forecast.models),
+        current_lead_hours=current_lead_hours,
+        predicted_tmax_by_model=_predicted_tmax_by_model(forecast),
+        init_lead_hours_by_model=init_lead_hours_by_model,
+    )
+    if attempt.result is None:
+        return _weighted_historical_failure(
+            "no_eligible_models",
+            strategy=resolved_strategy,
+            distribution_params={
+                "error": "no_eligible_models",
+                "excluded_models": list(attempt.excluded_models),
+            },
+        )
+
+    result = attempt.result
+    distribution_params = build_weighted_distribution_params(
+        result,
+        excluded_models=attempt.excluded_models,
+    )
+    top = max(result.contributions, key=lambda c: c.weight)
+    return _StrategyResolution(
+        strategy=resolved_strategy,
+        selected_model=top.model,
+        calibration_row=top.row,
+        sigma_source="error_std_c",
+        fallback_reason=None,
+        calibrated_mu=result.mean_c,
+        calibrated_sigma=result.sigma_c,
+        weighted_contributions=result.contributions,
+        distribution_params=distribution_params,
+    )
+
+
 def _resolve_strategy(
     *,
     forecast: ForecastValues,
@@ -259,51 +341,21 @@ def _resolve_strategy(
         )
 
     if requested_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED:
-        prereq_reason, init_lead_hours_by_model = _validate_calibration_prerequisites(
+        return _resolve_weighted_historical(
             forecast=forecast,
-            station_id=station_id,
-            current_lead_hours=current_lead_hours,
-        )
-        if prereq_reason is not None:
-            return _whu_failure(prereq_reason)
-
-        rows = read_calibration_stats_csv(calibration_stats_path)
-        if not rows:
-            return _whu_failure("no_calibration_csv")
-
-        attempt = select_weighted_models(
-            rows,
             station_id=station_id,  # type: ignore[arg-type]
-            available_models=list(forecast.models),
             current_lead_hours=current_lead_hours,  # type: ignore[arg-type]
-            predicted_tmax_by_model=_predicted_tmax_by_model(forecast),
-            init_lead_hours_by_model=init_lead_hours_by_model,
+            calibration_stats_path=calibration_stats_path,
+            resolved_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
         )
-        if attempt.result is None:
-            return _whu_failure(
-                "no_eligible_models",
-                distribution_params={
-                    "error": "no_eligible_models",
-                    "excluded_models": list(attempt.excluded_models),
-                },
-            )
 
-        result = attempt.result
-        distribution_params = build_weighted_distribution_params(
-            result,
-            excluded_models=attempt.excluded_models,
-        )
-        top = max(result.contributions, key=lambda c: c.weight)
-        return _StrategyResolution(
-            strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
-            selected_model=top.model,
-            calibration_row=top.row,
-            sigma_source="error_std_c",
-            fallback_reason=None,
-            calibrated_mu=result.mean_c,
-            calibrated_sigma=result.sigma_c,
-            weighted_contributions=result.contributions,
-            distribution_params=distribution_params,
+    if requested_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA:
+        return _resolve_weighted_historical(
+            forecast=forecast,
+            station_id=station_id,  # type: ignore[arg-type]
+            current_lead_hours=current_lead_hours,  # type: ignore[arg-type]
+            calibration_stats_path=calibration_stats_path,
+            resolved_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
         )
 
     if requested_strategy not in _BEST_HISTORICAL_STRATEGIES:
@@ -375,6 +427,7 @@ def _analysis_result_from_resolution(
     distribution_mean_c: float,
     distribution_sigma_c: float,
     distribution_build: DistributionBuildInfo,
+    distribution_params: dict[str, object] | None = None,
 ) -> AnalysisResult:
     return AnalysisResult(
         distribution_mean_c=distribution_mean_c,
@@ -387,7 +440,11 @@ def _analysis_result_from_resolution(
         calibration_sigma_source=resolution.sigma_source,
         fallback_reason=resolution.fallback_reason,
         weighted_contributions=resolution.weighted_contributions,
-        distribution_params=resolution.distribution_params,
+        distribution_params=(
+            distribution_params
+            if distribution_params is not None
+            else resolution.distribution_params
+        ),
     )
 
 
@@ -400,7 +457,7 @@ def _build_distribution_from_resolution(
 ) -> tuple[float, float, DistributionBuildInfo] | None:
     """Return distribution triple, or ``None`` when WHU failed without fallback."""
     if (
-        resolution.strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+        resolution.strategy in _WEIGHTED_HISTORICAL_STRATEGIES
         and resolution.fallback_reason is not None
     ):
         return None
@@ -415,7 +472,7 @@ def _build_distribution_from_resolution(
         )
         method = (
             WEIGHTED_CALIBRATION_METHOD
-            if resolution.strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+            if resolution.strategy in _WEIGHTED_HISTORICAL_STRATEGIES
             else "calibrated_single_model"
         )
         distribution, distribution_build = build_calibrated_distribution(
@@ -432,6 +489,55 @@ def _build_distribution_from_resolution(
         lead_hours=lead_hours,
     )
     return distribution.mean_c, distribution.sigma_c, distribution_build
+
+
+def _apply_market_sigma_cap(
+    resolution: _StrategyResolution,
+    *,
+    mean_c: float,
+    sigma_c: float,
+    distribution_build: DistributionBuildInfo,
+    bucket_labels: list[str],
+    market_prices: list[MarketPrice],
+) -> tuple[float, DistributionBuildInfo, dict[str, object] | None]:
+    """Cap WHU sigma to market-implied spread when means agree."""
+    if resolution.strategy != MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA:
+        return sigma_c, distribution_build, None
+
+    yes_asks_by_label = {mp.label: mp.yes_ask for mp in market_prices}
+    yes_asks = [yes_asks_by_label.get(label) for label in bucket_labels]
+    capped_sigma, cap_audit = cap_sigma_to_market(
+        mean_c,
+        sigma_c,
+        labels=bucket_labels,
+        yes_asks=yes_asks,
+    )
+    if capped_sigma == sigma_c:
+        return sigma_c, distribution_build, cap_audit
+
+    capped_build = DistributionBuildInfo(
+        values_used_c=distribution_build.values_used_c,
+        default_sigma_c=distribution_build.default_sigma_c,
+        lead_hours=distribution_build.lead_hours,
+        lead_hours_sigma_floor_c=distribution_build.lead_hours_sigma_floor_c,
+        ensemble_stdev_c=distribution_build.ensemble_stdev_c,
+        mean_c=distribution_build.mean_c,
+        sigma_c=capped_sigma,
+        method=WEIGHTED_HISTORICAL_MARKET_SIGMA_METHOD,
+    )
+    return capped_sigma, capped_build, cap_audit
+
+
+def _merge_distribution_params(
+    resolution: _StrategyResolution,
+    cap_audit: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if resolution.distribution_params is None and cap_audit is None:
+        return None
+    merged = dict(resolution.distribution_params or {})
+    if cap_audit is not None:
+        merged["market_sigma_cap"] = cap_audit
+    return merged
 
 
 def analyze_event_multi(
@@ -485,6 +591,15 @@ def analyze_event_multi(
         }
 
     distribution_mean_c, distribution_sigma_c, distribution_build = built
+    distribution_sigma_c, distribution_build, cap_audit = _apply_market_sigma_cap(
+        resolution,
+        mean_c=distribution_mean_c,
+        sigma_c=distribution_sigma_c,
+        distribution_build=distribution_build,
+        bucket_labels=bucket_labels,
+        market_prices=market_prices,
+    )
+    merged_distribution_params = _merge_distribution_params(resolution, cap_audit)
     from polytempo.model.distribution import ForecastDistribution
 
     dist = ForecastDistribution(
@@ -531,6 +646,7 @@ def analyze_event_multi(
             distribution_mean_c=distribution_mean_c,
             distribution_sigma_c=distribution_sigma_c,
             distribution_build=distribution_build,
+            distribution_params=merged_distribution_params,
         )
     return results
 
@@ -582,6 +698,15 @@ def analyze_event(
         )
 
     distribution_mean_c, distribution_sigma_c, distribution_build = built
+    distribution_sigma_c, distribution_build, cap_audit = _apply_market_sigma_cap(
+        resolution,
+        mean_c=distribution_mean_c,
+        sigma_c=distribution_sigma_c,
+        distribution_build=distribution_build,
+        bucket_labels=bucket_labels,
+        market_prices=market_prices,
+    )
+    merged_distribution_params = _merge_distribution_params(resolution, cap_audit)
     from polytempo.model.distribution import ForecastDistribution
 
     dist = ForecastDistribution(
@@ -627,4 +752,5 @@ def analyze_event(
         distribution_mean_c=distribution_mean_c,
         distribution_sigma_c=distribution_sigma_c,
         distribution_build=distribution_build,
+        distribution_params=merged_distribution_params,
     )

@@ -222,6 +222,10 @@ _METHOD_DESCRIPTIONS: dict[str, str] = {
         "Best historical model with bias-corrected mean and empirical sigma "
         "(error_std_c or rmse_c) from offline calibration stats."
     ),
+    "weighted_historical_market_sigma_cap": (
+        "WHU mean with sigma capped to market-implied discrete std when means "
+        "agree within 1 °C."
+    ),
 }
 
 

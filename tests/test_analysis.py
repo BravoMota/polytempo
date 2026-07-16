@@ -8,6 +8,7 @@ import pytest
 from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     AnalysisInput,
     analyze,
@@ -17,6 +18,7 @@ from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.model.calibration import CalibrationRule
 from polytempo.strategy.decision import DecisionConfig
 from polytempo.strategy.edge import MarketPrice
+from polytempo.visualizer.bucket_math import cap_sigma_to_market
 from polytempo.weather.schema import ForecastValues
 
 
@@ -777,3 +779,121 @@ def test_analyze_event_weighted_historical_updated_failure_stays_whu(tmp_path: P
     assert result.rows == []
     assert result.distribution_params is not None
     assert result.distribution_params["error"] == "no_calibration_csv"
+
+
+def test_cap_sigma_to_market_when_means_agree() -> None:
+    labels = ["26°C", "27°C", "28°C", "29°C", "30°C"]
+    asks = [0.03, 0.07, 0.70, 0.15, 0.05]
+    capped, audit = cap_sigma_to_market(
+        28.05,
+        1.13,
+        labels=labels,
+        yes_asks=asks,
+    )
+    assert audit["applied"] is True
+    assert audit["reason"] == "capped_to_market"
+    assert capped < 1.13
+
+
+def test_cap_sigma_to_market_skips_when_means_diverge() -> None:
+    labels = ["26°C", "27°C", "28°C", "29°C", "30°C"]
+    asks = [0.03, 0.07, 0.10, 0.15, 0.65]
+    capped, audit = cap_sigma_to_market(
+        28.05,
+        1.13,
+        labels=labels,
+        yes_asks=asks,
+        max_mean_delta_c=1.0,
+    )
+    assert capped == 1.13
+    assert audit["applied"] is False
+    assert audit["reason"] == "means_diverge"
+
+
+def _event_with_asks(
+    labels: list[str],
+    asks: list[float | None],
+    *,
+    liquidity_usd: float | None = 250.0,
+) -> PolymarketEvent:
+    return PolymarketEvent(
+        event_id="event-1",
+        slug="temperature-event",
+        title="Temperature Event",
+        settlement_date=None,
+        buckets=[
+            PolymarketBucket(
+                market_id=f"market-{i}",
+                label=label,
+                yes_bid=max((ask or 0.0) - 0.05, 0.0),
+                yes_ask=ask,
+                liquidity_usd=liquidity_usd,
+                spread=0.05,
+                rules=None,
+            )
+            for i, (label, ask) in enumerate(zip(labels, asks, strict=True))
+        ],
+    )
+
+
+def test_analyze_event_weighted_historical_market_sigma_caps_sigma(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats_updated.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,24,40,0.0,1.5,1.8,1.0",
+            "EGLC,beta,24,40,0.0,0.9,1.0,1.2",
+            "EGLC,gamma,24,40,0.0,1.0,1.2,1.5",
+        ],
+    )
+    forecast = _forecast([28.0, 28.2, 27.9], models=["alpha", "beta", "gamma"])
+    labels = ["26°C", "27°C", "28°C", "29°C", "30°C"]
+    asks = [0.03, 0.07, 0.70, 0.15, 0.05]
+    event = _event_with_asks(labels, asks)
+
+    whu = analyze_event(
+        forecast,
+        event,
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+    whums = analyze_event(
+        forecast,
+        event,
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert whu.distribution_sigma_c == pytest.approx(1.13, abs=0.02)
+    assert whums.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA
+    assert whums.distribution_mean_c == pytest.approx(whu.distribution_mean_c, abs=0.01)
+    assert whums.distribution_sigma_c < whu.distribution_sigma_c
+    assert whums.distribution_build.method == "weighted_historical_market_sigma_cap"
+    assert whums.distribution_params is not None
+    cap = whums.distribution_params["market_sigma_cap"]
+    assert isinstance(cap, dict)
+    assert cap["applied"] is True
+    assert cap["reason"] == "capped_to_market"
+
+
+def test_analyze_event_weighted_historical_market_sigma_failure_stays_whums(
+    tmp_path: Path,
+) -> None:
+    forecast = _forecast([28.0], models=["alpha"])
+
+    result = analyze_event(
+        forecast,
+        _event(["28°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+        station_id="EGLC",
+        calibration_stats_path=tmp_path / "missing.csv",
+    )
+
+    assert result.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA
+    assert result.fallback_reason == "no_calibration_csv"
+    assert result.rows == []
