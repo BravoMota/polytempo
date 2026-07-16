@@ -456,6 +456,7 @@ def test_fetch_nearest_wunderground_adjusted_tmax(weather_db_url: str) -> None:
     assert snapshot is not None
     assert snapshot.scraped_at_utc == scrape
     assert snapshot.predicted_tmax_c == pytest.approx(25.5)
+    assert snapshot.observed_running_max_c == pytest.approx(22.0)
 
 
 def test_fetch_nearest_clob_snapshot_rejects_stale_slot(weather_db_url: str) -> None:

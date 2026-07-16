@@ -125,6 +125,7 @@ def replay_event_analysis(
             forecast,
             predicted_tmax_c=wu_snapshot.predicted_tmax_c,
             as_of_utc=at_utc,
+            observed_running_max_c=wu_snapshot.observed_running_max_c,
         )
 
     resolved_strategy = model_strategy or profile.model_strategy

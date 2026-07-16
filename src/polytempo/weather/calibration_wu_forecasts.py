@@ -56,6 +56,22 @@ def _parse_snapshot_time(value: str) -> datetime:
     return parsed
 
 
+def observed_running_max_c(
+    history_observations: list[WuHistoryObservationRow],
+    *,
+    target_date: date,
+    as_of_utc: datetime,
+) -> float | None:
+    """Max observed temp for ``target_date`` at or before ``as_of_utc``."""
+    as_of = as_of_utc.astimezone(dt_timezone.utc)
+    obs_temps = [
+        row.temp_c
+        for row in history_observations
+        if row.target_date == target_date and row.observed_at_utc <= as_of
+    ]
+    return max(obs_temps) if obs_temps else None
+
+
 def adjusted_predicted_tmax_c(
     *,
     target_date: date,
@@ -66,18 +82,16 @@ def adjusted_predicted_tmax_c(
     """Combine observed-so-far with remaining hourly forecast for daily Tmax."""
     as_of = as_of_utc.astimezone(dt_timezone.utc)
 
-    obs_temps = [
-        row.temp_c
-        for row in history_observations
-        if row.target_date == target_date and row.observed_at_utc <= as_of
-    ]
+    max_obs = observed_running_max_c(
+        history_observations,
+        target_date=target_date,
+        as_of_utc=as_of,
+    )
     fc_temps = [
         row.temp_c
         for row in hourly_forecast_rows
         if row.target_time_utc > as_of
     ]
-
-    max_obs = max(obs_temps) if obs_temps else None
     max_fc = max(fc_temps) if fc_temps else None
 
     if max_obs is not None and max_fc is not None:

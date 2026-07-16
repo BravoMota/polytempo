@@ -10,10 +10,12 @@ from polytempo.model.distribution import (
     ForecastDistribution,
     build_calibrated_distribution,
     build_distribution,
+    condition_probabilities_on_observed_floor,
     format_distribution_build_markdown,
     lead_time_sigma_floor,
     probabilities_for_buckets,
     probability_for_bucket,
+    BucketProbability,
 )
 
 
@@ -217,3 +219,47 @@ def test_normalize_raises_when_total_probability_is_zero() -> None:
     ]
     with pytest.raises(ValueError, match="zero"):
         probabilities_for_buckets(d, buckets, normalize=True)
+
+
+def test_condition_probabilities_on_observed_floor_renormalizes() -> None:
+    probs = [
+        BucketProbability(label="19°C", probability=0.05, lower_c=18.5, upper_c=19.5),
+        BucketProbability(label="20°C", probability=0.10, lower_c=19.5, upper_c=20.5),
+        BucketProbability(label="21°C", probability=0.30, lower_c=20.5, upper_c=21.5),
+        BucketProbability(label="22°C", probability=0.35, lower_c=21.5, upper_c=22.5),
+        BucketProbability(label="23°C", probability=0.20, lower_c=22.5, upper_c=23.5),
+    ]
+    out, audit = condition_probabilities_on_observed_floor(probs, 21.0)
+    assert audit["applied"] is True
+    assert audit["policy"] == "renormalize"
+    assert audit["dead_mass"] == pytest.approx(0.15)
+    assert audit["zeroed_labels"] == ["19°C", "20°C"]
+    by_label = {bp.label: bp.probability for bp in out}
+    assert by_label["19°C"] == 0.0
+    assert by_label["20°C"] == 0.0
+    assert by_label["21°C"] == pytest.approx(0.30 / 0.85)
+    assert by_label["22°C"] == pytest.approx(0.35 / 0.85)
+    assert by_label["23°C"] == pytest.approx(0.20 / 0.85)
+    assert sum(by_label.values()) == pytest.approx(1.0)
+
+
+def test_condition_probabilities_on_observed_floor_noop_when_floor_below_all() -> None:
+    probs = [
+        BucketProbability(label="21°C", probability=0.4, lower_c=20.5, upper_c=21.5),
+        BucketProbability(label="22°C", probability=0.6, lower_c=21.5, upper_c=22.5),
+    ]
+    out, audit = condition_probabilities_on_observed_floor(probs, 10.0)
+    assert audit["applied"] is False
+    assert audit["reason"] == "no_invalid_buckets"
+    assert out is probs
+
+
+def test_condition_probabilities_on_observed_floor_noop_when_no_remaining_mass() -> None:
+    probs = [
+        BucketProbability(label="19°C", probability=0.5, lower_c=18.5, upper_c=19.5),
+        BucketProbability(label="20°C", probability=0.5, lower_c=19.5, upper_c=20.5),
+    ]
+    out, audit = condition_probabilities_on_observed_floor(probs, 25.0)
+    assert audit["applied"] is False
+    assert audit["reason"] == "no_remaining_mass"
+    assert out is probs

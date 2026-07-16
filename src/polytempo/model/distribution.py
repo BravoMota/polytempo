@@ -331,3 +331,71 @@ def probabilities_for_buckets(
         )
         for bp in out
     ]
+
+
+def condition_probabilities_on_observed_floor(
+    probs: list[BucketProbability],
+    floor_c: float,
+) -> tuple[list[BucketProbability], dict[str, object]]:
+    """Zero buckets entirely below ``floor_c`` and renormalize the rest.
+
+    A bucket is impossible for daily max once observations have reached
+    ``floor_c`` when ``upper_c is not None and upper_c <= floor_c`` (half-open
+    ``[lower, upper)``). Open-high buckets are never invalidated.
+    """
+    if not math.isfinite(floor_c):
+        raise ValueError("floor_c must be finite")
+
+    zeroed_labels = [
+        bp.label
+        for bp in probs
+        if bp.upper_c is not None and bp.upper_c <= floor_c
+    ]
+    if not zeroed_labels:
+        return probs, {
+            "applied": False,
+            "floor_c": floor_c,
+            "dead_mass": 0.0,
+            "zeroed_labels": [],
+            "policy": "renormalize",
+            "reason": "no_invalid_buckets",
+        }
+
+    dead_mass = sum(
+        bp.probability for bp in probs if bp.label in set(zeroed_labels)
+    )
+    remaining = [
+        bp
+        for bp in probs
+        if bp.label not in set(zeroed_labels)
+    ]
+    remaining_total = sum(bp.probability for bp in remaining)
+    if remaining_total <= 0.0:
+        return probs, {
+            "applied": False,
+            "floor_c": floor_c,
+            "dead_mass": dead_mass,
+            "zeroed_labels": zeroed_labels,
+            "policy": "renormalize",
+            "reason": "no_remaining_mass",
+        }
+
+    inv = 1.0 / remaining_total
+    zeroed = set(zeroed_labels)
+    conditioned = [
+        BucketProbability(
+            label=bp.label,
+            probability=0.0 if bp.label in zeroed else bp.probability * inv,
+            lower_c=bp.lower_c,
+            upper_c=bp.upper_c,
+        )
+        for bp in probs
+    ]
+    return conditioned, {
+        "applied": True,
+        "floor_c": floor_c,
+        "dead_mass": dead_mass,
+        "zeroed_labels": zeroed_labels,
+        "policy": "renormalize",
+        "reason": "capped_to_observed_floor",
+    }

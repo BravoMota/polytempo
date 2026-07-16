@@ -15,9 +15,11 @@ from polytempo.markets.buckets import parse_temperature_bucket
 from polytempo.markets.polymarket import PolymarketEvent, to_market_prices
 from polytempo.model.calibration import CalibrationRule, calibrate_forecast
 from polytempo.model.distribution import (
+    BucketProbability,
     DistributionBuildInfo,
     build_calibrated_distribution,
     build_distribution,
+    condition_probabilities_on_observed_floor,
     probabilities_for_buckets,
 )
 from polytempo.strategy.argmax_yes import ArgmaxYesStrategy
@@ -531,13 +533,29 @@ def _apply_market_sigma_cap(
 def _merge_distribution_params(
     resolution: _StrategyResolution,
     cap_audit: dict[str, object] | None,
+    floor_audit: dict[str, object] | None = None,
 ) -> dict[str, object] | None:
-    if resolution.distribution_params is None and cap_audit is None:
+    if (
+        resolution.distribution_params is None
+        and cap_audit is None
+        and floor_audit is None
+    ):
         return None
     merged = dict(resolution.distribution_params or {})
     if cap_audit is not None:
         merged["market_sigma_cap"] = cap_audit
+    if floor_audit is not None:
+        merged["observed_floor"] = floor_audit
     return merged
+
+
+def _condition_probs_on_floor(
+    probabilities: list[BucketProbability],
+    observed_floor_c: float | None,
+) -> tuple[list[BucketProbability], dict[str, object] | None]:
+    if observed_floor_c is None:
+        return probabilities, None
+    return condition_probabilities_on_observed_floor(probabilities, observed_floor_c)
 
 
 def analyze_event_multi(
@@ -599,7 +617,6 @@ def analyze_event_multi(
         bucket_labels=bucket_labels,
         market_prices=market_prices,
     )
-    merged_distribution_params = _merge_distribution_params(resolution, cap_audit)
     from polytempo.model.distribution import ForecastDistribution
 
     dist = ForecastDistribution(
@@ -608,6 +625,13 @@ def analyze_event_multi(
         source_values_c=distribution_build.values_used_c,
     )
     probabilities = probabilities_for_buckets(dist, buckets)
+    probabilities, floor_audit = _condition_probs_on_floor(
+        probabilities,
+        calibrated.observed_running_max_c,
+    )
+    merged_distribution_params = _merge_distribution_params(
+        resolution, cap_audit, floor_audit
+    )
     quotes = [
         ProbabilityQuote(label=p.label, probability=p.probability)
         for p in probabilities
@@ -706,7 +730,6 @@ def analyze_event(
         bucket_labels=bucket_labels,
         market_prices=market_prices,
     )
-    merged_distribution_params = _merge_distribution_params(resolution, cap_audit)
     from polytempo.model.distribution import ForecastDistribution
 
     dist = ForecastDistribution(
@@ -715,6 +738,13 @@ def analyze_event(
         source_values_c=distribution_build.values_used_c,
     )
     probabilities = probabilities_for_buckets(dist, buckets)
+    probabilities, floor_audit = _condition_probs_on_floor(
+        probabilities,
+        calibrated.observed_running_max_c,
+    )
+    merged_distribution_params = _merge_distribution_params(
+        resolution, cap_audit, floor_audit
+    )
     quotes = [
         ProbabilityQuote(label=p.label, probability=p.probability)
         for p in probabilities

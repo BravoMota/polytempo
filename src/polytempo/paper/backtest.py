@@ -370,6 +370,7 @@ def build_gate_inputs(
                 forecast,
                 predicted_tmax_c=wu_snapshot.predicted_tmax_c,
                 as_of_utc=at_utc,
+                observed_running_max_c=wu_snapshot.observed_running_max_c,
             )
 
     open_event = _open_view_event(event, clob_bundle.rows)

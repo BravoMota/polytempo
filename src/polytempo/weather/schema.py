@@ -29,6 +29,8 @@ class ForecastValues:
     models: list[str] | None = None
     init_lead_hours: list[float] | None = None
     model_run_init_utc: list[str] | None = None
+    # Same-station WU running observed max (°C) at decision time; optional.
+    observed_running_max_c: float | None = None
 
     def __post_init__(self) -> None:
         if self.models is not None and len(self.models) != len(self.values_c):

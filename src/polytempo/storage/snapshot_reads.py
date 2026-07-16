@@ -21,6 +21,7 @@ from polytempo.weather.calibration_wu_forecasts import (
     adjusted_predicted_tmax_c,
     is_oclock_scrape,
     normalize_scrape_time,
+    observed_running_max_c,
 )
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
@@ -78,6 +79,7 @@ class WundergroundForecastSnapshot:
 
     scraped_at_utc: str
     predicted_tmax_c: float
+    observed_running_max_c: float | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +267,11 @@ def fetch_nearest_wunderground_adjusted_tmax(
         return WundergroundForecastSnapshot(
             scraped_at_utc=scraped_text,
             predicted_tmax_c=predicted,
+            observed_running_max_c=observed_running_max_c(
+                history_obs,
+                target_date=target_date,
+                as_of_utc=at_utc,
+            ),
         )
 
     if conn is not None:

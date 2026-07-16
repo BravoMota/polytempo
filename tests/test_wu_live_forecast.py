@@ -16,6 +16,7 @@ from polytempo.weather.calibration_storage import WU_FORECAST_MODEL
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import get_station
 from polytempo.weather.wu_live_forecast import (
+    WuLiveAdjustedTmax,
     append_wunderground_forecast,
     parse_hourly_forecast_metric_payload,
 )
@@ -53,13 +54,14 @@ def test_append_wunderground_forecast_adds_model(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(
         "polytempo.weather.wu_live_forecast.fetch_wu_adjusted_tmax_c",
-        lambda *args, **kwargs: 22.5,
+        lambda *args, **kwargs: WuLiveAdjustedTmax(22.5, 21.0),
     )
 
     merged = append_wunderground_forecast(base, station, as_of_utc=as_of)
     assert merged.models == ["ecmwf_ifs025", WU_FORECAST_MODEL]
     assert merged.values_c == [20.0, 22.5]
     assert merged.model_run_init_utc == ["2026-06-09T10:00:00Z", ""]
+    assert merged.observed_running_max_c == pytest.approx(21.0)
 
 
 def test_append_wunderground_snapshot_forecast_adds_model() -> None:
@@ -81,10 +83,12 @@ def test_append_wunderground_snapshot_forecast_adds_model() -> None:
         base,
         predicted_tmax_c=22.5,
         as_of_utc=as_of,
+        observed_running_max_c=21.5,
     )
     assert merged.models == ["ecmwf_ifs025", WU_FORECAST_MODEL]
     assert merged.values_c == [20.0, 22.5]
     assert merged.model_run_init_utc == ["2026-06-09T10:00:00Z", ""]
+    assert merged.observed_running_max_c == pytest.approx(21.5)
 
 
 def test_append_wunderground_forecast_without_run_init_utc(
@@ -112,7 +116,7 @@ def test_append_wunderground_forecast_without_run_init_utc(
 
     monkeypatch.setattr(
         "polytempo.weather.wu_live_forecast.fetch_wu_adjusted_tmax_c",
-        lambda *args, **kwargs: 22.5,
+        lambda *args, **kwargs: WuLiveAdjustedTmax(22.5, None),
     )
 
     merged = append_wunderground_forecast(base, station, as_of_utc=as_of)

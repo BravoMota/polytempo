@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime
 from datetime import timezone as dt_timezone
 
@@ -13,6 +14,7 @@ from polytempo.weather.calibration_storage import WU_FORECAST_MODEL, WuHistoryOb
 from polytempo.weather.calibration_wu_forecasts import (
     ForecastHourRow,
     adjusted_predicted_tmax_c,
+    observed_running_max_c,
 )
 from polytempo.weather.schema import ForecastValues
 from polytempo.weather.stations import Station
@@ -94,14 +96,22 @@ def _history_observations_for_target_day(
     ]
 
 
+@dataclass(frozen=True)
+class WuLiveAdjustedTmax:
+    """Live WU adjusted daily Tmax plus same-day running observed max."""
+
+    predicted_tmax_c: float
+    observed_running_max_c: float | None
+
+
 def fetch_wu_adjusted_tmax_c(
     station: Station,
     target_date: date,
     *,
     as_of_utc: datetime,
     client: httpx.Client | None = None,
-) -> float | None:
-    """Fetch WU hourly forecast + same-day obs; return adjusted daily Tmax in °C."""
+) -> WuLiveAdjustedTmax | None:
+    """Fetch WU hourly forecast + same-day obs; return adjusted Tmax and running max."""
     as_of = as_of_utc.astimezone(dt_timezone.utc)
     own_client = client is None
     http = client or httpx.Client()
@@ -121,11 +131,21 @@ def fetch_wu_adjusted_tmax_c(
             country_code=country_code,
             client=http,
         )
-        return adjusted_predicted_tmax_c(
+        predicted = adjusted_predicted_tmax_c(
             target_date=target_date,
             as_of_utc=as_of,
             hourly_forecast_rows=hourly_rows,
             history_observations=history_rows,
+        )
+        if predicted is None:
+            return None
+        return WuLiveAdjustedTmax(
+            predicted_tmax_c=predicted,
+            observed_running_max_c=observed_running_max_c(
+                history_rows,
+                target_date=target_date,
+                as_of_utc=as_of,
+            ),
         )
     finally:
         if own_client:
@@ -143,12 +163,14 @@ def append_wunderground_snapshot_forecast(
     *,
     predicted_tmax_c: float,
     as_of_utc: datetime,
+    observed_running_max_c: float | None = None,
 ) -> ForecastValues:
     """Append WU adjusted Tmax from a historical snapshot (no live HTTP)."""
     return _append_wunderground_predicted(
         forecast,
         predicted_tmax_c=predicted_tmax_c,
         as_of_utc=as_of_utc,
+        observed_running_max_c=observed_running_max_c,
     )
 
 
@@ -157,6 +179,7 @@ def _append_wunderground_predicted(
     *,
     predicted_tmax_c: float,
     as_of_utc: datetime,
+    observed_running_max_c: float | None = None,
 ) -> ForecastValues:
     if forecast.models is None:
         raise ValueError("append_wunderground_forecast requires per-model ForecastValues")
@@ -178,6 +201,11 @@ def _append_wunderground_predicted(
         run_inits = _pad_to_model_count(list(forecast.model_run_init_utc), n_models, "")
         run_inits.append("")
 
+    floor = (
+        observed_running_max_c
+        if observed_running_max_c is not None
+        else forecast.observed_running_max_c
+    )
     return ForecastValues(
         source=forecast.source,
         latitude=forecast.latitude,
@@ -187,6 +215,7 @@ def _append_wunderground_predicted(
         models=[*forecast.models, WU_FORECAST_MODEL],
         init_lead_hours=init_leads,
         model_run_init_utc=run_inits,
+        observed_running_max_c=floor,
     )
 
 
@@ -205,7 +234,7 @@ def append_wunderground_forecast(
         return forecast
 
     try:
-        predicted = fetch_wu_adjusted_tmax_c(
+        adjusted = fetch_wu_adjusted_tmax_c(
             station,
             forecast.target_date,
             as_of_utc=as_of_utc,
@@ -220,7 +249,7 @@ def append_wunderground_forecast(
         )
         return forecast
 
-    if predicted is None:
+    if adjusted is None:
         logger.warning(
             "WU live forecast returned no adjusted Tmax station=%s target=%s",
             station.icao,
@@ -230,6 +259,7 @@ def append_wunderground_forecast(
 
     return _append_wunderground_predicted(
         forecast,
-        predicted_tmax_c=predicted,
+        predicted_tmax_c=adjusted.predicted_tmax_c,
         as_of_utc=as_of_utc,
+        observed_running_max_c=adjusted.observed_running_max_c,
     )

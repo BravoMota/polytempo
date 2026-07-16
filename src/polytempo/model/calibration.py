@@ -52,4 +52,5 @@ def calibrate_forecast(
             if forecast.model_run_init_utc is not None
             else None
         ),
+        observed_running_max_c=forecast.observed_running_max_c,
     )

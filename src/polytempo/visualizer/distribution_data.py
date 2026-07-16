@@ -455,6 +455,7 @@ def build_distribution_view(
                 forecast,
                 predicted_tmax_c=wu_snapshot.predicted_tmax_c,
                 as_of_utc=at_utc,
+                observed_running_max_c=wu_snapshot.observed_running_max_c,
             )
         overlays_strats, skipped = strat_overlays(
             forecast_for_strats,

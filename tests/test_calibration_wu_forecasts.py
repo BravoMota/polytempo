@@ -12,6 +12,7 @@ from polytempo.weather.calibration_wu_forecasts import (
     bucket_wall_clock_lead_hours,
     is_oclock_scrape,
     normalize_scrape_time,
+    observed_running_max_c,
 )
 
 
@@ -110,3 +111,45 @@ def test_adjusted_predicted_tmax_combines_obs_and_fc() -> None:
         ],
     )
     assert predicted == pytest.approx(26.0)
+
+
+def test_observed_running_max_c_respects_as_of_cutoff() -> None:
+    target = date(2026, 6, 8)
+    history = [
+        WuHistoryObservationRow(
+            station_id="EGLC",
+            target_date=target,
+            observed_at_utc=datetime(2026, 6, 8, 10, 0, tzinfo=timezone.utc),
+            observed_at_local=None,
+            temp_c=20.0,
+        ),
+        WuHistoryObservationRow(
+            station_id="EGLC",
+            target_date=target,
+            observed_at_utc=datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc),
+            observed_at_local=None,
+            temp_c=23.0,
+        ),
+        WuHistoryObservationRow(
+            station_id="EGLC",
+            target_date=target,
+            observed_at_utc=datetime(2026, 6, 8, 14, 0, tzinfo=timezone.utc),
+            observed_at_local=None,
+            temp_c=25.0,
+        ),
+    ]
+    as_of = datetime(2026, 6, 8, 12, 30, tzinfo=timezone.utc)
+    assert observed_running_max_c(
+        history, target_date=target, as_of_utc=as_of
+    ) == pytest.approx(23.0)
+
+
+def test_observed_running_max_c_empty_when_no_obs() -> None:
+    assert (
+        observed_running_max_c(
+            [],
+            target_date=date(2026, 6, 8),
+            as_of_utc=datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc),
+        )
+        is None
+    )

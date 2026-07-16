@@ -74,7 +74,14 @@ def test_calibrate_forecast_with_rule_applies_correction() -> None:
 
 
 def test_calibrate_forecast_preserves_metadata() -> None:
-    forecast = _forecast([24.7])
+    forecast = ForecastValues(
+        source="open_meteo",
+        latitude=40.4168,
+        longitude=-3.7038,
+        target_date=date(2026, 5, 14),
+        values_c=[24.7],
+        observed_running_max_c=22.0,
+    )
     rule = CalibrationRule(source="open_meteo", station_id="station-1", bias_c=0.4)
 
     calibrated = calibrate_forecast(forecast, rule)
@@ -83,6 +90,7 @@ def test_calibrate_forecast_preserves_metadata() -> None:
     assert calibrated.latitude == forecast.latitude
     assert calibrated.longitude == forecast.longitude
     assert calibrated.target_date == forecast.target_date
+    assert calibrated.observed_running_max_c == pytest.approx(22.0)
 
 
 def test_calibrate_forecast_does_not_mutate_original_forecast() -> None:

@@ -897,3 +897,34 @@ def test_analyze_event_weighted_historical_market_sigma_failure_stays_whums(
     assert result.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA
     assert result.fallback_reason == "no_calibration_csv"
     assert result.rows == []
+
+
+def test_analyze_event_conditions_probs_on_observed_running_max() -> None:
+    labels = ["19°C", "20°C", "21°C", "22°C", "23°C"]
+    base = _forecast([21.0])
+    with_floor = ForecastValues(
+        source=base.source,
+        latitude=base.latitude,
+        longitude=base.longitude,
+        target_date=base.target_date,
+        values_c=list(base.values_c),
+        models=base.models,
+        observed_running_max_c=21.0,
+    )
+    without = analyze_event(base, _event(labels, yes_ask=0.20))
+    with_cond = analyze_event(with_floor, _event(labels, yes_ask=0.20))
+
+    without_by = {row.label: row.probability for row in without.rows}
+    with_by = {row.label: row.probability for row in with_cond.rows}
+    assert with_by["19°C"] == 0.0
+    assert with_by["20°C"] == 0.0
+    assert with_by["21°C"] > without_by["21°C"]
+    assert sum(with_by.values()) == pytest.approx(1.0)
+    assert with_cond.distribution_params is not None
+    floor = with_cond.distribution_params["observed_floor"]
+    assert floor["applied"] is True
+    assert floor["policy"] == "renormalize"
+    assert floor["floor_c"] == pytest.approx(21.0)
+    assert without.distribution_params is None or "observed_floor" not in (
+        without.distribution_params or {}
+    )
