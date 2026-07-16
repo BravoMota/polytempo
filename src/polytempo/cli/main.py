@@ -35,6 +35,7 @@ from polytempo.analysis import (
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
     AnalysisInput,
     AnalysisResult,
     analyze,
@@ -120,6 +121,7 @@ class ModelStrategy(str, Enum):
     BEST_HISTORICAL_UPDATED = MODEL_STRATEGY_BEST_HISTORICAL_UPDATED
     WEIGHTED_HISTORICAL_UPDATED = MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
     WEIGHTED_HISTORICAL_MARKET_SIGMA = MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA
+    WEIGHTED_HISTORICAL_UPDATED_SHARP = MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP
 
 
 class LiveMode(str, Enum):
@@ -470,6 +472,8 @@ def _run_live_one_day(
             if model_strategy in (
                 ModelStrategy.BEST_HISTORICAL_UPDATED,
                 ModelStrategy.WEIGHTED_HISTORICAL_UPDATED,
+                ModelStrategy.WEIGHTED_HISTORICAL_MARKET_SIGMA,
+                ModelStrategy.WEIGHTED_HISTORICAL_UPDATED_SHARP,
             ):
                 cal_path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
 
@@ -522,7 +526,12 @@ def _run_live_one_day(
                     err=True,
                 )
             if (
-                model_strategy is ModelStrategy.WEIGHTED_HISTORICAL_UPDATED
+                model_strategy
+                in (
+                    ModelStrategy.WEIGHTED_HISTORICAL_UPDATED,
+                    ModelStrategy.WEIGHTED_HISTORICAL_MARKET_SIGMA,
+                    ModelStrategy.WEIGHTED_HISTORICAL_UPDATED_SHARP,
+                )
                 and preview_result.fallback_reason is not None
             ):
                 typer.echo(
@@ -636,6 +645,8 @@ def _run_live_one_day(
                 ModelStrategy.BEST_HISTORICAL,
                 ModelStrategy.BEST_HISTORICAL_UPDATED,
                 ModelStrategy.WEIGHTED_HISTORICAL_UPDATED,
+                ModelStrategy.WEIGHTED_HISTORICAL_MARKET_SIGMA,
+                ModelStrategy.WEIGHTED_HISTORICAL_UPDATED_SHARP,
             ):
                 typer.echo(f"calibration per-model ceiling ({cal_path.name}):")
                 typer.echo(

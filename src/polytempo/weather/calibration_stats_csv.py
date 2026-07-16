@@ -36,6 +36,11 @@ WEIGHTED_PRECISION_EXPONENT = 2.0
 WEIGHTED_DISAGREEMENT_WEIGHT = 0.2
 WEIGHTED_CALIBRATION_METHOD = "weighted_calibrated_mixture_p2.0"
 
+# WHUS (sharp): steeper precision weights, ignore live model disagreement in σ.
+WEIGHTED_SHARP_PRECISION_EXPONENT = 2.8
+WEIGHTED_SHARP_DISAGREEMENT_WEIGHT = 0.0
+WEIGHTED_SHARP_CALIBRATION_METHOD = "weighted_calibrated_mixture_p2.8"
+
 LEAD_HOURS_ANCHOR_RUN_INIT = "run_init"
 LEAD_HOURS_ANCHOR_SCRAPED_AT = "scraped_at"
 
@@ -134,12 +139,15 @@ def build_weighted_distribution_params(
     result: WeightedSelectionResult,
     *,
     excluded_models: tuple[str, ...] = (),
+    precision_exponent: float = WEIGHTED_PRECISION_EXPONENT,
+    disagreement_weight: float = WEIGHTED_DISAGREEMENT_WEIGHT,
+    method: str = WEIGHTED_CALIBRATION_METHOD,
 ) -> dict[str, object]:
-    """Audit payload for a successful WHU fit."""
+    """Audit payload for a successful WHU / WHUS fit."""
     return {
-        "method": WEIGHTED_CALIBRATION_METHOD,
-        "precision_exponent": WEIGHTED_PRECISION_EXPONENT,
-        "disagreement_weight": WEIGHTED_DISAGREEMENT_WEIGHT,
+        "method": method,
+        "precision_exponent": precision_exponent,
+        "disagreement_weight": disagreement_weight,
         "mean_c": result.mean_c,
         "sigma_c": result.sigma_c,
         "within_variance": result.within_variance,
@@ -464,11 +472,13 @@ def select_weighted_models(
     predicted_tmax_by_model: dict[str, float],
     *,
     init_lead_hours_by_model: dict[str, float] | None = None,
+    precision_exponent: float = WEIGHTED_PRECISION_EXPONENT,
+    disagreement_weight: float = WEIGHTED_DISAGREEMENT_WEIGHT,
 ) -> WeightedSelectionAttempt:
     """Build a precision-weighted mixture over eligible calibrated models.
 
-    Weights use ``(1 / error_std_c²) ** WEIGHTED_PRECISION_EXPONENT``. Sigma uses
-    mixture variance: within (historical error) + between (model disagreement).
+    Weights use ``(1 / error_std_c²) ** precision_exponent``. Sigma uses
+    mixture variance: within + ``disagreement_weight`` × between.
     """
     excluded: list[str] = []
     pending: list[tuple[str, CalibrationStatRow, float, float, float]] = []
@@ -521,7 +531,7 @@ def select_weighted_models(
         return WeightedSelectionAttempt(result=None, excluded_models=tuple(excluded))
 
     raw_weights = [
-        (1.0 / (error_std**2)) ** WEIGHTED_PRECISION_EXPONENT
+        (1.0 / (error_std**2)) ** precision_exponent
         for _, _, error_std, _, _ in pending
     ]
     weight_sum = sum(raw_weights)
@@ -536,7 +546,7 @@ def select_weighted_models(
         w * (corrected - mean_c) ** 2
         for w, (_, _, _, corrected, _) in zip(normalized, pending, strict=True)
     )
-    sigma_squared = within + WEIGHTED_DISAGREEMENT_WEIGHT * between
+    sigma_squared = within + disagreement_weight * between
     sigma_c = math.sqrt(sigma_squared)
 
     contributions = tuple(

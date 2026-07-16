@@ -8,6 +8,8 @@ from pathlib import Path
 
 from polytempo.analysis import (
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     AnalysisResult,
 )
 from polytempo.model.distribution import DistributionBuildInfo
@@ -501,7 +503,12 @@ def format_distribution_md(
         f"- model_strategy: `{model_strategy}`",
     ]
     if (
-        model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED
+        model_strategy
+        in (
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
+        )
         and result.fallback_reason is not None
     ):
         lines.append(f"- error: `{result.fallback_reason}`")

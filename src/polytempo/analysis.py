@@ -30,6 +30,11 @@ from polytempo.visualizer.bucket_math import cap_sigma_to_market
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     WEIGHTED_CALIBRATION_METHOD,
+    WEIGHTED_DISAGREEMENT_WEIGHT,
+    WEIGHTED_PRECISION_EXPONENT,
+    WEIGHTED_SHARP_CALIBRATION_METHOD,
+    WEIGHTED_SHARP_DISAGREEMENT_WEIGHT,
+    WEIGHTED_SHARP_PRECISION_EXPONENT,
     CalibrationStatRow,
     WeightedModelContribution,
     build_weighted_distribution_params,
@@ -47,12 +52,14 @@ MODEL_STRATEGY_BEST_HISTORICAL = "best_historical"
 MODEL_STRATEGY_BEST_HISTORICAL_UPDATED = "best_historical_updated"
 MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED = "weighted_historical_updated"
 MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA = "weighted_historical_market_sigma"
+MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP = "weighted_historical_updated_sharp"
 MODEL_STRATEGIES: tuple[str, ...] = (
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     MODEL_STRATEGY_BEST_HISTORICAL,
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
 )
 
 _BEST_HISTORICAL_STRATEGIES = frozenset(
@@ -64,15 +71,36 @@ _BEST_HISTORICAL_STRATEGIES = frozenset(
 _CALIBRATED_STRATEGIES = _BEST_HISTORICAL_STRATEGIES | {
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
 }
 _WEIGHTED_HISTORICAL_STRATEGIES = frozenset(
     {
         MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
         MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+        MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
     }
 )
 _SKIP_ON_FALLBACK_STRATEGIES = _CALIBRATED_STRATEGIES
 WEIGHTED_HISTORICAL_MARKET_SIGMA_METHOD = "weighted_historical_market_sigma_cap"
+
+# (precision_exponent, disagreement_weight, method_id) per weighted strategy.
+_WEIGHTED_MIXTURE_PARAMS: dict[str, tuple[float, float, str]] = {
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED: (
+        WEIGHTED_PRECISION_EXPONENT,
+        WEIGHTED_DISAGREEMENT_WEIGHT,
+        WEIGHTED_CALIBRATION_METHOD,
+    ),
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA: (
+        WEIGHTED_PRECISION_EXPONENT,
+        WEIGHTED_DISAGREEMENT_WEIGHT,
+        WEIGHTED_CALIBRATION_METHOD,
+    ),
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP: (
+        WEIGHTED_SHARP_PRECISION_EXPONENT,
+        WEIGHTED_SHARP_DISAGREEMENT_WEIGHT,
+        WEIGHTED_SHARP_CALIBRATION_METHOD,
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -272,7 +300,10 @@ def _resolve_weighted_historical(
     calibration_stats_path: Path,
     resolved_strategy: str,
 ) -> _StrategyResolution:
-    """Shared WHU / WHU+market-sigma resolution path."""
+    """Shared WHU / WHUS / WHU+market-sigma resolution path."""
+    precision_exponent, disagreement_weight, method = _WEIGHTED_MIXTURE_PARAMS[
+        resolved_strategy
+    ]
     prereq_reason, init_lead_hours_by_model = _validate_calibration_prerequisites(
         forecast=forecast,
         station_id=station_id,
@@ -292,6 +323,8 @@ def _resolve_weighted_historical(
         current_lead_hours=current_lead_hours,
         predicted_tmax_by_model=_predicted_tmax_by_model(forecast),
         init_lead_hours_by_model=init_lead_hours_by_model,
+        precision_exponent=precision_exponent,
+        disagreement_weight=disagreement_weight,
     )
     if attempt.result is None:
         return _weighted_historical_failure(
@@ -307,6 +340,9 @@ def _resolve_weighted_historical(
     distribution_params = build_weighted_distribution_params(
         result,
         excluded_models=attempt.excluded_models,
+        precision_exponent=precision_exponent,
+        disagreement_weight=disagreement_weight,
+        method=method,
     )
     top = max(result.contributions, key=lambda c: c.weight)
     return _StrategyResolution(
@@ -342,22 +378,13 @@ def _resolve_strategy(
             calibrated_sigma=None,
         )
 
-    if requested_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED:
+    if requested_strategy in _WEIGHTED_HISTORICAL_STRATEGIES:
         return _resolve_weighted_historical(
             forecast=forecast,
             station_id=station_id,  # type: ignore[arg-type]
             current_lead_hours=current_lead_hours,  # type: ignore[arg-type]
             calibration_stats_path=calibration_stats_path,
-            resolved_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
-        )
-
-    if requested_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA:
-        return _resolve_weighted_historical(
-            forecast=forecast,
-            station_id=station_id,  # type: ignore[arg-type]
-            current_lead_hours=current_lead_hours,  # type: ignore[arg-type]
-            calibration_stats_path=calibration_stats_path,
-            resolved_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+            resolved_strategy=requested_strategy,
         )
 
     if requested_strategy not in _BEST_HISTORICAL_STRATEGIES:
@@ -472,11 +499,11 @@ def _build_distribution_from_resolution(
             if resolution.weighted_contributions is not None
             else list(calibrated.values_c)
         )
-        method = (
-            WEIGHTED_CALIBRATION_METHOD
-            if resolution.strategy in _WEIGHTED_HISTORICAL_STRATEGIES
-            else "calibrated_single_model"
-        )
+        if resolution.strategy in _WEIGHTED_HISTORICAL_STRATEGIES:
+            params = resolution.distribution_params or {}
+            method = str(params.get("method", WEIGHTED_CALIBRATION_METHOD))
+        else:
+            method = "calibrated_single_model"
         distribution, distribution_build = build_calibrated_distribution(
             mu=resolution.calibrated_mu,
             sigma=resolution.calibrated_sigma,

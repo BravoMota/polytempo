@@ -60,6 +60,7 @@ _UPDATED_CSV_STRATEGIES = frozenset(
         "best_historical_updated",
         "weighted_historical_updated",
         "weighted_historical_market_sigma",
+        "weighted_historical_updated_sharp",
     }
 )
 _BEST_HISTORICAL_STRATEGIES = frozenset(

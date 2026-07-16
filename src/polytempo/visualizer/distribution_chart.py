@@ -28,6 +28,7 @@ STRAT_COLORS = {
     "best_historical_updated": "#17becf",
     "weighted_historical_updated": "#e377c2",
     "weighted_historical_market_sigma": "#bcbd22",
+    "weighted_historical_updated_sharp": "#8c564b",
 }
 FORECAST_COLORS = {"wunderground": "#9467bd"}
 _MARKET_COLOR = "#4da6ff"

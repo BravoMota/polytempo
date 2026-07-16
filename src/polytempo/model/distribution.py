@@ -226,6 +226,10 @@ _METHOD_DESCRIPTIONS: dict[str, str] = {
         "WHU mean with sigma capped to market-implied discrete std when means "
         "agree within 1 °C."
     ),
+    "weighted_calibrated_mixture_p2.8": (
+        "Sharp WHU (WHUS): precision-weighted blend with p=2.8 and "
+        "disagreement_weight=0 (sigma = sqrt(within) only)."
+    ),
 }
 
 

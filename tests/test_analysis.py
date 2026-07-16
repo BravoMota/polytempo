@@ -10,6 +10,7 @@ from polytempo.analysis import (
     MODEL_STRATEGY_ENSEMBLE_SPREAD,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
     AnalysisInput,
     analyze,
     analyze_event,
@@ -779,6 +780,49 @@ def test_analyze_event_weighted_historical_updated_failure_stays_whu(tmp_path: P
     assert result.rows == []
     assert result.distribution_params is not None
     assert result.distribution_params["error"] == "no_calibration_csv"
+
+
+def test_analyze_event_weighted_historical_updated_sharp_params(tmp_path: Path) -> None:
+    csv_path = tmp_path / "calibration_stats_updated.csv"
+    _write_calibration_csv(
+        csv_path,
+        [
+            "EGLC,alpha,24,40,0.0,1.5,1.8,1.0",
+            "EGLC,beta,24,40,0.0,0.9,1.0,1.2",
+            "EGLC,gamma,24,40,0.0,1.0,1.2,1.5",
+        ],
+    )
+    forecast = _forecast([28.0, 28.2, 30.5], models=["alpha", "beta", "gamma"])
+
+    whu = analyze_event(
+        forecast,
+        _event(["28°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+    whus = analyze_event(
+        forecast,
+        _event(["28°C"]),
+        lead_hours=12.0,
+        model_strategy=MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
+        station_id="EGLC",
+        calibration_stats_path=csv_path,
+    )
+
+    assert whus.model_strategy == MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP
+    assert whus.fallback_reason is None
+    assert whus.distribution_params is not None
+    assert whus.distribution_params["precision_exponent"] == 2.8
+    assert whus.distribution_params["disagreement_weight"] == 0.0
+    assert whus.distribution_params["method"] == "weighted_calibrated_mixture_p2.8"
+    assert whus.distribution_build.method == "weighted_calibrated_mixture_p2.8"
+    # λ=0 => σ = sqrt(within); should be tighter than WHU when models disagree.
+    assert whus.distribution_sigma_c < whu.distribution_sigma_c
+    assert whus.distribution_params["sigma_squared"] == pytest.approx(
+        whus.distribution_params["within_variance"]
+    )
 
 
 def test_cap_sigma_to_market_when_means_agree() -> None:

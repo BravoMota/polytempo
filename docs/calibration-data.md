@@ -36,6 +36,14 @@ Uses the same `calibration_stats_updated.csv` and eligibility rules as BHU, but 
 - On failure: logs warning/error, **no** `ensemble_spread` substitution; paper bot skips trade with `model_strategy_fallback`.
 - Audit metadata includes `distribution_params` (within/between variance, per-model contributions).
 
+### `weighted_historical_updated_sharp` (WHUS)
+
+Same eligibility / CSV as WHU, with sharper mixture knobs:
+
+- Weights: `w_i ∝ (1 / error_std_c²)^2.8`
+- Sigma: `σ² = within` only (`disagreement_weight = 0`)
+- Profile abbrev: `whus` (registered for backtest; not wired into paper wallets by default)
+
 Paper profiles use `{bh|bhu|whu}_{trade}_{leadN}` — `ensemble_spread` is CLI-only, not in the paper bot grid.
 
 ## Frozen V1 path (`best_historical`)

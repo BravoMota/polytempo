@@ -38,6 +38,7 @@ model_strategies:
   - weighted_historical_updated
   # Registered but not wired into paper wallets (opt-in via backtest):
   # - weighted_historical_market_sigma
+  # - weighted_historical_updated_sharp
   # - ensemble_spread
 
 trade_strategies:

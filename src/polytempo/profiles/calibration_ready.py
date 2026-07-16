@@ -10,6 +10,7 @@ from polytempo.analysis import (
     MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
     MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+    MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
 )
 from polytempo.profiles.models import TradingProfile
 from polytempo.weather.calibration_stats_csv import read_calibration_stats_csv
@@ -49,6 +50,7 @@ def filter_profiles_by_calibration(
             MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
             MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
             MODEL_STRATEGY_WEIGHTED_HISTORICAL_MARKET_SIGMA,
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED_SHARP,
         ):
             ready, reason = calibration_csv_ready(
                 profile.calibration_stats_path,

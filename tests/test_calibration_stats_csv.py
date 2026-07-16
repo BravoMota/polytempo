@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,8 @@ from polytempo.weather.calibration_stats_csv import (
     CalibrationStatRow,
     WEIGHTED_DISAGREEMENT_WEIGHT,
     WEIGHTED_PRECISION_EXPONENT,
+    WEIGHTED_SHARP_DISAGREEMENT_WEIGHT,
+    WEIGHTED_SHARP_PRECISION_EXPONENT,
     read_calibration_stats_csv,
     select_best_model,
     select_ceiling_row,
@@ -535,9 +538,46 @@ def test_select_weighted_models_disagreeing_outlier() -> None:
     assert result.between_variance > result.within_variance * 0.3
 
 
+def test_select_weighted_models_sharp_ignores_disagreement() -> None:
+    rows = [
+        _row(model="alpha", lead_hours=24.0, error_std_c=1.0, bias_c=0.0),
+        _row(model="beta", lead_hours=24.0, error_std_c=1.2, bias_c=0.0),
+        _row(model="gamma", lead_hours=24.0, error_std_c=1.5, bias_c=0.0),
+    ]
+    attempt = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta", "gamma"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0, "beta": 28.2, "gamma": 30.5},
+        precision_exponent=2.8,
+        disagreement_weight=0.0,
+    )
+    assert attempt.result is not None
+    result = attempt.result
+    assert result.between_variance > 0.0
+    assert result.sigma_squared == pytest.approx(result.within_variance)
+    assert result.sigma_c == pytest.approx(math.sqrt(result.within_variance))
+    # p=2.8 should concentrate more weight on the best (lowest-σ) model than p=2.
+    default = select_weighted_models(
+        rows,
+        station_id="EGLC",
+        available_models=["alpha", "beta", "gamma"],
+        current_lead_hours=12.0,
+        predicted_tmax_by_model={"alpha": 28.0, "beta": 28.2, "gamma": 30.5},
+    )
+    assert default.result is not None
+    sharp_top = max(result.contributions, key=lambda c: c.weight)
+    default_top = max(default.result.contributions, key=lambda c: c.weight)
+    assert sharp_top.model == "alpha"
+    assert sharp_top.weight > default_top.weight
+
+
 def test_weighted_precision_exponent_is_two() -> None:
     assert WEIGHTED_PRECISION_EXPONENT == 2.0
     assert WEIGHTED_DISAGREEMENT_WEIGHT == 0.2
+    assert WEIGHTED_SHARP_PRECISION_EXPONENT == 2.8
+    assert WEIGHTED_SHARP_DISAGREEMENT_WEIGHT == 0.0
 
 
 # Quiet pyflakes / linters about unused pytest import when no parametrize.
