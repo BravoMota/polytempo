@@ -661,86 +661,107 @@ def run_backtest(
     store = InMemoryLedgerStore()
     results = {p.id: ProfileBacktestResult(profile_id=p.id) for p in hold_profiles}
     events_processed = 0
+    days = _date_range(start, end)
+    total_days = len(days)
+    logger.info(
+        "backtest starting: %d profiles over %d calendar days (%s..%s)",
+        len(hold_profiles),
+        total_days,
+        start.isoformat(),
+        end.isoformat(),
+    )
 
-    for settlement_date in _date_range(start, end):
+    for day_i, settlement_date in enumerate(days, start=1):
         event = resolved_event_for_date(city, settlement_date)
         if event is None:
             logger.info("no event discovered for %s", settlement_date.isoformat())
-            continue
-        events_processed += 1
+        else:
+            events_processed += 1
 
-        for profile in hold_profiles:
-            result = results[profile.id]
-            at_utc = gate_target_utc(
-                settlement_date, profile.entry_gate.target_lead_hours
-            )
-            inputs, skip_reason = resolved_input_builder(
-                profile, event, settlement_date, at_utc
-            )
-            if inputs is None:
-                _bump_skip(result, skip_reason or "no_inputs")
-                continue
-
-            gate_profile = replace(
-                profile, calibration_stats_path=inputs.calibration_path
-            )
-            open_result = run_profile(
-                store,
-                gate_profile,
-                inputs.forecast,
-                inputs.open_event,
-                lead_hours=inputs.lead_hours,
-                dedupe=True,
-                enforce_gate=True,
-            )
-            if open_result.action != "OPENED":
-                _bump_skip(result, open_result.action)
-                # Nothing opened -> nothing to settle for this profile/event.
-                if not open_result.opened:
+            for profile in hold_profiles:
+                result = results[profile.id]
+                at_utc = gate_target_utc(
+                    settlement_date, profile.entry_gate.target_lead_hours
+                )
+                inputs, skip_reason = resolved_input_builder(
+                    profile, event, settlement_date, at_utc
+                )
+                if inputs is None:
+                    _bump_skip(result, skip_reason or "no_inputs")
                     continue
 
-            if inputs.winning_label is None:
-                _bump_skip(result, "unresolved_no_winner")
-                logger.warning(
-                    "event %s has no winning bucket; leaving %s positions open",
-                    event.event_id,
-                    profile.id,
+                gate_profile = replace(
+                    profile, calibration_stats_path=inputs.calibration_path
                 )
-                continue
+                open_result = run_profile(
+                    store,
+                    gate_profile,
+                    inputs.forecast,
+                    inputs.open_event,
+                    lead_hours=inputs.lead_hours,
+                    dedupe=True,
+                    enforce_gate=True,
+                )
+                if open_result.action != "OPENED":
+                    _bump_skip(result, open_result.action)
+                    # Nothing opened -> nothing to settle for this profile/event.
+                    if not open_result.opened:
+                        continue
 
-            settle_result = run_profile(
-                store,
-                gate_profile,
-                inputs.forecast,
-                inputs.resolved_event,
-                lead_hours=inputs.lead_hours,
-                dedupe=True,
-                enforce_gate=False,
-            )
-            for trade in settle_result.settled:
-                bucket_won = trade.bucket_label == inputs.winning_label
-                won = bucket_won if trade.side == "YES" else not bucket_won
-                payout = round(trade.shares, 4) if won else 0.0
-                result.trades.append(
-                    BacktestTrade(
-                        profile_id=profile.id,
-                        event_id=event.event_id,
-                        settlement_date=settlement_date,
-                        bucket_label=trade.bucket_label,
-                        side=trade.side,
-                        entry_price=trade.entry_price or 0.0,
-                        stake_usd=trade.stake_usd,
-                        shares=trade.shares,
-                        edge_pp=trade.edge_pp,
-                        won=won,
-                        payout_usd=payout,
+                if inputs.winning_label is None:
+                    _bump_skip(result, "unresolved_no_winner")
+                    logger.warning(
+                        "event %s has no winning bucket; leaving %s positions open",
+                        event.event_id,
+                        profile.id,
                     )
-                )
+                    continue
 
-            balance = store.read_state(profile.id).balance_usd
-            result.final_balance = balance
-            if settle_result.settled:
-                result.equity_curve.append((settlement_date, balance))
+                settle_result = run_profile(
+                    store,
+                    gate_profile,
+                    inputs.forecast,
+                    inputs.resolved_event,
+                    lead_hours=inputs.lead_hours,
+                    dedupe=True,
+                    enforce_gate=False,
+                )
+                for trade in settle_result.settled:
+                    bucket_won = trade.bucket_label == inputs.winning_label
+                    won = bucket_won if trade.side == "YES" else not bucket_won
+                    payout = round(trade.shares, 4) if won else 0.0
+                    result.trades.append(
+                        BacktestTrade(
+                            profile_id=profile.id,
+                            event_id=event.event_id,
+                            settlement_date=settlement_date,
+                            bucket_label=trade.bucket_label,
+                            side=trade.side,
+                            entry_price=trade.entry_price or 0.0,
+                            stake_usd=trade.stake_usd,
+                            shares=trade.shares,
+                            edge_pp=trade.edge_pp,
+                            won=won,
+                            payout_usd=payout,
+                        )
+                    )
+
+                balance = store.read_state(profile.id).balance_usd
+                result.final_balance = balance
+                if settle_result.settled:
+                    result.equity_curve.append((settlement_date, balance))
+
+        pct = 100.0 * day_i / total_days
+        status = "event" if event is not None else "no event"
+        logger.info(
+            "backtest progress: %d/%d days done (%.0f%%) — %s (%s, %d profiles)",
+            day_i,
+            total_days,
+            pct,
+            settlement_date.isoformat(),
+            status,
+            len(hold_profiles),
+        )
 
     return BacktestResult(
         start=start,

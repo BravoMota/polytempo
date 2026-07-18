@@ -350,7 +350,13 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
+        force=True,
     )
+    # Keep progress lines visible promptly when stdout/stderr are redirected to a file.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(line_buffering=True)
 
     raw_budget = args.event_budget if args.event_budget is not None else args.sizing_mode
     event_budget = _normalize_event_budget(raw_budget)
