@@ -42,10 +42,10 @@ from polytempo.paper.ledger import (
     LedgerState,
     OpenTrade,
     _entry_price,
-    stake_fraction,
 )
 from polytempo.paper.run import run_profile
-from polytempo.profiles.models import TradingProfile
+from polytempo.paper.sizing import allocate_stakes
+from polytempo.profiles.models import SIZING_MODE_LEGACY, TradingProfile
 from polytempo.storage.paper_postgres import STARTING_BALANCE_USD
 from polytempo.storage.snapshot_reads import (
     fetch_backtest_event_ids,
@@ -119,6 +119,8 @@ class InMemoryLedgerStore:
         lead_hours: float | None = None,
         model_strategy: str | None = None,
         audit_metadata: dict | None = None,
+        sizing_mode: str = SIZING_MODE_LEGACY,
+        event_budget_fraction: float | None = None,
     ) -> list[OpenTrade]:
         state = self.read_state(profile_id)
         balance = state.balance_usd
@@ -126,6 +128,7 @@ class InMemoryLedgerStore:
         opened: list[OpenTrade] = []
         records = self._events.setdefault(profile_id, [])
 
+        eligible = []
         for row in analysis.rows:
             if row.action not in ("BUY_YES", "BUY_NO"):
                 continue
@@ -136,15 +139,18 @@ class InMemoryLedgerStore:
             entry_price = _entry_price(row)
             if entry_price is None or entry_price <= 0:
                 continue
-            if balance <= 0:
-                break
-            if row.stake_usd is not None:
-                stake = round(row.stake_usd, 2)
-            elif row.stake_fraction is not None:
-                stake = round(balance * row.stake_fraction, 2)
-            else:
-                frac = stake_fraction(row.edge_yes_pp)
-                stake = round(balance * frac, 2)
+            eligible.append(row)
+
+        allocated = allocate_stakes(
+            eligible,
+            balance,
+            sizing_mode=sizing_mode,
+            event_budget_fraction=event_budget_fraction,
+        )
+
+        for row, stake in allocated:
+            entry_price = _entry_price(row)
+            assert entry_price is not None and entry_price > 0
             if stake <= 0 or stake > balance:
                 continue
             shares = round(stake / entry_price, 4)
@@ -153,7 +159,7 @@ class InMemoryLedgerStore:
                 event_id=event_id,
                 bucket_label=row.label,
                 yes_ask=row.yes_ask if row.yes_ask is not None else 0.0,
-                edge_pp=row.edge_yes_pp,
+                edge_pp=row.edge_yes_pp if row.edge_yes_pp is not None else 0.0,
                 stake_usd=stake,
                 shares=shares,
                 side=row.side,

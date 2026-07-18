@@ -7,7 +7,14 @@ from pathlib import Path
 import yaml
 
 from polytempo.analysis import MODEL_STRATEGIES
-from polytempo.profiles.models import ActiveParams, EntryGate, ExitPolicy, TradingProfile
+from polytempo.profiles.models import (
+    ActiveParams,
+    EntryGate,
+    ExitPolicy,
+    SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
+    SIZING_MODE_LEGACY,
+    TradingProfile,
+)
 from polytempo.profiles.registry import known_trade_strategies
 from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
@@ -229,6 +236,42 @@ def generate_active_profiles(
     return profiles
 
 
+def generate_budget_normalize_wallet_percent_profiles(
+    hold_profiles: list[TradingProfile],
+    *,
+    event_budget_fraction: float,
+) -> list[TradingProfile]:
+    """Clone hold profiles as ``_bnwp`` twins (budget_normalize_wallet_percent).
+
+    Does not clone xsell or active wallets — pass only legacy hold profiles.
+    """
+    if not (0.0 < event_budget_fraction <= 1.0):
+        raise ValueError(
+            f"event_budget_fraction must be in (0, 1], got {event_budget_fraction}"
+        )
+    profiles: list[TradingProfile] = []
+    for base in hold_profiles:
+        if base.exit_policy is not None or base.active_params is not None:
+            continue
+        if base.sizing_mode != SIZING_MODE_LEGACY:
+            continue
+        profiles.append(
+            TradingProfile(
+                id=f"{base.id}_bnwp",
+                model_strategy=base.model_strategy,
+                trade_strategy=base.trade_strategy,
+                entry_gate=base.entry_gate,
+                calibration_stats_path=base.calibration_stats_path,
+                city=base.city,
+                target_day=base.target_day,
+                enabled=base.enabled,
+                sizing_mode=SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
+                event_budget_fraction=event_budget_fraction,
+            )
+        )
+    return profiles
+
+
 def load_paper_profiles(
     path: Path = DEFAULT_PROFILES_PATH,
 ) -> list[TradingProfile]:
@@ -292,7 +335,14 @@ def load_paper_profiles(
         target_day=target_day,
     )
 
-    extra = xsell + active_wallets
+    event_budget_raw = raw.get("event_budget_fraction", 0.10)
+    event_budget_fraction = float(event_budget_raw)
+    bnwp = generate_budget_normalize_wallet_percent_profiles(
+        [p for p in all_profiles if p.enabled],
+        event_budget_fraction=event_budget_fraction,
+    )
+
+    extra = xsell + active_wallets + bnwp
 
     active = raw.get("active_profiles")
     if active == "all_twelve" or active is None:
@@ -304,6 +354,15 @@ def load_paper_profiles(
             if pid not in by_id:
                 raise ValueError(f"unknown profile id in active_profiles: {pid!r}")
             out.append(by_id[pid])
-        return out + extra
+        # When a subset of hold ids is selected, still attach _bnwp twins for those.
+        return (
+            out
+            + xsell
+            + active_wallets
+            + generate_budget_normalize_wallet_percent_profiles(
+                out,
+                event_budget_fraction=event_budget_fraction,
+            )
+        )
 
     raise ValueError(f"invalid active_profiles: {active!r}")

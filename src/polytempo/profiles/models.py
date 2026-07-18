@@ -78,6 +78,13 @@ class ActiveParams:
             )
 
 
+SIZING_MODE_LEGACY = "legacy"
+SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT = "budget_normalize_wallet_percent"
+_SIZING_MODES = frozenset(
+    {SIZING_MODE_LEGACY, SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT}
+)
+
+
 @dataclass(frozen=True)
 class TradingProfile:
     """One global paper-trading profile (model + action + entry timing)."""
@@ -92,10 +99,26 @@ class TradingProfile:
     enabled: bool = True
     exit_policy: ExitPolicy | None = None
     active_params: ActiveParams | None = None
+    sizing_mode: str = SIZING_MODE_LEGACY
+    event_budget_fraction: float | None = None
 
     def __post_init__(self) -> None:
         if not self.id or "/" in self.id or "\\" in self.id:
             raise ValueError(f"invalid profile id: {self.id!r}")
+        if self.sizing_mode not in _SIZING_MODES:
+            raise ValueError(
+                f"sizing_mode must be one of {sorted(_SIZING_MODES)}, "
+                f"got {self.sizing_mode!r}"
+            )
+        if self.sizing_mode == SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT:
+            if (
+                self.event_budget_fraction is None
+                or not (0.0 < self.event_budget_fraction <= 1.0)
+            ):
+                raise ValueError(
+                    "event_budget_fraction must be in (0, 1] when "
+                    f"sizing_mode={SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT!r}"
+                )
 
     @property
     def is_active(self) -> bool:

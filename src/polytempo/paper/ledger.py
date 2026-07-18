@@ -3,8 +3,12 @@
 Append-only OPEN, SETTLE and CLOSE events in ``paper_events``. Demo account
 starts at $1000 per profile. Stake per BUY is 2-5% of current balance, scaled
 linearly by model edge; a decision's ``stake_usd`` (flat ticket) or
-``stake_fraction`` (fraction of current balance) overrides the ramp. CLOSE is
-an early exit (active-sell) at the live mark, written by ``close_position``.
+``stake_fraction`` (fraction of current balance) overrides the ramp. Profiles
+with ``sizing_mode=budget_normalize_wallet_percent`` renormalize implied
+stakes onto ``event_budget_fraction × balance`` (with dust/min-ticket floors)
+instead.
+CLOSE is an early exit (active-sell) at the live mark, written by
+``close_position``.
 """
 
 from __future__ import annotations
@@ -15,6 +19,15 @@ from datetime import datetime, timezone
 from typing import Protocol
 
 from polytempo.analysis import AnalysisResult
+from polytempo.paper.sizing import (
+    EDGE_CEILING_PP,
+    EDGE_FLOOR_PP,
+    MAX_STAKE_FRAC,
+    MIN_STAKE_FRAC,
+    allocate_stakes,
+    stake_fraction,
+)
+from polytempo.profiles.models import SIZING_MODE_LEGACY
 from polytempo.storage.paper_postgres import (
     PaperEventRow,
     STARTING_BALANCE_USD,
@@ -24,10 +37,18 @@ from polytempo.storage.paper_postgres import (
     resolve_paper_database_url,
 )
 
-MIN_STAKE_FRAC = 0.02
-MAX_STAKE_FRAC = 0.05
-EDGE_FLOOR_PP = 7.0
-EDGE_CEILING_PP = 15.0
+__all__ = [
+    "EDGE_CEILING_PP",
+    "EDGE_FLOOR_PP",
+    "MAX_STAKE_FRAC",
+    "MIN_STAKE_FRAC",
+    "OpenTrade",
+    "LedgerState",
+    "LedgerStore",
+    "PostgresLedgerStore",
+    "default_ledger_store",
+    "stake_fraction",
+]
 
 
 @dataclass(frozen=True)
@@ -71,6 +92,8 @@ class LedgerStore(Protocol):
         lead_hours: float | None = None,
         model_strategy: str | None = None,
         audit_metadata: dict | None = None,
+        sizing_mode: str = SIZING_MODE_LEGACY,
+        event_budget_fraction: float | None = None,
     ) -> list[OpenTrade]: ...
 
     def settle_event(
@@ -90,18 +113,6 @@ class LedgerStore(Protocol):
     ) -> OpenTrade | None:
         """Early-exit one open position at ``sell_price`` (CLOSE event)."""
         ...
-
-
-def stake_fraction(edge_pp: float) -> float:
-    """Linear ramp: 2% at edge=7pp, 5% at edge>=15pp, clamped."""
-    if edge_pp <= EDGE_FLOOR_PP:
-        return MIN_STAKE_FRAC
-    if edge_pp >= EDGE_CEILING_PP:
-        return MAX_STAKE_FRAC
-    span = EDGE_CEILING_PP - EDGE_FLOOR_PP
-    return MIN_STAKE_FRAC + (edge_pp - EDGE_FLOOR_PP) / span * (
-        MAX_STAKE_FRAC - MIN_STAKE_FRAC
-    )
 
 
 class PostgresLedgerStore:
@@ -165,6 +176,8 @@ class PostgresLedgerStore:
         lead_hours: float | None = None,
         model_strategy: str | None = None,
         audit_metadata: dict | None = None,
+        sizing_mode: str = SIZING_MODE_LEGACY,
+        event_budget_fraction: float | None = None,
     ) -> list[OpenTrade]:
         state = self.read_state(profile_id)
         balance = state.balance_usd
@@ -176,26 +189,30 @@ class PostgresLedgerStore:
         resolved_strategy = model_strategy or analysis.model_strategy
         event_metadata = dict(audit_metadata or {})
 
+        eligible = []
+        for row in analysis.rows:
+            if row.action not in ("BUY_YES", "BUY_NO"):
+                continue
+            if (event_id, row.label, row.side) in held:
+                continue
+            if row.edge_yes_pp is None:
+                continue
+            entry_price = _entry_price(row)
+            if entry_price is None or entry_price <= 0:
+                continue
+            eligible.append(row)
+
+        allocated = allocate_stakes(
+            eligible,
+            balance,
+            sizing_mode=sizing_mode,
+            event_budget_fraction=event_budget_fraction,
+        )
+
         with get_paper_connection(self._database_url) as conn:
-            for row in analysis.rows:
-                if row.action not in ("BUY_YES", "BUY_NO"):
-                    continue
-                if (event_id, row.label, row.side) in held:
-                    continue
-                if row.edge_yes_pp is None:
-                    continue
+            for row, stake in allocated:
                 entry_price = _entry_price(row)
-                if entry_price is None or entry_price <= 0:
-                    continue
-                if balance <= 0:
-                    break
-                if row.stake_usd is not None:
-                    stake = round(row.stake_usd, 2)
-                elif row.stake_fraction is not None:
-                    stake = round(balance * row.stake_fraction, 2)
-                else:
-                    frac = stake_fraction(row.edge_yes_pp)
-                    stake = round(balance * frac, 2)
+                assert entry_price is not None and entry_price > 0
                 if stake <= 0 or stake > balance:
                     continue
                 shares = round(stake / entry_price, 4)
@@ -204,7 +221,7 @@ class PostgresLedgerStore:
                     event_id=event_id,
                     bucket_label=row.label,
                     yes_ask=row.yes_ask if row.yes_ask is not None else 0.0,
-                    edge_pp=row.edge_yes_pp,
+                    edge_pp=row.edge_yes_pp if row.edge_yes_pp is not None else 0.0,
                     stake_usd=stake,
                     shares=shares,
                     side=row.side,

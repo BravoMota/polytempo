@@ -193,6 +193,8 @@ def run_profile(
         event.event_id,
         lead_hours=lead_hours,
         audit_metadata=audit_metadata,
+        sizing_mode=profile.sizing_mode,
+        event_budget_fraction=profile.event_budget_fraction,
     )
     action = "OPENED" if opened else "SKIP"
     if isinstance(store, PostgresLedgerStore):
@@ -308,6 +310,8 @@ def _analysis_audit_metadata(
         "calibration_stats_path": profile.calibration_stats_path.name,
         "distribution_mean_c": analysis.distribution_mean_c,
         "distribution_sigma_c": analysis.distribution_sigma_c,
+        "sizing_mode": profile.sizing_mode,
+        "event_budget_fraction": profile.event_budget_fraction,
     }
     if lead_hours is not None:
         meta["wall_lead_hours"] = lead_hours

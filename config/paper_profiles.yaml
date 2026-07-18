@@ -1,5 +1,6 @@
-# Paper trading profiles: model × trade strategy × lead-time entry gate.
-# 378 combinations (3 model × 14 trade × 9 lead gates).
+# Paper trading profiles: model × trade strategy × lead-time entry gate × sizing.
+# Hold grid: 378 legacy + 378 budget_normalize_wallet_percent (_bnwp) = 756
+# (3 model × 14 trade × 9 lead gates × {legacy, bnwp}).
 
 # "all_twelve" is the legacy keyword for "every combination" (same as omitting it).
 active_profiles: all_twelve
@@ -9,6 +10,12 @@ target_day: tomorrow
 
 calibration_stats_path: data/weather/statistical/calibration_stats.csv
 updated_calibration_stats_path: data/weather/statistical/calibration_stats_updated.csv
+
+# Per-event risk pool for budget_normalize_wallet_percent (_bnwp) wallets:
+# fraction of current balance at open time. Implied stakes are renormalized
+# onto that pool; legs under $0.50 are dropped, and legs in [$0.50, $1) are
+# floored to $1.
+event_budget_fraction: 0.10
 
 # Bot wakes at the exact UTC instant when lead_hours == target_lead_hours
 # (± tolerance_seconds, default 90s). Not a multi-hour window.
@@ -59,8 +66,9 @@ trade_strategies:
   # Registered but not wired into paper wallets (opt-in via backtest):
   # - mass_side
 
-# Profile ids generated as: {bh|bhu|whu}_{trade}_{leadN}
-# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, whu_mid_band_lead24
+# Profile ids generated as: {bh|bhu|whu}_{trade}_{leadN} (legacy sizing)
+# and {bh|bhu|whu}_{trade}_{leadN}_bnwp (budget_normalize_wallet_percent).
+# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, whu_mid_band_lead24_bnwp
 
 # Active-sell experiment (Phase D). The TP/SL exit bracket is an orthogonal
 # layer bolted onto existing entry strategies: each combo below becomes a

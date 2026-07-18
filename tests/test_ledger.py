@@ -63,6 +63,26 @@ def test_open_trade_stake_uses_2_percent_at_floor_edge(store: PostgresLedgerStor
     assert opened[0].stake_usd == pytest.approx(STARTING_BALANCE_USD * MIN_STAKE_FRAC)
 
 
+def test_bnwp_opens_sum_to_fraction_of_balance(store: PostgresLedgerStore) -> None:
+    result = _result(
+        [
+            _row("23°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES"),
+            _row("24°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES"),
+        ]
+    )
+    opened = store.open_trades_from_analysis(
+        f"{PROFILE}_bnwp",
+        result,
+        "evt-bnwp",
+        sizing_mode="budget_normalize_wallet_percent",
+        event_budget_fraction=0.10,
+    )
+    assert len(opened) == 2
+    assert sum(t.stake_usd for t in opened) == pytest.approx(
+        STARTING_BALANCE_USD * 0.10
+    )
+
+
 def test_settle_winning_bucket_pays_one_dollar_per_share(store: PostgresLedgerStore) -> None:
     result = _result([_row("23°C", yes_ask=0.40, edge_pp=10.0, action="BUY_YES")])
     opened = store.open_trades_from_analysis(PROFILE, result, "evt-1")

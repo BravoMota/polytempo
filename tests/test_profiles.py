@@ -111,18 +111,30 @@ def test_load_paper_profiles_from_repo_config() -> None:
     if not path.is_file():
         pytest.skip("config/paper_profiles.yaml missing")
     profiles = load_paper_profiles(path)
-    # 9 lead gates × 14 trade strategies × 3 model strategies hold-to-settle,
-    # plus the active-sell experiment wallets (exit_policy set) and the
-    # edge-following active wallets (active_params set, model × strat, no lead).
+    # 9 lead gates × 14 trade strategies × 3 model strategies hold-to-settle
+    # (legacy + budget_normalize_wallet_percent _bnwp twins), plus the
+    # active-sell experiment wallets (exit_policy set) and the edge-following
+    # active wallets (active_params set, model × strat, no lead).
     hold = [
         p for p in profiles if p.exit_policy is None and p.active_params is None
     ]
+    legacy = [p for p in hold if p.sizing_mode == "legacy"]
+    bnwp = [
+        p
+        for p in hold
+        if p.sizing_mode == "budget_normalize_wallet_percent"
+    ]
     xsell = [p for p in profiles if p.exit_policy is not None]
     active = [p for p in profiles if p.active_params is not None]
-    assert len(hold) == 378
+    assert len(legacy) == 378
+    assert len(bnwp) == 378
+    assert len(hold) == 756
     assert len(xsell) == 16
     assert len(active) == 42  # 3 model × 14 trade
     assert all(p.id.endswith("_active") for p in active)
+    assert all(p.id.endswith("_bnwp") for p in bnwp)
+    assert all(p.event_budget_fraction == 0.10 for p in bnwp)
+    assert "bh_dist_arb_lead30_bnwp" in {p.id for p in bnwp}
     assert not any(p.id.startswith("es_") for p in hold)
     assert any(p.id.startswith("whu_") for p in hold)
 

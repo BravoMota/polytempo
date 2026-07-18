@@ -13,6 +13,8 @@ Examples:
         --profiles bh_max_edge_lead42 whu_dist_arb_lead24 --daily
     python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
         --trade-strategy dist_arb --csv out.csv
+    python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
+        --trade-strategy dist_arb --sizing-mode bnwp --csv out.csv
 """
 
 from __future__ import annotations
@@ -38,10 +40,21 @@ from polytempo.paper.backtest import (  # noqa: E402
 from polytempo.profiles.load import (  # noqa: E402
     DEFAULT_PROFILES_PATH,
     generate_all_twelve_profiles,
+    generate_budget_normalize_wallet_percent_profiles,
     load_paper_profiles,
 )
-from polytempo.profiles.models import TradingProfile  # noqa: E402
+from polytempo.profiles.models import (  # noqa: E402
+    SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
+    SIZING_MODE_LEGACY,
+    TradingProfile,
+)
 from polytempo.profiles.registry import known_trade_strategies  # noqa: E402
+
+_SIZING_MODE_ALIASES = {
+    "legacy": SIZING_MODE_LEGACY,
+    "budget_normalize_wallet_percent": SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
+    "bnwp": SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +63,25 @@ def _parse_date(text: str) -> date:
     return date.fromisoformat(text)
 
 
+def _normalize_sizing_mode(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    key = raw.strip().lower()
+    if key not in _SIZING_MODE_ALIASES:
+        raise SystemExit(
+            f"unknown sizing mode {raw!r}; "
+            f"known: {sorted(_SIZING_MODE_ALIASES)}"
+        )
+    return _SIZING_MODE_ALIASES[key]
+
+
 def _select_profiles(
     profiles: list[TradingProfile],
     *,
     ids: list[str] | None,
     trade_strategy: str | None,
     model_strategy: str | None,
+    sizing_mode: str | None,
 ) -> list[TradingProfile]:
     selected = [p for p in profiles if not p.is_active]
     if ids:
@@ -68,7 +94,27 @@ def _select_profiles(
         selected = [p for p in selected if p.model_strategy == model_strategy]
     if trade_strategy:
         selected = [p for p in selected if p.trade_strategy == trade_strategy]
+    if sizing_mode:
+        selected = [p for p in selected if p.sizing_mode == sizing_mode]
     return selected
+
+
+def _apply_sizing_mode(
+    legacy_profiles: list[TradingProfile],
+    *,
+    sizing_mode: str | None,
+    event_budget_fraction: float,
+) -> list[TradingProfile]:
+    """Expand or filter the hold grid for legacy / bnwp / both."""
+    if sizing_mode == SIZING_MODE_LEGACY:
+        return list(legacy_profiles)
+    bnwp = generate_budget_normalize_wallet_percent_profiles(
+        legacy_profiles,
+        event_budget_fraction=event_budget_fraction,
+    )
+    if sizing_mode == SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT:
+        return bnwp
+    return list(legacy_profiles) + bnwp
 
 
 def _synthesize_profiles(
@@ -77,6 +123,7 @@ def _synthesize_profiles(
     trade_strategy: str | None,
     model_strategy: str | None,
     lead_gate_keys: list[str] | None,
+    sizing_mode: str | None,
 ) -> list[TradingProfile]:
     """Build hold-to-settlement profiles for a strategy selection, in-memory.
 
@@ -86,6 +133,9 @@ def _synthesize_profiles(
     caller pins with ``--trade-strategy`` / ``--model-strategy``. An unpinned
     dimension falls back to the config's declared list (all registered
     strategies if the config omits it).
+
+    ``--sizing-mode`` selects legacy bankroll sizing,
+    ``budget_normalize_wallet_percent`` (``_bnwp`` twins), or both when omitted.
 
     These profiles are never written to ``paper_profiles.yaml`` and never reach
     the live paper bot or ledger — the backtest always simulates against an
@@ -131,13 +181,19 @@ def _synthesize_profiles(
             raw["updated_calibration_stats_path"]
         )
 
-    return generate_all_twelve_profiles(
+    legacy = generate_all_twelve_profiles(
         lead_gates=lead_gates,
         model_strategies=model_list,
         trade_strategies=trade_list,
         city=str(raw.get("city", "london")),
         target_day=str(raw.get("target_day", "tomorrow")),
         **kwargs,
+    )
+    event_budget_fraction = float(raw.get("event_budget_fraction", 0.10))
+    return _apply_sizing_mode(
+        legacy,
+        sizing_mode=sizing_mode,
+        event_budget_fraction=event_budget_fraction,
     )
 
 
@@ -267,6 +323,17 @@ def main() -> int:
         default=None,
         help="Restrict to these lead gate keys (e.g. lead24 lead42)",
     )
+    parser.add_argument(
+        "--sizing-mode",
+        default=None,
+        choices=sorted(_SIZING_MODE_ALIASES),
+        help=(
+            "Lock the capital-sizing knob: legacy (bankroll×edge ramp), "
+            "budget_normalize_wallet_percent / bnwp (_bnwp wallets, "
+            "event_budget_fraction of balance with dust/min-ticket floors). "
+            "Omit to run both when loading/synthesizing the hold grid."
+        ),
+    )
     parser.add_argument("--city", default="london", help="City (default: london)")
     parser.add_argument(
         "--database-url",
@@ -289,6 +356,8 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    sizing_mode = _normalize_sizing_mode(args.sizing_mode)
+
     if args.profiles:
         all_profiles = load_paper_profiles(args.config)
         profiles = _select_profiles(
@@ -296,6 +365,7 @@ def main() -> int:
             ids=args.profiles,
             trade_strategy=args.trade_strategy,
             model_strategy=args.model_strategy,
+            sizing_mode=sizing_mode,
         )
     elif args.trade_strategy or args.model_strategy or args.lead_gates:
         profiles = _synthesize_profiles(
@@ -303,6 +373,7 @@ def main() -> int:
             trade_strategy=args.trade_strategy,
             model_strategy=args.model_strategy,
             lead_gate_keys=args.lead_gates,
+            sizing_mode=sizing_mode,
         )
     else:
         all_profiles = load_paper_profiles(args.config)
@@ -311,6 +382,7 @@ def main() -> int:
             ids=None,
             trade_strategy=None,
             model_strategy=None,
+            sizing_mode=sizing_mode,
         )
     if not profiles:
         raise SystemExit("no profiles selected after filters")
