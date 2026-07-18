@@ -1,6 +1,10 @@
 # Paper trading profiles: model × trade strategy × lead-time entry gate × sizing.
 # Hold grid: 378 legacy + 378 budget_normalize_wallet_percent (_bnwp) = 756
 # (3 model × 14 trade × 9 lead gates × {legacy, bnwp}).
+#
+# Live paper bot + ledger ONLY. Research / overnight backtests use
+# config/backtest_profiles.yaml (scripts/backtest.py default) so expanding
+# the research grid does not create new polytempo_paper wallets.
 
 # "all_twelve" is the legacy keyword for "every combination" (same as omitting it).
 active_profiles: all_twelve
@@ -11,10 +15,12 @@ target_day: tomorrow
 calibration_stats_path: data/weather/statistical/calibration_stats.csv
 updated_calibration_stats_path: data/weather/statistical/calibration_stats_updated.csv
 
-# Per-event risk pool for budget_normalize_wallet_percent (_bnwp) wallets:
-# fraction of current balance at open time. Implied stakes are renormalized
-# onto that pool; legs under $0.50 are dropped, and legs in [$0.50, $1) are
-# floored to $1.
+# Strategy knob: which event-budget method(s) to include in the live paper grid.
+event_budgets:
+  - legacy
+  - budget_normalize_wallet_percent
+
+# Implementation param for budget_normalize_wallet_percent only (not a strategy knob).
 event_budget_fraction: 0.10
 
 # Bot wakes at the exact UTC instant when lead_hours == target_lead_hours

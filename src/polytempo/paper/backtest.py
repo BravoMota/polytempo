@@ -513,15 +513,15 @@ def build_daily_performance_rows(
         if meta is None:
             lead_s = ""
             exit_mode = "hold"
-            sizing_mode = ""
+            event_budget = ""
         elif meta.active_params is not None:
             lead_s = ""
             exit_mode = _exit_mode_for_profile(meta)
-            sizing_mode = meta.sizing_mode
+            event_budget = meta.sizing_mode
         else:
             lead_s = str(int(meta.entry_gate.target_lead_hours))
             exit_mode = _exit_mode_for_profile(meta)
-            sizing_mode = meta.sizing_mode
+            event_budget = meta.sizing_mode
 
         by_day: dict[date, list[BacktestTrade]] = {}
         for trade in profile_result.trades:
@@ -545,7 +545,7 @@ def build_daily_performance_rows(
                     "trade": trade_name,
                     "lead_hours": lead_s,
                     "exit_mode": exit_mode,
-                    "sizing_mode": sizing_mode,
+                    "event_budget": event_budget,
                     "since": since,
                     "settlement_date": settlement_date.isoformat(),
                     "pnl_usd": round(day_pnl, 4),

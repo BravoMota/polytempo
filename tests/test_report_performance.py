@@ -197,6 +197,7 @@ def test_build_csv_row_fields() -> None:
     assert row["trade"] == "dist_arb"
     assert row["lead_hours"] == "42"
     assert row["exit_mode"] == "hold"
+    assert row["event_budget"] == ""
     assert row["since"] == "2026-06-10"
     assert row["settlement_date"] == "2026-06-17"
     assert row["pnl_usd"] == 50.0
@@ -213,6 +214,7 @@ def test_write_csv(tmp_path: Path) -> None:
             "trade": "dist_arb",
             "lead_hours": "42",
             "exit_mode": "hold",
+            "event_budget": "legacy",
             "since": "2026-06-10",
             "settlement_date": "2026-06-17",
             "pnl_usd": 10.0,

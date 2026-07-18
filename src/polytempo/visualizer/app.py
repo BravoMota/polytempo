@@ -77,6 +77,17 @@ def render_performance_page() -> None:
     else:
         lead_lo, lead_hi = None, None
     exits = st.sidebar.multiselect("exit_mode", sorted(df["exit_mode"].dropna().unique()))
+    budget_col = (
+        "event_budget"
+        if "event_budget" in df.columns
+        else ("sizing_mode" if "sizing_mode" in df.columns else None)
+    )
+    budgets = []
+    if budget_col is not None:
+        budget_values = sorted(
+            {str(x) for x in df[budget_col].dropna().unique() if str(x).strip() != ""}
+        )
+        budgets = st.sidebar.multiselect("event_budget", budget_values)
 
     use_all_dates = st.sidebar.checkbox("all dates in CSV", value=False)
     if use_all_dates:
@@ -101,6 +112,8 @@ def render_performance_page() -> None:
         filtered = filtered[filtered["lead_hours"].isin(allowed_leads)]
     if exits:
         filtered = filtered[filtered["exit_mode"].isin(exits)]
+    if budgets and budget_col is not None:
+        filtered = filtered[filtered[budget_col].astype(str).isin(budgets)]
 
     aggregate = st.sidebar.checkbox("aggregate filtered wallets", value=False)
 

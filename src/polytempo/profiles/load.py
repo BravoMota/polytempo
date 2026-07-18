@@ -71,6 +71,60 @@ def _profile_id(model: str, trade: str, lead_key: str) -> str:
     return f"{abbrev}_{trade}_{lead_key}"
 
 
+# Strategy knob ``event_budget``: which capital-allocation method to use.
+# ``event_budget_fraction`` is an implementation param for
+# ``budget_normalize_wallet_percent`` only — not a swept strategy dimension.
+EVENT_BUDGET_LEGACY = SIZING_MODE_LEGACY
+EVENT_BUDGET_BUDGET_NORMALIZE_WALLET_PERCENT = (
+    SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT
+)
+EVENT_BUDGET_ALIASES = {
+    "legacy": EVENT_BUDGET_LEGACY,
+    "budget_normalize_wallet_percent": EVENT_BUDGET_BUDGET_NORMALIZE_WALLET_PERCENT,
+    "bnwp": EVENT_BUDGET_BUDGET_NORMALIZE_WALLET_PERCENT,
+}
+DEFAULT_EVENT_BUDGETS = (
+    EVENT_BUDGET_LEGACY,
+    EVENT_BUDGET_BUDGET_NORMALIZE_WALLET_PERCENT,
+)
+
+
+def normalize_event_budget(raw: str) -> str:
+    key = raw.strip()
+    if key not in EVENT_BUDGET_ALIASES:
+        raise ValueError(
+            f"unknown event_budget {raw!r}; "
+            f"known: {sorted(set(EVENT_BUDGET_ALIASES) - {'bnwp'})} "
+            f"(alias: bnwp)"
+        )
+    return EVENT_BUDGET_ALIASES[key]
+
+
+def parse_event_budgets(raw: dict) -> list[str]:
+    """Read ``event_budgets`` list from YAML (default: legacy + bnwp)."""
+    if raw.get("event_budgets") is None:
+        return list(DEFAULT_EVENT_BUDGETS)
+    values = [normalize_event_budget(str(x)) for x in raw["event_budgets"]]
+    if not values:
+        raise ValueError("event_budgets must be a non-empty list")
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def parse_event_budget_fraction(raw: dict) -> float:
+    """Scalar pool size for budget_normalize_wallet_percent (not a strategy knob)."""
+    value = float(raw.get("event_budget_fraction", 0.10))
+    if not (0.0 < value <= 1.0):
+        raise ValueError(f"event_budget_fraction must be in (0, 1], got {value}")
+    return value
+
+
 def _validate_trade_strategy_names(names: list[str]) -> None:
     known = set(known_trade_strategies())
     unknown = sorted({name for name in names if name not in known})
@@ -244,6 +298,7 @@ def generate_budget_normalize_wallet_percent_profiles(
     """Clone hold profiles as ``_bnwp`` twins (budget_normalize_wallet_percent).
 
     Does not clone xsell or active wallets — pass only legacy hold profiles.
+    ``event_budget_fraction`` is an implementation detail of this method.
     """
     if not (0.0 < event_budget_fraction <= 1.0):
         raise ValueError(
@@ -270,6 +325,27 @@ def generate_budget_normalize_wallet_percent_profiles(
             )
         )
     return profiles
+
+
+def expand_event_budgets(
+    legacy_profiles: list[TradingProfile],
+    *,
+    event_budgets: list[str],
+    event_budget_fraction: float,
+) -> list[TradingProfile]:
+    """Expand the hold grid for the selected ``event_budget`` strategies."""
+    wanted = {normalize_event_budget(b) for b in event_budgets}
+    out: list[TradingProfile] = []
+    if EVENT_BUDGET_LEGACY in wanted:
+        out.extend(legacy_profiles)
+    if EVENT_BUDGET_BUDGET_NORMALIZE_WALLET_PERCENT in wanted:
+        out.extend(
+            generate_budget_normalize_wallet_percent_profiles(
+                legacy_profiles,
+                event_budget_fraction=event_budget_fraction,
+            )
+        )
+    return out
 
 
 def load_paper_profiles(
@@ -316,7 +392,6 @@ def load_paper_profiles(
     )
     by_id = {p.id: p for p in all_profiles}
 
-    # Active-sell experiment wallets are declared explicitly and always active.
     xsell = generate_xsell_profiles(
         raw.get("xsell_wallets"),
         lead_gates=lead_gates,
@@ -326,7 +401,6 @@ def load_paper_profiles(
         target_day=target_day,
     )
 
-    # Edge-following active wallets (model x trade, no lead gate).
     active_wallets = generate_active_profiles(
         raw.get("active_wallets"),
         calibration_stats_path=cal_path,
@@ -335,18 +409,18 @@ def load_paper_profiles(
         target_day=target_day,
     )
 
-    event_budget_raw = raw.get("event_budget_fraction", 0.10)
-    event_budget_fraction = float(event_budget_raw)
-    bnwp = generate_budget_normalize_wallet_percent_profiles(
-        [p for p in all_profiles if p.enabled],
+    event_budgets = parse_event_budgets(raw)
+    event_budget_fraction = parse_event_budget_fraction(raw)
+    hold_enabled = [p for p in all_profiles if p.enabled]
+    hold_expanded = expand_event_budgets(
+        hold_enabled,
+        event_budgets=event_budgets,
         event_budget_fraction=event_budget_fraction,
     )
 
-    extra = xsell + active_wallets + bnwp
-
     active = raw.get("active_profiles")
     if active == "all_twelve" or active is None:
-        return [p for p in all_profiles if p.enabled] + extra
+        return hold_expanded + xsell + active_wallets
 
     if isinstance(active, list):
         out: list[TradingProfile] = []
@@ -354,15 +428,14 @@ def load_paper_profiles(
             if pid not in by_id:
                 raise ValueError(f"unknown profile id in active_profiles: {pid!r}")
             out.append(by_id[pid])
-        # When a subset of hold ids is selected, still attach _bnwp twins for those.
         return (
-            out
-            + xsell
-            + active_wallets
-            + generate_budget_normalize_wallet_percent_profiles(
+            expand_event_budgets(
                 out,
+                event_budgets=event_budgets,
                 event_budget_fraction=event_budget_fraction,
             )
+            + xsell
+            + active_wallets
         )
 
     raise ValueError(f"invalid active_profiles: {active!r}")

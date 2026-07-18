@@ -38,7 +38,16 @@ def knob_summary(filtered: pd.DataFrame, column: str, label: str) -> pd.DataFram
 
 def knob_vabs(filtered: pd.DataFrame) -> float:
     values: list[float] = []
-    for column in ("model", "trade", "lead_hours", "exit_mode"):
+    for column in (
+        "model",
+        "trade",
+        "lead_hours",
+        "exit_mode",
+        "event_budget",
+        "sizing_mode",
+    ):
+        if column not in filtered.columns:
+            continue
         summary = knob_summary(filtered, column, column)
         if not summary.empty:
             values.extend(summary["Σ%"].tolist())
@@ -50,13 +59,17 @@ def knob_vabs(filtered: pd.DataFrame) -> float:
 def render_knob_summaries(filtered: pd.DataFrame) -> None:
     st.subheader("Period P/L by knob")
     vabs = knob_vabs(filtered)
-    cols = st.columns(4)
     knobs = [
         ("model", "model"),
         ("trade", "trade"),
         ("lead_hours", "lead"),
         ("exit_mode", "exit"),
+        ("event_budget", "event_budget"),
     ]
+    if "event_budget" not in filtered.columns and "sizing_mode" in filtered.columns:
+        knobs[-1] = ("sizing_mode", "event_budget")
+    knobs = [(c, l) for c, l in knobs if c in filtered.columns]
+    cols = st.columns(min(5, max(len(knobs), 1)))
     for col_widget, (column, label) in zip(cols, knobs):
         summary = knob_summary(filtered, column, label)
         with col_widget:

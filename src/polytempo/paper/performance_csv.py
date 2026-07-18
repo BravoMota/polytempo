@@ -12,7 +12,7 @@ PERFORMANCE_DAILY_CSV_COLUMNS = [
     "trade",
     "lead_hours",
     "exit_mode",
-    "sizing_mode",
+    "event_budget",
     "since",
     "settlement_date",
     "pnl_usd",

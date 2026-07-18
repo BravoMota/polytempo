@@ -14,7 +14,7 @@ Examples:
     python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
         --trade-strategy dist_arb --csv out.csv
     python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
-        --trade-strategy dist_arb --sizing-mode bnwp --csv out.csv
+        --trade-strategy dist_arb --event-budget budget_normalize_wallet_percent --csv out.csv
     python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
         --trade-strategy dist_arb --csv reports/backtest/dist_arb_summary.csv \\
         --daily-csv reports/backtest/dist_arb_daily.csv
@@ -43,41 +43,33 @@ from polytempo.paper.backtest import (  # noqa: E402
 )
 from polytempo.paper.performance_csv import write_performance_daily_csv  # noqa: E402
 from polytempo.profiles.load import (  # noqa: E402
-    DEFAULT_PROFILES_PATH,
+    expand_event_budgets,
     generate_all_twelve_profiles,
-    generate_budget_normalize_wallet_percent_profiles,
     load_paper_profiles,
+    normalize_event_budget,
+    parse_event_budget_fraction,
+    parse_event_budgets,
 )
-from polytempo.profiles.models import (  # noqa: E402
-    SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
-    SIZING_MODE_LEGACY,
-    TradingProfile,
-)
+from polytempo.profiles.models import TradingProfile  # noqa: E402
 from polytempo.profiles.registry import known_trade_strategies  # noqa: E402
 
-_SIZING_MODE_ALIASES = {
-    "legacy": SIZING_MODE_LEGACY,
-    "budget_normalize_wallet_percent": SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
-    "bnwp": SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT,
-}
-
 logger = logging.getLogger(__name__)
+
+# Research grid only — never the live paper bot default.
+DEFAULT_BACKTEST_PROFILES_PATH = Path("config/backtest_profiles.yaml")
 
 
 def _parse_date(text: str) -> date:
     return date.fromisoformat(text)
 
 
-def _normalize_sizing_mode(raw: str | None) -> str | None:
+def _normalize_event_budget(raw: str | None) -> str | None:
     if raw is None:
         return None
-    key = raw.strip().lower()
-    if key not in _SIZING_MODE_ALIASES:
-        raise SystemExit(
-            f"unknown sizing mode {raw!r}; "
-            f"known: {sorted(_SIZING_MODE_ALIASES)}"
-        )
-    return _SIZING_MODE_ALIASES[key]
+    try:
+        return normalize_event_budget(raw)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _select_profiles(
@@ -86,7 +78,7 @@ def _select_profiles(
     ids: list[str] | None,
     trade_strategy: str | None,
     model_strategy: str | None,
-    sizing_mode: str | None,
+    event_budget: str | None,
 ) -> list[TradingProfile]:
     selected = [p for p in profiles if not p.is_active]
     if ids:
@@ -99,27 +91,9 @@ def _select_profiles(
         selected = [p for p in selected if p.model_strategy == model_strategy]
     if trade_strategy:
         selected = [p for p in selected if p.trade_strategy == trade_strategy]
-    if sizing_mode:
-        selected = [p for p in selected if p.sizing_mode == sizing_mode]
+    if event_budget:
+        selected = [p for p in selected if p.sizing_mode == event_budget]
     return selected
-
-
-def _apply_sizing_mode(
-    legacy_profiles: list[TradingProfile],
-    *,
-    sizing_mode: str | None,
-    event_budget_fraction: float,
-) -> list[TradingProfile]:
-    """Expand or filter the hold grid for legacy / bnwp / both."""
-    if sizing_mode == SIZING_MODE_LEGACY:
-        return list(legacy_profiles)
-    bnwp = generate_budget_normalize_wallet_percent_profiles(
-        legacy_profiles,
-        event_budget_fraction=event_budget_fraction,
-    )
-    if sizing_mode == SIZING_MODE_BUDGET_NORMALIZE_WALLET_PERCENT:
-        return bnwp
-    return list(legacy_profiles) + bnwp
 
 
 def _synthesize_profiles(
@@ -128,24 +102,16 @@ def _synthesize_profiles(
     trade_strategy: str | None,
     model_strategy: str | None,
     lead_gate_keys: list[str] | None,
-    sizing_mode: str | None,
+    event_budget: str | None,
 ) -> list[TradingProfile]:
     """Build hold-to-settlement profiles for a strategy selection, in-memory.
 
-    Reads only the ``lead_gates`` / city / calibration metadata (and the
-    default strategy lists) from ``config`` and generates the
-    ``{model} x {trade} x {lead}`` grid, overriding whichever dimension the
-    caller pins with ``--trade-strategy`` / ``--model-strategy``. An unpinned
-    dimension falls back to the config's declared list (all registered
-    strategies if the config omits it).
+    Reads lead gates / city / calibration / strategy lists from ``config``.
+    ``--event-budget`` locks the capital-allocation strategy
+    (``legacy`` / ``budget_normalize_wallet_percent``); omit to use the
+    config's ``event_budgets`` list.
 
-    ``--sizing-mode`` selects legacy bankroll sizing,
-    ``budget_normalize_wallet_percent`` (``_bnwp`` twins), or both when omitted.
-
-    These profiles are never written to ``paper_profiles.yaml`` and never reach
-    the live paper bot or ledger — the backtest always simulates against an
-    in-memory store, so any strategy (including ones not in the config) can be
-    tested without touching production.
+    Never writes to the paper ledger.
     """
     if not config.is_file():
         raise SystemExit(f"config not found: {config}")
@@ -194,11 +160,11 @@ def _synthesize_profiles(
         target_day=str(raw.get("target_day", "tomorrow")),
         **kwargs,
     )
-    event_budget_fraction = float(raw.get("event_budget_fraction", 0.10))
-    return _apply_sizing_mode(
+    budgets = [event_budget] if event_budget else parse_event_budgets(raw)
+    return expand_event_budgets(
         legacy,
-        sizing_mode=sizing_mode,
-        event_budget_fraction=event_budget_fraction,
+        event_budgets=budgets,
+        event_budget_fraction=parse_event_budget_fraction(raw),
     )
 
 
@@ -302,8 +268,12 @@ def main() -> int:
     parser.add_argument(
         "--config",
         type=Path,
-        default=DEFAULT_PROFILES_PATH,
-        help="Path to paper_profiles.yaml",
+        default=DEFAULT_BACKTEST_PROFILES_PATH,
+        help=(
+            "Profile YAML for this backtest (default: config/backtest_profiles.yaml). "
+            "Not the live paper bot config — use config/paper_profiles.yaml only if "
+            "you intentionally want the production wallet grid."
+        ),
     )
     parser.add_argument(
         "--profiles",
@@ -316,7 +286,7 @@ def main() -> int:
         default=None,
         help=(
             "Backtest this trade strategy (any registered name, even one not in "
-            "paper_profiles.yaml). Combined with the config's model strategies "
+            "the config YAML). Combined with the config's model strategies "
             "unless --model-strategy is also given. Never touches the ledger."
         ),
     )
@@ -337,15 +307,18 @@ def main() -> int:
         help="Restrict to these lead gate keys (e.g. lead24 lead42)",
     )
     parser.add_argument(
+        "--event-budget",
+        default=None,
+        help=(
+            "Lock the event_budget strategy knob: legacy or "
+            "budget_normalize_wallet_percent (alias: bnwp). "
+            "Omit to use event_budgets from the config YAML."
+        ),
+    )
+    parser.add_argument(
         "--sizing-mode",
         default=None,
-        choices=sorted(_SIZING_MODE_ALIASES),
-        help=(
-            "Lock the capital-sizing knob: legacy (bankroll×edge ramp), "
-            "budget_normalize_wallet_percent / bnwp (_bnwp wallets, "
-            "event_budget_fraction of balance with dust/min-ticket floors). "
-            "Omit to run both when loading/synthesizing the hold grid."
-        ),
+        help="Deprecated alias for --event-budget",
     )
     parser.add_argument("--city", default="london", help="City (default: london)")
     parser.add_argument(
@@ -379,7 +352,8 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    sizing_mode = _normalize_sizing_mode(args.sizing_mode)
+    raw_budget = args.event_budget if args.event_budget is not None else args.sizing_mode
+    event_budget = _normalize_event_budget(raw_budget)
 
     if args.profiles:
         all_profiles = load_paper_profiles(args.config)
@@ -388,7 +362,7 @@ def main() -> int:
             ids=args.profiles,
             trade_strategy=args.trade_strategy,
             model_strategy=args.model_strategy,
-            sizing_mode=sizing_mode,
+            event_budget=event_budget,
         )
     elif args.trade_strategy or args.model_strategy or args.lead_gates:
         profiles = _synthesize_profiles(
@@ -396,7 +370,7 @@ def main() -> int:
             trade_strategy=args.trade_strategy,
             model_strategy=args.model_strategy,
             lead_gate_keys=args.lead_gates,
-            sizing_mode=sizing_mode,
+            event_budget=event_budget,
         )
     else:
         all_profiles = load_paper_profiles(args.config)
@@ -405,7 +379,7 @@ def main() -> int:
             ids=None,
             trade_strategy=None,
             model_strategy=None,
-            sizing_mode=sizing_mode,
+            event_budget=event_budget,
         )
     if not profiles:
         raise SystemExit("no profiles selected after filters")

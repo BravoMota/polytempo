@@ -108,7 +108,7 @@ def test_build_daily_performance_rows_sod_and_compounding() -> None:
     assert day1["trade"] == "dist_arb"
     assert day1["lead_hours"] == "24"
     assert day1["exit_mode"] == "hold"
-    assert day1["sizing_mode"] == "legacy"
+    assert day1["event_budget"] == "legacy"
     assert day1["since"] == "2026-06-20"
 
     day2 = rows[1]
@@ -143,7 +143,7 @@ def test_write_performance_daily_csv_header(tmp_path: Path) -> None:
                 "trade": "dist_arb",
                 "lead_hours": "24",
                 "exit_mode": "hold",
-                "sizing_mode": "legacy",
+                "event_budget": "legacy",
                 "since": "2026-06-20",
                 "settlement_date": "2026-06-20",
                 "pnl_usd": 10.0,

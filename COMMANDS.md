@@ -95,7 +95,7 @@ polytempo live --mode preview --days-ahead 3 --city london
 
 ## paper (PostgreSQL profiles)
 
-Paper trading uses **756 hold trading profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates × {legacy, budget_normalize_wallet_percent}) defined in `config/paper_profiles.yaml`, plus xsell/active experiment wallets. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|whu}_{trade}_{leadN}` for legacy bankroll sizing, or the same id with a `_bnwp` suffix for **budget_normalize_wallet_percent** wallets that renormalize implied stakes onto `event_budget_fraction` of current balance (default 10%) per event — legs under $0.50 are skipped and legs in [$0.50, $1) are floored to $1 (e.g. `bh_dist_arb_lead30`, `whu_mid_band_lead24_bnwp`). Each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time.
+Paper trading uses **756 hold trading profiles** (3 model strategies × 14 trade strategies × 9 lead-time gates × {legacy, budget_normalize_wallet_percent}) defined in `config/paper_profiles.yaml`, plus xsell/active experiment wallets. State lives in a **separate Postgres database** (`polytempo_paper`), not JSONL files. Profile ids are `{bh|bhu|whu}_{trade}_{leadN}` for legacy bankroll sizing, or the same id with a `_bnwp` suffix for **budget_normalize_wallet_percent** wallets that renormalize implied stakes onto `event_budget_fraction` of current balance (default 10%) per event — legs under $0.50 are skipped and legs in [$0.50, $1) are floored to $1 (e.g. `bh_dist_arb_lead30`, `whu_mid_band_lead24_bnwp`). Each profile keeps an independent $1000 bankroll. Trade-strategy names in the YAML are validated against `profiles/registry.py` at load time. Overnight / research backtests use a separate file — `config/backtest_profiles.yaml` — so expanding the research grid does not create new live wallets.
 
 ### Database setup (one-time)
 
@@ -302,11 +302,12 @@ Scope v1: **hold-to-settlement only** (no active ADD/FLATTEN). Active (`active_w
 | ------------------- | ---------------------------------------------------------------------------------- |
 | `--start`           | First settlement date `YYYY-MM-DD` (required)                                      |
 | `--end`             | Last settlement date `YYYY-MM-DD`, inclusive (required)                            |
-| `--config`          | Path to `paper_profiles.yaml` (default `config/paper_profiles.yaml`)               |
+| `--config`          | Profile YAML (default `config/backtest_profiles.yaml` — research grid, not live paper) |
 | `--profiles`        | Restrict to these profile ids (space-separated)                                    |
 | `--trade-strategy`  | Restrict to profiles with this trade strategy (e.g. `dist_arb`)                    |
 | `--model-strategy`  | Restrict to profiles with this distribution model (`best_historical`, `best_historical_updated`, `weighted_historical_updated`, `weighted_historical_updated_sharp`, `ensemble_spread`, …). Composes with `--trade-strategy` (AND). |
-| `--sizing-mode`     | Lock capital sizing: `legacy` (bankroll×edge ramp), `budget_normalize_wallet_percent` / `bnwp` (`_bnwp` wallets on `event_budget_fraction` of balance). Omit to run **both**. Composes with the other strategy filters (AND). |
+| `--event-budget`    | Lock event_budget strategy: `legacy` or `budget_normalize_wallet_percent` (alias `bnwp`). Omit = config `event_budgets`. |
+| `--sizing-mode`     | Deprecated alias for `--event-budget` |
 | `--city`            | Contract station registry key (default `london`)                                   |
 | `--database-url`    | Weather DB URL override (read-only; defaults to `POLYTEMPO_DATABASE_URL`)          |
 | `--no-wunderground` | Skip the Wunderground snapshot forecast in the input reconstruction               |
@@ -315,6 +316,8 @@ Scope v1: **hold-to-settlement only** (no active ADD/FLATTEN). Active (`active_w
 | `--daily`           | Also print the per-day PnL breakdown                                               |
 
 `--daily-csv` matches `report_performance.py --csv` / the Streamlit viewer schema (`profile_id`, knobs, `settlement_date`, `pnl_usd`, `pnl_pct`, `sod_balance_usd`, `n_trades`). Point the viewer sidebar at that file. Keep it under `reports/backtest/` so **Refresh from DB** does not overwrite `reports/performance/daily.csv`. Summary heatmap works offline; trade-detail / replay still need the paper + weather DBs and will not show backtest fills.
+
+**Config split:** live paper bot reads [`config/paper_profiles.yaml`](config/paper_profiles.yaml) (creates wallets in `polytempo_paper`). Backtest defaults to [`config/backtest_profiles.yaml`](config/backtest_profiles.yaml) (research models/trades welcome; in-memory only — never writes the paper DB). Pass `--config config/paper_profiles.yaml` only when you want to replay the exact live hold grid.
 
 Reads the weather DB (CLOB / Open-Meteo / WU snapshots) and Gamma (winning bucket). Output: per-profile PnL, trade count, win rate, final balance, max drawdown, plus a summed "no-open reasons" list so empty runs are diagnosable. Running all ~330 profiles over a wide window is slow (many per-gate DB reads); filter with `--profiles` / `--trade-strategy` for quick iterations.
 
@@ -343,13 +346,13 @@ python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
   --model-strategy weighted_historical_updated --trade-strategy dist_arb
 
-# budget_normalize_wallet_percent (_bnwp) only for one trade strategy
+# budget_normalize_wallet_percent only for one trade strategy
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
-  --trade-strategy dist_arb --sizing-mode bnwp
+  --trade-strategy dist_arb --event-budget budget_normalize_wallet_percent
 
-# legacy bankroll sizing only (exclude _bnwp twins)
+# legacy bankroll sizing only
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
-  --trade-strategy dist_arb --sizing-mode legacy
+  --trade-strategy dist_arb --event-budget legacy
 
 # all hold profiles (slow — full profile matrix)
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10

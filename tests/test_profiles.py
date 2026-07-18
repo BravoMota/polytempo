@@ -139,6 +139,24 @@ def test_load_paper_profiles_from_repo_config() -> None:
     assert any(p.id.startswith("whu_") for p in hold)
 
 
+def test_load_backtest_profiles_event_budgets() -> None:
+    path = Path("config/backtest_profiles.yaml")
+    if not path.is_file():
+        pytest.skip("config/backtest_profiles.yaml missing")
+    profiles = load_paper_profiles(path)
+    hold = [
+        p for p in profiles if p.exit_policy is None and p.active_params is None
+    ]
+    modes = sorted({p.sizing_mode for p in hold})
+    assert modes == ["budget_normalize_wallet_percent", "legacy"]
+    bnwp = [
+        p for p in hold if p.sizing_mode == "budget_normalize_wallet_percent"
+    ]
+    assert all(p.event_budget_fraction == 0.10 for p in bnwp)
+    assert all(p.id.endswith("_bnwp") for p in bnwp)
+    assert not any(p.id.endswith(("_bnwp05", "_bnwp20")) for p in bnwp)
+
+
 def test_config_trade_strategies_are_registered() -> None:
     path = Path("config/paper_profiles.yaml")
     if not path.is_file():

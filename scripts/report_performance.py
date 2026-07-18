@@ -74,7 +74,7 @@ class ProfilePerf:
     daily: dict[date, DayPnl]
     lead_hours: float | None = None
     exit_mode: str = ""
-    sizing_mode: str = ""
+    event_budget: str = ""
 
 
 def _fetch_events(conn) -> list[dict]:
@@ -201,7 +201,7 @@ def _attach_profile_meta(perfs: list[ProfilePerf], config: Path) -> list[Profile
                 daily=perf.daily,
                 lead_hours=lead_hours,
                 exit_mode=exit_mode,
-                sizing_mode=meta.sizing_mode,
+                event_budget=meta.sizing_mode,
             )
         )
     return out
@@ -334,7 +334,7 @@ def build_csv_rows(
                     "trade": perf.trade_strategy,
                     "lead_hours": lead_s,
                     "exit_mode": perf.exit_mode,
-                    "sizing_mode": perf.sizing_mode,
+                    "event_budget": perf.event_budget,
                     "since": since_s,
                     "settlement_date": settlement_date.isoformat(),
                     "pnl_usd": round(day.pnl_usd, 4),
