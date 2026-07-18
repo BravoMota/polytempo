@@ -484,6 +484,80 @@ class BacktestResult:
         return dict(sorted(out.items()))
 
 
+def _exit_mode_for_profile(profile: TradingProfile) -> str:
+    if profile.active_params is not None:
+        return "active"
+    if profile.exit_policy is not None:
+        return "xsell"
+    return "hold"
+
+
+def build_daily_performance_rows(
+    result: BacktestResult,
+    profiles: list[TradingProfile],
+) -> list[dict]:
+    """Build visualizer-compatible daily rows from a backtest result.
+
+    SOD / ``pnl_pct`` match paper ``report_performance``: same-day opens then
+    settles → ``sod = pre_day_balance - sum(stakes)``, ``pnl_pct = 100 * pnl / sod``.
+    """
+    by_id = {p.id: p for p in profiles}
+    rows: list[dict] = []
+    for profile_id in sorted(result.profiles):
+        profile_result = result.profiles[profile_id]
+        if not profile_result.trades:
+            continue
+        meta = by_id.get(profile_id)
+        model = meta.model_strategy if meta is not None else ""
+        trade_name = meta.trade_strategy if meta is not None else ""
+        if meta is None:
+            lead_s = ""
+            exit_mode = "hold"
+            sizing_mode = ""
+        elif meta.active_params is not None:
+            lead_s = ""
+            exit_mode = _exit_mode_for_profile(meta)
+            sizing_mode = meta.sizing_mode
+        else:
+            lead_s = str(int(meta.entry_gate.target_lead_hours))
+            exit_mode = _exit_mode_for_profile(meta)
+            sizing_mode = meta.sizing_mode
+
+        by_day: dict[date, list[BacktestTrade]] = {}
+        for trade in profile_result.trades:
+            by_day.setdefault(trade.settlement_date, []).append(trade)
+
+        since = min(by_day).isoformat()
+        balance = STARTING_BALANCE_USD
+        for settlement_date in sorted(by_day):
+            day_trades = by_day[settlement_date]
+            day_pnl = sum(t.pnl_usd for t in day_trades)
+            day_stakes = sum(t.stake_usd for t in day_trades)
+            sod = balance - day_stakes
+            if sod <= 0:
+                pnl_pct = 0.0
+            else:
+                pnl_pct = 100.0 * day_pnl / sod
+            rows.append(
+                {
+                    "profile_id": profile_id,
+                    "model": model,
+                    "trade": trade_name,
+                    "lead_hours": lead_s,
+                    "exit_mode": exit_mode,
+                    "sizing_mode": sizing_mode,
+                    "since": since,
+                    "settlement_date": settlement_date.isoformat(),
+                    "pnl_usd": round(day_pnl, 4),
+                    "pnl_pct": round(pnl_pct, 4),
+                    "sod_balance_usd": round(sod, 4),
+                    "n_trades": len(day_trades),
+                }
+            )
+            balance = round(balance + day_pnl, 4)
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #

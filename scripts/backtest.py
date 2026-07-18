@@ -15,6 +15,9 @@ Examples:
         --trade-strategy dist_arb --csv out.csv
     python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
         --trade-strategy dist_arb --sizing-mode bnwp --csv out.csv
+    python scripts/backtest.py --start 2026-06-01 --end 2026-06-20 \\
+        --trade-strategy dist_arb --csv reports/backtest/dist_arb_summary.csv \\
+        --daily-csv reports/backtest/dist_arb_daily.csv
 """
 
 from __future__ import annotations
@@ -35,8 +38,10 @@ from polytempo.analysis import MODEL_STRATEGIES  # noqa: E402
 from polytempo.paper.backtest import (  # noqa: E402
     BacktestResult,
     ProfileBacktestResult,
+    build_daily_performance_rows,
     run_backtest,
 )
+from polytempo.paper.performance_csv import write_performance_daily_csv  # noqa: E402
 from polytempo.profiles.load import (  # noqa: E402
     DEFAULT_PROFILES_PATH,
     generate_all_twelve_profiles,
@@ -280,6 +285,14 @@ def _write_csv(result: BacktestResult, path: Path) -> None:
     print(f"\nWrote per-profile summary to {path}")
 
 
+def _write_daily_csv(
+    result: BacktestResult, profiles: list[TradingProfile], path: Path
+) -> None:
+    rows = build_daily_performance_rows(result, profiles)
+    write_performance_daily_csv(path, rows)
+    print(f"\nWrote {len(rows)} daily row(s) to {path}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Hold-to-settlement paper trading backtest (no DB writes)"
@@ -347,6 +360,16 @@ def main() -> int:
     )
     parser.add_argument("--csv", type=Path, default=None, help="Write summary CSV here")
     parser.add_argument(
+        "--daily-csv",
+        type=Path,
+        default=None,
+        help=(
+            "Write visualizer-compatible daily CSV (profile × settlement_date). "
+            "Use a path under reports/backtest/ so Refresh-from-DB does not "
+            "overwrite reports/performance/daily.csv"
+        ),
+    )
+    parser.add_argument(
         "--daily", action="store_true", help="Also print per-day breakdown"
     )
     args = parser.parse_args()
@@ -401,6 +424,8 @@ def main() -> int:
         _print_daily(result)
     if args.csv is not None:
         _write_csv(result, args.csv)
+    if args.daily_csv is not None:
+        _write_daily_csv(result, profiles, args.daily_csv)
     return 0
 
 

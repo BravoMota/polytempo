@@ -311,7 +311,10 @@ Scope v1: **hold-to-settlement only** (no active ADD/FLATTEN). Active (`active_w
 | `--database-url`    | Weather DB URL override (read-only; defaults to `POLYTEMPO_DATABASE_URL`)          |
 | `--no-wunderground` | Skip the Wunderground snapshot forecast in the input reconstruction               |
 | `--csv`             | Write per-profile summary CSV                                                       |
+| `--daily-csv`       | Write visualizer-compatible daily CSV (one row per profile × settlement date)     |
 | `--daily`           | Also print the per-day PnL breakdown                                               |
+
+`--daily-csv` matches `report_performance.py --csv` / the Streamlit viewer schema (`profile_id`, knobs, `settlement_date`, `pnl_usd`, `pnl_pct`, `sod_balance_usd`, `n_trades`). Point the viewer sidebar at that file. Keep it under `reports/backtest/` so **Refresh from DB** does not overwrite `reports/performance/daily.csv`. Summary heatmap works offline; trade-detail / replay still need the paper + weather DBs and will not show backtest fills.
 
 Reads the weather DB (CLOB / Open-Meteo / WU snapshots) and Gamma (winning bucket). Output: per-profile PnL, trade count, win rate, final balance, max drawdown, plus a summed "no-open reasons" list so empty runs are diagnosable. Running all ~330 profiles over a wide window is slow (many per-gate DB reads); filter with `--profiles` / `--trade-strategy` for quick iterations.
 
@@ -325,6 +328,12 @@ python scripts/backtest.py --start 2026-06-25 --end 2026-06-30 \
 # one trade strategy across the settled window + per-day breakdown, dump CSV
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
   --trade-strategy dist_arb --daily --csv reports/backtest/dist_arb.csv
+
+# summary + visualizer daily CSV (open daily file in Streamlit sidebar)
+python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \
+  --trade-strategy dist_arb \
+  --csv reports/backtest/dist_arb_summary.csv \
+  --daily-csv reports/backtest/dist_arb_daily.csv
 
 # lock ONLY the distribution model (every trade strategy on best_historical_updated)
 python scripts/backtest.py --start 2026-06-20 --end 2026-07-10 \

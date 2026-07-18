@@ -26,6 +26,12 @@ def _load_report_module():
 report = _load_report_module()
 
 
+def test_csv_columns_match_shared_constant() -> None:
+    from polytempo.paper.performance_csv import PERFORMANCE_DAILY_CSV_COLUMNS
+
+    assert report.CSV_COLUMNS == PERFORMANCE_DAILY_CSV_COLUMNS
+
+
 def test_realization_uses_settlement_date_not_ledger_timestamp() -> None:
     """Late/early UTC settles map to the weather day, not the ledger UTC day."""
     event_dates = {

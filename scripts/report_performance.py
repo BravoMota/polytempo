@@ -18,7 +18,6 @@ Reads the live paper DB; no writes unless ``--out`` or ``--csv`` is set.
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -28,6 +27,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from polytempo.paper.performance_csv import (  # noqa: E402
+    PERFORMANCE_DAILY_CSV_COLUMNS,
+    write_performance_daily_csv,
+)
 from polytempo.paper.settlement_reporting import (  # noqa: E402
     build_event_settlement_dates,
     realization_day,
@@ -44,20 +47,8 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-CSV_COLUMNS = [
-    "profile_id",
-    "model",
-    "trade",
-    "lead_hours",
-    "exit_mode",
-    "sizing_mode",
-    "since",
-    "settlement_date",
-    "pnl_usd",
-    "pnl_pct",
-    "sod_balance_usd",
-    "n_trades",
-]
+# Alias kept for callers/tests that import CSV_COLUMNS from this module.
+CSV_COLUMNS = PERFORMANCE_DAILY_CSV_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -356,13 +347,7 @@ def build_csv_rows(
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
-    generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as fh:
-        fh.write(f"# generated_utc: {generated}\n")
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
+    write_performance_daily_csv(path, rows)
 
 
 def build_report(
