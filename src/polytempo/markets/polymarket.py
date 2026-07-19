@@ -33,6 +33,7 @@ class PolymarketBucket:
     resolved: bool = False
     outcome: str | None = None
     yes_token_id: str | None = None
+    no_token_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,8 @@ def parse_event_payload(payload: dict) -> PolymarketEvent:
                 rules=market.get("description"),
                 resolved=resolved,
                 outcome=outcome,
-                yes_token_id=_parse_yes_token_id(market.get("clobTokenIds")),
+                yes_token_id=_parse_clob_token_id(market.get("clobTokenIds"), 0),
+                no_token_id=_parse_clob_token_id(market.get("clobTokenIds"), 1),
             )
         )
 
@@ -266,11 +268,11 @@ def _quote_from_book(book: dict) -> ClobQuote:
     )
 
 
-def _parse_yes_token_id(value: object) -> str | None:
-    """Extract the YES clob token id (element ``[0]``) from Gamma ``clobTokenIds``.
+def _parse_clob_token_id(value: object, index: int) -> str | None:
+    """Extract one clob token id from Gamma ``clobTokenIds`` (``[0]`` YES, ``[1]`` NO).
 
     Like ``outcomePrices``, the field is sometimes a JSON-encoded string and
-    sometimes a list. The first element is the YES outcome token.
+    sometimes a list. The first element is the YES outcome token, the second NO.
     """
     if isinstance(value, str):
         text = value.strip()
@@ -281,9 +283,9 @@ def _parse_yes_token_id(value: object) -> str | None:
                 value = json.loads(text)
             except ValueError:
                 return None
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list) or len(value) <= index:
         return None
-    token = value[0]
+    token = value[index]
     return str(token) if token not in (None, "") else None
 
 

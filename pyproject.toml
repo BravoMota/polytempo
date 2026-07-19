@@ -28,6 +28,9 @@ view = [
     "pandas",
     "plotly>=5",
 ]
+live = [
+    "py-clob-client",
+]
 
 [project.scripts]
 polytempo = "polytempo.cli.main:app"
