@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon: long-lived live trading node, config/live_node.yaml (mode: dry_run).
+  Env from /Users/jnlow/projects/PolyTempo/.env via run-with-env.sh; needs
+  POLYTEMPO_LIVE_DATABASE_URL (own database, never the paper one).
+
+  Placing real orders needs mode: live in the YAML *and* POLYMARKET_PRIVATE_KEY
+  plus POLYTEMPO_LIVE_CONFIRM=1 in .env. Never set POLYTEMPO_LIVE_CONFIRM (or any
+  credential) here — the interlock exists so a config edit alone cannot trade.
+
+  No KeepAlive: this process handles money and exits 1 deliberately when it
+  refuses to start (failed reconciliation, mixed-mode journal). Relaunching that
+  in a loop is worse than being down, so a crash waits for a human — see
+  deploy/launchd/README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.live-node</string>
+
+    <key>UserName</key>
+    <string>jnlow</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
+        <string>scripts/run_live_node.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jnlow/projects/PolyTempo</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/live-node.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/live-node.err.log</string>
+</dict>
+</plist>

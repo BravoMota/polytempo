@@ -9,6 +9,7 @@ LAUNCHD_DIR="/Library/LaunchDaemons"
 LABELS=(
   com.polytempo.collector
   com.polytempo.paper-bot
+  com.polytempo.live-node
   com.polytempo.calibration
   com.polytempo.db-backup
   com.polytempo.performance-export

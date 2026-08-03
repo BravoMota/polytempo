@@ -3,7 +3,7 @@
 set -euo pipefail
 
 DOMAIN="system"
-ALL_JOBS=(collector paper-bot calibration db-backup performance-export performance-viewer)
+ALL_JOBS=(collector paper-bot live-node calibration db-backup performance-export performance-viewer)
 
 usage() {
   cat <<EOF
@@ -11,10 +11,13 @@ Usage: polytempo-service <command> [job]
 
 Commands:
   status [job|all]              launchctl print for one or all jobs
-  restart collector|paper-bot|performance-viewer|all   kickstart -k long-lived jobs
+  restart collector|paper-bot|live-node|performance-viewer|all   kickstart -k long-lived jobs
   run calibration|db-backup|performance-export     kickstart calendar jobs (--once via plist)
 
 Jobs: ${ALL_JOBS[*]}
+
+live-node handles money and is excluded from "restart all" (and from
+polytempo-deploy.sh); restart it explicitly after reviewing logs/live-node.err.log.
 EOF
 }
 
@@ -22,6 +25,7 @@ resolve_label() {
   case "$1" in
     collector) echo com.polytempo.collector ;;
     paper-bot) echo com.polytempo.paper-bot ;;
+    live-node) echo com.polytempo.live-node ;;
     calibration) echo com.polytempo.calibration ;;
     db-backup) echo com.polytempo.db-backup ;;
     performance-export) echo com.polytempo.performance-export ;;
@@ -35,7 +39,7 @@ resolve_label() {
 
 is_long_lived() {
   case "$1" in
-    collector | paper-bot | performance-viewer) return 0 ;;
+    collector | paper-bot | live-node | performance-viewer) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -70,13 +74,15 @@ cmd_restart() {
     exit 1
   fi
   if [[ "$target" == "all" ]]; then
+    # live-node is deliberately excluded: never bounce a money-handling process
+    # from an unattended deploy. Restart it by name.
     cmd_restart collector
     cmd_restart paper-bot
     cmd_restart performance-viewer
     return
   fi
   if ! is_long_lived "$target"; then
-    echo "restart applies only to long-lived jobs: collector, paper-bot, performance-viewer, all" >&2
+    echo "restart applies only to long-lived jobs: collector, paper-bot, live-node, performance-viewer, all" >&2
     exit 1
   fi
   local label

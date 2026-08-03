@@ -11,7 +11,7 @@ DEPLOY_LOG_LINES=30
 SKIP_DB=0
 OUT=""
 
-JOBS=(collector paper-bot calibration db-backup performance-export performance-viewer)
+JOBS=(collector paper-bot live-node calibration db-backup performance-export performance-viewer)
 
 usage() {
   cat <<EOF
@@ -122,6 +122,7 @@ Give a TLDR in this exact structure:
 **Jobs**
 - collector: OK / issue — …
 - paper-bot: OK / issue — …
+- live-node: OK / issue — …
 - calibration: OK / issue — …
 - db-backup: OK / issue — …
 - performance-export: OK / issue — …
@@ -139,6 +140,8 @@ Rules:
 - Flag only real problems (crashes, stale heartbeats, repeated errors, failed SQL).
 - Ignore routine INFO/log noise unless it repeats or correlates with a failure.
 - Long-lived jobs should be state=running with a PID.
+- live-node has no KeepAlive: if it is not running it stays down. Report that and
+  recommend a manual restart, never treat it as self-healing.
 - paper_bot_state.last_tick should be within ~20 minutes.
 - calibration_job_state.last_success_at_utc should be within ~36 hours.
 - reports/performance/daily.csv generated_utc should be within ~36 hours.
@@ -251,7 +254,8 @@ write_performance_csv() {
 write_reviewer_checklist() {
   section "Reviewer checklist"
   fenced <<'EOF'
-- Long-lived jobs (collector, paper-bot, performance-viewer): state=running, PID set
+- Long-lived jobs (collector, paper-bot, live-node, performance-viewer): state=running, PID set
+- live-node: not running = stopped until a human restarts it (no KeepAlive)
 - paper_bot_state.last_tick: within ~20 minutes
 - calibration_job_state.last_success_at_utc: within ~36 hours
 - collector_state.last_success_at_utc: recent per expected slot cadence

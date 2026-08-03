@@ -16,12 +16,13 @@ Operator runbook for running PolyTempo on **mac0** under user **`jnlow`**, super
 | --- | --- | --- | --- |
 | `com.polytempo.collector` | `scripts/run_collector.py` | long-lived | internal UTC slots |
 | `com.polytempo.paper-bot` | `scripts/run_paper_bot.py` | long-lived | lead-time gates |
+| `com.polytempo.live-node` | `scripts/run_live_node.py` | long-lived, **no `KeepAlive`** | lead gates + settlement sweep |
 | `com.polytempo.calibration` | `scripts/run_daily_calibration.py --once` | calendar | **01:00 mac0 local** |
 | `com.polytempo.db-backup` | `scripts/backup_databases.py --once` | calendar | **02:00 mac0 local** |
 | `com.polytempo.performance-export` | `scripts/report_performance.py --all --csv …` | calendar | **03:30 mac0 local** |
 | `com.polytempo.performance-viewer` | Streamlit `scripts/view_performance.py` | long-lived | **127.0.0.1:8501** (SSH/Tailscale) |
 
-Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad`.
+Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad` — except the live node, which handles money and is never auto-relaunched; see [deploy/launchd/README.md](../deploy/launchd/README.md).
 
 ---
 
@@ -91,6 +92,9 @@ Edit `.env` with production URLs (Tailscale host, four DB names). Minimum for pr
 
 - `POLYTEMPO_DATABASE_URL` — weather prod (`polytempo`)
 - `POLYTEMPO_PAPER_DATABASE_URL` — paper prod (`polytempo_paper`)
+- `POLYTEMPO_LIVE_DATABASE_URL` — live node journal (`polytempo_live`), separate from paper
+
+Live trading credentials (`POLYMARKET_PRIVATE_KEY`, `POLYTEMPO_LIVE_CONFIRM=1`) are **not** needed while the node runs in `dry_run`; see [deploy/launchd/README.md](../deploy/launchd/README.md) before adding them.
 
 Backup script also reads test DB URLs when set; see [database-backups.md](database-backups.md).
 
@@ -109,6 +113,7 @@ With `.env` sourced and Tailscale up:
 ```bash
 python scripts/init_weather_db.py
 python scripts/init_paper_db.py
+python scripts/init_live_db.py
 ```
 
 Optional first-time calibration store (before nightly job; requires this repo version with metric °C observation fetch):
@@ -127,6 +132,7 @@ Run each job once manually as `jnlow`:
 ```bash
 deploy/bin/run-with-env.sh scripts/run_collector.py --once
 deploy/bin/run-with-env.sh scripts/run_paper_bot.py --once
+deploy/bin/run-with-env.sh scripts/run_live_node.py --once
 deploy/bin/run-with-env.sh scripts/run_daily_calibration.py --once
 deploy/bin/run-with-env.sh scripts/backup_databases.py --once
 deploy/bin/run-with-env.sh scripts/report_performance.py --all --csv reports/performance/daily.csv
@@ -237,6 +243,7 @@ Then as `jnlow`:
 sudo deploy/bin/polytempo-service status all
 sudo deploy/bin/polytempo-service restart collector
 sudo deploy/bin/polytempo-service restart paper-bot
+sudo deploy/bin/polytempo-service restart live-node   # not covered by "restart all"
 sudo deploy/bin/polytempo-service run calibration
 sudo deploy/bin/polytempo-service run db-backup
 
