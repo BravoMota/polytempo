@@ -1,7 +1,8 @@
 """Tests for the execution clients (polytempo.live.execution).
 
-No network and no ``py-clob-client`` requirement: the dry-run client is fully
-in-memory and ``normalize_clob_status`` is a module-level pure function.
+No network and no ``polymarket-client`` requirement: the dry-run client is
+fully in-memory and ``normalize_clob_status`` is a module-level pure function.
+The SDK-backed adapter is covered in ``test_live_polymarket_execution.py``.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import pytest
 from polytempo.live.config import LiveCredentials
 from polytempo.live.execution import (
     DryRunExecutionClient,
-    PyClobExecutionClient,
+    PolymarketExecutionClient,
     normalize_clob_status,
 )
 from polytempo.live.models import (
@@ -149,12 +150,10 @@ def test_dry_run_unknown_order_status_raises() -> None:
     [
         ("LIVE", STATE_OPEN),
         ("live", STATE_OPEN),
-        ("OPEN", STATE_OPEN),
         ("MATCHED", STATE_FILLED),
-        ("DELAYED", STATE_SUBMITTED),
+        ("DELAYED", STATE_OPEN),
+        ("UNMATCHED", STATE_REJECTED),
         ("CANCELED", STATE_CANCELED),
-        ("CANCELLED", STATE_CANCELED),
-        ("REJECTED", STATE_REJECTED),
         ("something-weird", STATE_FAILED),
         ("", STATE_FAILED),
     ],
@@ -190,9 +189,18 @@ def test_assert_transition_rejects_illegal_jump() -> None:
         assert_transition(STATE_PENDING, STATE_FILLED)  # PENDING can't reach FILLED
 
 
-# ── PyClobExecutionClient (no network) ───────────────────────────────────────────
-def test_pyclob_raises_without_package_installed() -> None:
-    if importlib.util.find_spec("py_clob_client") is not None:
-        pytest.skip("py-clob-client is installed; missing-package path not exercised")
+def test_every_mapped_status_is_reachable_from_submitted() -> None:
+    # place_limit_buy asserts this transition, so no status may map outside it.
+    for raw in ("LIVE", "DELAYED", "MATCHED", "UNMATCHED", "CANCELED", "junk"):
+        state = normalize_clob_status(raw, 0.0, 10.0)
+        if state != STATE_CANCELED:  # only reachable from OPEN, never at placement
+            assert_transition(STATE_SUBMITTED, state)
+
+
+# ── PolymarketExecutionClient (no network) ───────────────────────────────────────
+def test_polymarket_raises_without_package_installed() -> None:
+    if importlib.util.find_spec("polymarket") is not None:
+        pytest.skip("polymarket-client is installed; missing-package path not exercised")
     with pytest.raises(RuntimeError):
-        PyClobExecutionClient(LiveCredentials(private_key="0xabc"))
+        PolymarketExecutionClient(LiveCredentials(private_key="0xabc"))
+

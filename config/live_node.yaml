@@ -3,28 +3,33 @@
 # mode: dry_run — full pipeline incl. sizing/risk/ledger, but orders are
 #                 simulated in-process; nothing leaves the machine.
 #       live    — real orders. Requires POLYMARKET_PRIVATE_KEY (and optionally
-#                 POLYMARKET_PROXY_ADDRESS / POLYMARKET_SIGNATURE_TYPE) plus
-#                 POLYTEMPO_LIVE_CONFIRM=1 in the environment. Refuses to start
-#                 otherwise.
+#                 POLYMARKET_WALLET_ADDRESS) plus POLYTEMPO_LIVE_CONFIRM=1 in
+#                 the environment. Refuses to start otherwise.
 mode: dry_run
 
 city: london
 target_day: tomorrow
 
-# ── THE KNOB — PLACEHOLDER, deliberately undecided ────────────────────────────
-# Which model x trade strategy x lead gates the node trades. The values below
-# are a stand-in so the node can boot in dry_run; the real choice is pending
-# the es-vs-bh A/B rerun. Change knob.id when the decision is made so ledger
-# rows are attributable to the decided knob.
+# ── THE KNOB ──────────────────────────────────────────────────────────────────
+# Which model x trade strategy x lead gates the node trades. Decided 2026-08-03
+# from the realized-P/L audit in docs/project-audit-2026-07-06.md (window
+# Jun 8 - Jul 6): ensemble_spread was the only profitable model family (+24.1%),
+# lead42 (+17.2%) and lead30 (+15.7%) the only profitable gates, and max_edge a
+# robust winner across families. Caveat: the es-vs-bh A/B rerun never happened,
+# so this rests on one ~4-week window. Change knob.id if the envelope changes so
+# ledger rows stay attributable.
 knob:
-  id: knob_v0_placeholder
-  model_strategy: ensemble_spread   # PLACEHOLDER
-  trade_strategy: max_edge          # PLACEHOLDER
-  lead_gates: [30, 42]              # PLACEHOLDER (hours before end of target day)
+  id: es_maxedge_lead3042_v1
+  model_strategy: ensemble_spread
+  trade_strategy: max_edge
+  lead_gates: [30, 42]              # hours before end of target day
 
-# Flat stake per order in v1 (no Kelly/fraction sizing until the knob is decided).
+# Flat stake per order in v1 (no Kelly/fraction sizing).
+# max_edge takes one ticket per event per profile, so two gates = <=2 tickets/day
+# on the same event. Both gates fire on D-1 and are held to settlement, so peak
+# concurrency is ~4 tickets. At $2 that is $8-12 against a $50 bankroll.
 stake:
-  fixed_usd: 10.0
+  fixed_usd: 2.0
 
 execution:
   # Limit price = best_ask + max_slippage (capped by risk.max_price).
@@ -34,12 +39,18 @@ execution:
   # Resting depth (USD) within the slippage window required to quote at all.
   min_depth_usd: 50.0
 
+# Sized for a $50 bankroll. NOTE: nothing checks the real on-chain balance —
+# collateral_balance_usd() exists on the execution client but the node never
+# calls it, so these caps are the only thing bounding exposure.
 risk:
   # Touch this file to halt all opening instantly (settlement still runs).
   kill_switch_file: config/KILL_LIVE
-  max_daily_loss_usd: 50.0
-  max_open_exposure_usd: 120.0
-  max_event_exposure_usd: 40.0
+  # Realized-only and lagging: counts settlements landing today, which may be
+  # from positions opened days earlier.
+  max_daily_loss_usd: 8.0
+  max_open_exposure_usd: 15.0
+  # Two gates on one event = $4; this admits both and blocks a third.
+  max_event_exposure_usd: 5.0
   min_price: 0.02
   max_price: 0.90
   max_spread: 0.10

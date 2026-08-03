@@ -29,7 +29,7 @@ view = [
     "plotly>=5",
 ]
 live = [
-    "py-clob-client",
+    "polymarket-client",
 ]
 
 [project.scripts]

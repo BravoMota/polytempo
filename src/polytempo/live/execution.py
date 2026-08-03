@@ -5,20 +5,19 @@ Three pieces:
 * ``ExecutionClient`` — the structural protocol the node depends on.
 * ``DryRunExecutionClient`` — a network-free simulator that matches intents
   against a supplied book, so the whole stack can run end-to-end offline.
-* ``PyClobExecutionClient`` — the real adapter over ``py-clob-client``.
+* ``PolymarketExecutionClient`` — the real adapter over ``polymarket-client``.
 
-``py-clob-client`` is imported lazily and *only* inside ``PyClobExecutionClient``
-so this module (and ``normalize_clob_status``) import cleanly without the extra
-installed. All exchange-status normalization lives in the module-level pure
-function ``normalize_clob_status`` so it is unit-testable on its own.
+``polymarket-client`` is imported lazily and *only* inside
+``PolymarketExecutionClient`` so this module (and ``normalize_clob_status``)
+import cleanly without the extra installed. All exchange-status normalization
+lives in the module-level pure function ``normalize_clob_status`` so it is
+unit-testable on its own.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol
-
-import httpx
+from typing import TYPE_CHECKING, Protocol
 
 from polytempo.live.config import LiveCredentials
 from polytempo.live.models import (
@@ -36,6 +35,9 @@ from polytempo.live.models import (
     PlacedOrder,
     assert_transition,
 )
+
+if TYPE_CHECKING:
+    from polymarket import OpenOrder
 
 _EPS = 1e-9
 _MISSING_EXTRA = 'install extra: pip install "polytempo[live]"'
@@ -174,236 +176,146 @@ def normalize_clob_status(raw_status: str, filled: float, total: float) -> str:
     A fully matched order (``filled >= total`` with ``total > 0``) is ``FILLED``
     regardless of the reported status. Otherwise the status string is mapped;
     anything unrecognized becomes ``FAILED`` (state unknown, needs reconcile).
+
+    ``DELAYED`` is ``OPEN``, not ``SUBMITTED``: the exchange has acknowledged
+    the order and returned an id, it just has not matched yet. That also keeps
+    every mapped state reachable from ``SUBMITTED`` per ``ORDER_TRANSITIONS``.
     """
     if total > 0 and filled + _EPS >= total:
         return STATE_FILLED
     status = (raw_status or "").strip().upper()
     mapping = {
         "LIVE": STATE_OPEN,
-        "OPEN": STATE_OPEN,
+        "DELAYED": STATE_OPEN,
         "MATCHED": STATE_FILLED,
-        "FILLED": STATE_FILLED,
-        "DELAYED": STATE_SUBMITTED,
+        "UNMATCHED": STATE_REJECTED,
         "CANCELED": STATE_CANCELED,
-        "CANCELLED": STATE_CANCELED,
-        "REJECTED": STATE_REJECTED,
     }
     return mapping.get(status, STATE_FAILED)
 
 
-class PyClobExecutionClient:
-    """Execution against the real Polymarket CLOB via ``py-clob-client``.
+def normalize_open_order(order: "OpenOrder") -> OrderStatus:
+    """Normalize one SDK ``OpenOrder`` into our ``OrderStatus`` (pure).
 
-    Written defensively: the ``py-clob-client`` surface has drifted across
-    releases, so every touchpoint is guarded and wrapped in ``RuntimeError``
-    with context, and all imports of the package stay inside this class.
+    Fills come from the order's own ``size_matched``/``price`` rather than the
+    placement response's making/taking amounts: those only cover fills that
+    happened at placement, while a resting order keeps filling afterwards.
+    ``price`` is the limit price, so it is an upper bound on a BUY's true
+    average — the exchange may improve it.
+    """
+    filled = float(order.size_matched)
+    total = float(order.original_size)
+    return OrderStatus(
+        order_id=str(order.id),
+        state=normalize_clob_status(order.status, filled, total),
+        filled_shares=filled,
+        avg_fill_price=float(order.price) if filled > 0 else None,
+        raw=order.model_dump(mode="json"),
+    )
+
+
+class PolymarketExecutionClient:
+    """Execution against Polymarket CLOB V2 via the ``polymarket-client`` SDK.
+
+    The SDK derives the wallet type and the pUSD/exchange addresses from its
+    production ``Environment``, so credentials are just a signing key plus the
+    wallet to act for. Every call is wrapped in ``RuntimeError`` with context so
+    the place-and-manage loop journals a FAILED result instead of crashing, and
+    the SDK import stays inside this class.
     """
 
-    _DATA_API = "https://data-api.polymarket.com"
-
-    def __init__(
-        self,
-        credentials: LiveCredentials,
-        host: str = "https://clob.polymarket.com",
-        chain_id: int = 137,
-    ) -> None:
+    def __init__(self, credentials: LiveCredentials) -> None:
         try:
-            from py_clob_client.client import ClobClient
+            from polymarket import SecureClient
         except ImportError as exc:
             raise RuntimeError(_MISSING_EXTRA) from exc
-
-        self._credentials = credentials
-        self._host = host
-
-        kwargs: dict[str, object] = {"key": credentials.private_key, "chain_id": chain_id}
-        if credentials.signature_type is not None:
-            kwargs["signature_type"] = credentials.signature_type
-        if credentials.proxy_address is not None:
-            kwargs["funder"] = credentials.proxy_address
-
         try:
-            client = ClobClient(host, **kwargs)
-            client.set_api_creds(client.create_or_derive_api_creds())
+            self._client = SecureClient.create(
+                private_key=credentials.private_key,
+                wallet=credentials.wallet_address,
+            )
         except Exception as exc:  # noqa: BLE001 — surface any setup failure with context
-            raise RuntimeError(f"failed to initialize CLOB client: {exc}") from exc
-        self._client = client
+            raise RuntimeError(f"failed to initialize Polymarket client: {exc}") from exc
 
     def place_limit_buy(self, intent: OrderIntent) -> PlacedOrder:
         try:
-            from py_clob_client.clob_types import OrderArgs
-            from py_clob_client.order_builder.constants import BUY
-        except ImportError as exc:
-            raise RuntimeError(_MISSING_EXTRA) from exc
-
-        poster = self._require("create_and_post_order")
-        args = OrderArgs(
-            price=intent.limit_price,
-            size=intent.shares,
-            side=BUY,
-            token_id=intent.token_id,
-        )
-        try:
-            response = poster(args)
+            response = self._client.place_limit_order(
+                token_id=intent.token_id,
+                price=intent.limit_price,
+                size=intent.shares,
+                side="BUY",
+            )
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"create_and_post_order failed: {exc}") from exc
+            raise RuntimeError(f"place_limit_order failed: {exc}") from exc
 
-        raw = response if isinstance(response, dict) else {}
-        order_id = raw.get("orderID") or raw.get("orderId") or raw.get("id")
-        raw_status = str(raw.get("status") or "")
-        if order_id is None:
+        if not response.ok:
+            # Carry the machine-readable code/message so the ledger can journal
+            # why the exchange refused (``not_enough_balance`` and friends).
             state = STATE_REJECTED
-        elif raw_status:
-            state = normalize_clob_status(raw_status, 0.0, intent.shares)
+            order_id = ""
+            raw: dict[str, object] = {"code": response.code, "message": response.message}
         else:
-            state = STATE_OPEN
+            state = normalize_clob_status(response.status, 0.0, intent.shares)
+            order_id = response.order_id
+            # A BUY makes collateral and takes shares, so ``making_amount`` is
+            # USD spent and ``taking_amount`` is shares received at placement.
+            shares = float(response.taking_amount)
+            raw = {
+                "status": response.status,
+                "filled_shares": shares,
+                "avg_fill_price": float(response.making_amount) / shares if shares else None,
+                "trade_ids": list(response.trade_ids),
+            }
+        assert_transition(STATE_SUBMITTED, state)
         return PlacedOrder(
-            order_id=str(order_id) if order_id is not None else "",
+            order_id=order_id,
             intent_id=intent.intent_id,
             state=state,
             raw=raw,
         )
 
     def order_status(self, order_id: str) -> OrderStatus:
-        getter = self._require("get_order")
         try:
-            raw = getter(order_id)
+            order = self._client.get_order(order_id=order_id)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"get_order failed: {exc}") from exc
-        data = raw if isinstance(raw, dict) else {}
-        filled = _to_float(data.get("size_matched") or data.get("sizeMatched"))
-        total = _to_float(
-            data.get("original_size") or data.get("originalSize") or data.get("size")
-        )
-        state = normalize_clob_status(str(data.get("status") or ""), filled, total)
-        avg = _to_optional_float(data.get("price")) if filled > 0 else None
-        return OrderStatus(
-            order_id=str(order_id),
-            state=state,
-            filled_shares=filled,
-            avg_fill_price=avg,
-            raw=data,
-        )
+        return normalize_open_order(order)
 
     def cancel_order(self, order_id: str) -> bool:
-        canceller = self._require("cancel")
         try:
-            raw = canceller(order_id)
+            response = self._client.cancel_order(order_id=order_id)
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"cancel failed: {exc}") from exc
-        if isinstance(raw, dict):
-            canceled = raw.get("canceled") or raw.get("cancelled")
-            if isinstance(canceled, list):
-                return str(order_id) in [str(c) for c in canceled]
-            return bool(raw.get("success", True))
-        return bool(raw)
+            raise RuntimeError(f"cancel_order failed: {exc}") from exc
+        return str(order_id) in [str(c) for c in response.canceled]
 
     def open_orders(self) -> list[OrderStatus]:
-        getter = self._require("get_orders")
         try:
-            raw = getter()
+            orders = list(self._client.list_open_orders().iter_items())
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"get_orders failed: {exc}") from exc
-        if isinstance(raw, dict):
-            items = raw.get("data") or []
-        elif isinstance(raw, list):
-            items = raw
-        else:
-            items = []
-        result: list[OrderStatus] = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            order_id = item.get("id") or item.get("orderID") or item.get("orderId")
-            filled = _to_float(item.get("size_matched") or item.get("sizeMatched"))
-            total = _to_float(item.get("original_size") or item.get("size"))
-            state = normalize_clob_status(str(item.get("status") or ""), filled, total)
-            if state in TERMINAL_STATES:
-                continue
-            result.append(
-                OrderStatus(
-                    order_id=str(order_id) if order_id is not None else "",
-                    state=state,
-                    filled_shares=filled,
-                    avg_fill_price=_to_optional_float(item.get("price")) if filled > 0 else None,
-                    raw=item,
-                )
-            )
-        return result
+            raise RuntimeError(f"list_open_orders failed: {exc}") from exc
+        statuses = [normalize_open_order(o) for o in orders]
+        return [s for s in statuses if s.state not in TERMINAL_STATES]
 
     def positions(self) -> list[LivePosition]:
-        user = self._credentials.proxy_address or self._derived_address()
-        if not user:
-            return []
+        # No ``user``: the SDK defaults to the authenticated wallet.
         try:
-            response = httpx.get(f"{self._DATA_API}/positions", params={"user": user})
-            response.raise_for_status()
-            payload = response.json()
+            items = list(self._client.list_positions().iter_items())
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"positions fetch failed: {exc}") from exc
-        positions: list[LivePosition] = []
-        for item in payload or []:
-            if not isinstance(item, dict):
-                continue
-            asset = item.get("asset")
-            if asset is None:
-                continue
-            positions.append(
-                LivePosition(
-                    token_id=str(asset),
-                    shares=_to_float(item.get("size")),
-                    avg_price=_to_optional_float(item.get("avgPrice")),
-                )
+            raise RuntimeError(f"list_positions failed: {exc}") from exc
+        return [
+            LivePosition(
+                token_id=str(p.token_id),
+                shares=float(p.size) if p.size is not None else 0.0,
+                avg_price=float(p.avg_price) if p.avg_price is not None else None,
             )
-        return positions
+            for p in items
+            if p.token_id is not None
+        ]
 
     def collateral_balance_usd(self) -> float | None:
-        getter = getattr(self._client, "get_balance_allowance", None)
-        if getter is None:
-            return None
         try:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
-
-            raw = getter(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+            allowance = self._client.get_balance_allowance(asset_type="COLLATERAL")
         except Exception:  # noqa: BLE001 — best-effort; balance is optional
             return None
-        if not isinstance(raw, dict):
-            return None
-        balance = raw.get("balance")
-        if balance is None:
-            return None
-        try:
-            # USDC collateral is reported in 6-decimal base units.
-            return float(balance) / 1e6
-        except (TypeError, ValueError):
-            return None
-
-    def _require(self, name: str) -> Callable[..., object]:
-        method = getattr(self._client, name, None)
-        if method is None or not callable(method):
-            raise RuntimeError(f"py-clob-client ClobClient has no callable {name!r}")
-        return method
-
-    def _derived_address(self) -> str | None:
-        getter = getattr(self._client, "get_address", None)
-        if getter is None:
-            return None
-        try:
-            return getter()
-        except Exception:  # noqa: BLE001
-            return None
-
-
-def _to_float(value: object) -> float:
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _to_optional_float(value: object) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
+        # pUSD collateral is reported in 6-decimal base units.
+        return allowance.balance / 1e6

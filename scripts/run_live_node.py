@@ -26,7 +26,7 @@ from polytempo.live.config import (  # noqa: E402
 )
 from polytempo.live.execution import (  # noqa: E402
     DryRunExecutionClient,
-    PyClobExecutionClient,
+    PolymarketExecutionClient,
 )
 from polytempo.live.ledger import LiveLedger  # noqa: E402
 from polytempo.live.marketdata import fetch_book_depth  # noqa: E402
@@ -117,7 +117,7 @@ def main() -> int:
                 ", ".join(sorted(other_modes)),
             )
             return 1
-        client = PyClobExecutionClient(resolve_live_credentials())
+        client = PolymarketExecutionClient(resolve_live_credentials())
     else:
         client = DryRunExecutionClient(book_provider=_single_token_book)
     risk = RiskEngine(config.risk)

@@ -24,14 +24,13 @@ DEFAULT_LIVE_CONFIG_PATH = (
 )
 
 ENV_PRIVATE_KEY = "POLYMARKET_PRIVATE_KEY"
-ENV_PROXY_ADDRESS = "POLYMARKET_PROXY_ADDRESS"
-ENV_SIGNATURE_TYPE = "POLYMARKET_SIGNATURE_TYPE"
+ENV_WALLET_ADDRESS = "POLYMARKET_WALLET_ADDRESS"
 ENV_LIVE_CONFIRM = "POLYTEMPO_LIVE_CONFIRM"
 
 
 @dataclass(frozen=True)
 class KnobConfig:
-    """The strategy knob. PLACEHOLDER until the model A/B decision is made."""
+    """The strategy knob: which model x trade strategy x lead gates to trade."""
 
     id: str
     model_strategy: str
@@ -148,11 +147,14 @@ class LiveNodeConfig:
 
 @dataclass(frozen=True)
 class LiveCredentials:
-    """Execution credentials pulled from the environment (live mode only)."""
+    """Execution credentials pulled from the environment (live mode only).
+
+    ``wallet_address`` is optional: the SDK falls back to the signer's own
+    deposit wallet and derives the wallet type itself.
+    """
 
     private_key: str
-    proxy_address: str | None = None
-    signature_type: int | None = None
+    wallet_address: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
 
 
@@ -216,9 +218,7 @@ def resolve_live_credentials() -> LiveCredentials:
     private_key = os.environ.get(ENV_PRIVATE_KEY)
     if not private_key:
         raise RuntimeError(f"live mode requires {ENV_PRIVATE_KEY}")
-    signature_type_raw = os.environ.get(ENV_SIGNATURE_TYPE)
     return LiveCredentials(
         private_key=private_key,
-        proxy_address=os.environ.get(ENV_PROXY_ADDRESS),
-        signature_type=int(signature_type_raw) if signature_type_raw else None,
+        wallet_address=os.environ.get(ENV_WALLET_ADDRESS),
     )

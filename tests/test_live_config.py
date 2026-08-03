@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def test_checked_in_config_loads_and_is_dry_run() -> None:
     config = load_live_node_config(DEFAULT_LIVE_CONFIG_PATH)
     assert config.mode == "dry_run"
-    assert config.knob.id == "knob_v0_placeholder"
+    assert config.knob.id == "es_maxedge_lead3042_v1"
     assert config.stake.fixed_usd > 0
     assert config.risk.min_price < config.risk.max_price
 
@@ -77,3 +77,18 @@ def test_live_credentials_require_private_key(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.delenv("POLYMARKET_PRIVATE_KEY", raising=False)
     with pytest.raises(RuntimeError, match="POLYMARKET_PRIVATE_KEY"):
         resolve_live_credentials()
+
+
+def test_live_credentials_read_optional_wallet_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("POLYTEMPO_LIVE_CONFIRM", "1")
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xabc")
+    monkeypatch.setenv("POLYMARKET_WALLET_ADDRESS", "0xwallet")
+    creds = resolve_live_credentials()
+    assert creds.private_key == "0xabc"
+    assert creds.wallet_address == "0xwallet"
+
+    # Absent is fine: the SDK falls back to the signer's deposit wallet.
+    monkeypatch.delenv("POLYMARKET_WALLET_ADDRESS", raising=False)
+    assert resolve_live_credentials().wallet_address is None
