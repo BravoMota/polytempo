@@ -65,10 +65,13 @@ def reconcile(
             )
 
     # b) position drift: ledger filled-unsettled shares vs exchange positions.
+    # Only tokens the ledger has a position in. The wallet is shared with manual
+    # trading, and a token the node never touched is not drift — comparing the
+    # union would let any hand-placed bet block startup in live mode.
     ledger_positions = ledger.open_positions_by_token()
     exchange_positions = {p.token_id: p.shares for p in client.positions()}
-    for token in sorted(set(ledger_positions) | set(exchange_positions)):
-        ledger_shares = ledger_positions.get(token, 0.0)
+    for token in sorted(ledger_positions):
+        ledger_shares = ledger_positions[token]
         exchange_shares = exchange_positions.get(token, 0.0)
         if abs(ledger_shares - exchange_shares) > 0.01:
             discrepancies.append(

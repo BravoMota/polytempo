@@ -139,3 +139,26 @@ def test_positions_match_exactly_is_ok() -> None:
 
     assert report.ok is True
     assert report.discrepancies == []
+
+
+def test_foreign_exchange_position_is_ignored() -> None:
+    # The wallet is shared with manual trading: a token the node never traded
+    # must not block startup (it used to, via a union over both sides).
+    ledger = FakeLedger(positions={})
+    client = FakeClient(exchange_positions=[LivePosition("tokManual", 2.8169)])
+
+    report = reconcile(ledger, client, now_iso=NOW)
+
+    assert report.ok is True
+    assert report.discrepancies == []
+
+
+def test_drift_on_a_traded_token_is_still_flagged_when_exchange_is_empty() -> None:
+    ledger = FakeLedger(positions={"tokA": 10.0})
+    client = FakeClient(exchange_positions=[LivePosition("tokManual", 5.0)])
+
+    report = reconcile(ledger, client, now_iso=NOW)
+
+    assert report.ok is False
+    assert "position mismatch on tokA" in report.discrepancies[0]
+    assert "tokManual" not in " ".join(report.discrepancies)
