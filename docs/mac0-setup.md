@@ -76,7 +76,7 @@ cd PolyTempo
 cd /Users/jnlow/projects/PolyTempo
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev,view]"
+pip install -e ".[dev,view,live]"
 ```
 
 ---
@@ -271,7 +271,7 @@ Requires passwordless sudo for `polytempo-service` (see step 11). Manual equival
 ```bash
 cd /Users/jnlow/projects/polytempo
 git pull
-pip install -e ".[dev,view]"   # if dependencies changed
+pip install -e ".[dev,view,live]"   # if dependencies changed
 sudo deploy/bin/polytempo-service restart all
 ```
 
