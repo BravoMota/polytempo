@@ -1,0 +1,63 @@
+---
+description: Safe SSH and ops on mac0 (production host)
+alwaysApply: true
+---
+
+# mac0 access (production)
+
+mac0 is the live PolyTempo host. Treat every remote command as production. but also where paper-ledger runs
+
+| | |
+| --- | --- |
+| SSH | `jnlow@macbook-pro-de-joo-mota.tail348c53.ts.net` |
+| Repo | `/Users/jnlow/projects/PolyTempo` |
+| Runbook | [docs/mac0-setup.md](docs/mac0-setup.md) (not always needed) |
+
+```bash
+# ✅ one-shot, no password prompt hang
+ssh -o BatchMode=yes -o ConnectTimeout=10 \
+  jnlow@macbook-pro-de-joo-mota.tail348c53.ts.net \
+  'cd /Users/jnlow/projects/PolyTempo && deploy/bin/polytempo-health.sh'
+```
+
+Do not use host alias `mac0` unless it resolves that's mostly a "human" name for the machine. Do not use stale Tailscale IPs, magic dns when possible.
+
+## Default posture
+
+1. Read-only first. Mutate only when the user explicitly asks.
+2. Prefer wrappers over ad-hoc Python: `deploy/bin/polytempo-health.sh`, `sudo deploy/bin/polytempo-service …`, `deploy/bin/run-with-env.sh`.
+3. One command per SSH invocation. Quote the remote script. `cd` to the repo first.
+4. If SSH asks for a password or `BatchMode` fails, stop. Do not brute-force or change server SSH config.
+
+## Always allowed (no extra confirm)
+
+- `polytempo-health.sh`, `polytempo-service status`, `launchctl print system/com.polytempo.*`
+- `tail` / `less` of `logs/*.log` (not `.env`)
+- Read-only git: `status`, `log`, `diff`, `rev-parse`
+- Read-only SQL: `SELECT` / `\dt` / `\l` after sourcing `.env` **without echoing it**
+
+## Needs an explicit user ask
+
+- Restart or `run` any LaunchDaemon (`polytempo-service restart|run`, `restart all`)
+- `git pull`, `polytempo-deploy.sh`, `pip install`, checkout / branch switch
+- Edit files on mac0 (prefer change locally + deploy; do not leave a dirty production tree)
+- Write under `config/`, `.env`, `backups/`, or launchd plists
+- `sudo` other than `deploy/bin/polytempo-service` / `deploy/bin/install-launchd.sh`
+- Port forwards (`ssh -L`), agent forwarding (`-A`), or installing packages
+
+## Never
+
+- `pytest` on mac0, or any command that TRUNCATEs / drops / `pg_restore --clean` against `polytempo` or `polytempo_paper` (see `postgres-safety`)
+- Print, copy, or commit `.env`, keys, or `POLYMARKET_*` / DB URLs
+- Set `POLYTEMPO_LIVE_CONFIRM=1`, flip `config/live_node.yaml` `mode:` to `live`, or start a live node
+- Touch `config/KILL_LIVE` unless the user asked to halt opens
+- Run collector / paper-bot / calibration **beside** launchd (duplicates jobs)
+- `rm -rf`, `git reset --hard`, force-push, rewrite history, reboot, disable Tailscale/sleep, or `sudo -i`
+- Interactive SSH (`ssh` with no remote command) or long-lived remote processes you will not reap
+
+## lauchd
+lauchd will in case of new processes need admin status. when necessary give clean instructions to user on what to do.
+
+## If unsure
+
+Stop and ask. Do not “try it on prod to see”.
