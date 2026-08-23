@@ -9,7 +9,7 @@ model A/B rerun. ``live`` mode is refused unless credentials and an explicit
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -52,11 +52,20 @@ class KnobConfig:
 
 @dataclass(frozen=True)
 class StakeConfig:
-    fixed_usd: float
+    """Exactly one of ``fixed_usd`` (prod A) or ``fraction`` of collateral (Hermes)."""
+
+    fixed_usd: float | None = None
+    fraction: float | None = None
 
     def __post_init__(self) -> None:
-        if self.fixed_usd <= 0:
+        has_fixed = self.fixed_usd is not None
+        has_fraction = self.fraction is not None
+        if has_fixed == has_fraction:
+            raise ValueError("stake requires exactly one of fixed_usd or fraction")
+        if has_fixed and self.fixed_usd is not None and self.fixed_usd <= 0:
             raise ValueError(f"stake.fixed_usd must be positive, got {self.fixed_usd}")
+        if has_fraction and self.fraction is not None and not 0.0 < self.fraction < 1.0:
+            raise ValueError(f"stake.fraction must be in (0, 1), got {self.fraction}")
 
 
 @dataclass(frozen=True)
@@ -84,6 +93,7 @@ class RiskConfig:
     max_price: float
     max_spread: float
     max_forecast_age_hours: float
+    bankroll_ref_usd: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.min_price < self.max_price <= 1.0:
@@ -100,6 +110,10 @@ class RiskConfig:
         ):
             if getattr(self, name) <= 0:
                 raise ValueError(f"risk.{name} must be positive")
+        if self.bankroll_ref_usd is not None and self.bankroll_ref_usd <= 0:
+            raise ValueError(
+                f"risk.bankroll_ref_usd must be positive, got {self.bankroll_ref_usd}"
+            )
 
 
 @dataclass(frozen=True)
@@ -111,10 +125,15 @@ class LiveNodeConfig:
     stake: StakeConfig
     execution: ExecutionConfig
     risk: RiskConfig
+    dry_run_balance_usd: float = 50.0
 
     def __post_init__(self) -> None:
         if self.mode not in (MODE_DRY_RUN, MODE_LIVE):
             raise ValueError(f"mode must be {MODE_DRY_RUN!r} or {MODE_LIVE!r}, got {self.mode!r}")
+        if self.dry_run_balance_usd <= 0:
+            raise ValueError(
+                f"dry_run_balance_usd must be positive, got {self.dry_run_balance_usd}"
+            )
 
     def to_trading_profiles(self) -> list[TradingProfile]:
         """One gated profile per lead gate, reusing the paper gate machinery."""
@@ -127,6 +146,8 @@ class LiveNodeConfig:
         if self.knob.model_strategy in (
             "best_historical_updated",
             "weighted_historical_updated",
+            "weighted_historical_market_sigma",
+            "weighted_historical_updated_sharp",
         ):
             stats_path = DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
         else:
@@ -158,6 +179,35 @@ class LiveCredentials:
     extra: dict[str, str] = field(default_factory=dict)
 
 
+def resolve_stake_usd(stake: StakeConfig, balance_usd: float | None) -> float | None:
+    """Ticket size in USD, or None when fraction mode has no collateral reading."""
+    if stake.fixed_usd is not None:
+        return stake.fixed_usd
+    if stake.fraction is None or balance_usd is None:
+        return None
+    return balance_usd * stake.fraction
+
+
+def scale_risk_config(risk: RiskConfig, balance_usd: float | None) -> RiskConfig:
+    """Scale dollar risk caps with collateral when ``bankroll_ref_usd`` is set."""
+    ref = risk.bankroll_ref_usd
+    if ref is None or balance_usd is None:
+        return risk
+    scale = balance_usd / ref
+    return replace(
+        risk,
+        max_daily_loss_usd=risk.max_daily_loss_usd * scale,
+        max_open_exposure_usd=risk.max_open_exposure_usd * scale,
+        max_event_exposure_usd=risk.max_event_exposure_usd * scale,
+    )
+
+
+def _optional_float(raw: object) -> float | None:
+    if raw is None:
+        return None
+    return float(raw)
+
+
 def load_live_node_config(path: Path | None = None) -> LiveNodeConfig:
     """Load and validate the live node YAML config."""
     config_path = path if path is not None else DEFAULT_LIVE_CONFIG_PATH
@@ -187,7 +237,10 @@ def load_live_node_config(path: Path | None = None) -> LiveNodeConfig:
         city=str(raw.get("city", "london")),
         target_day=str(raw.get("target_day", "tomorrow")),
         knob=knob,
-        stake=StakeConfig(fixed_usd=float(stake_raw.get("fixed_usd", 0.0))),
+        stake=StakeConfig(
+            fixed_usd=_optional_float(stake_raw.get("fixed_usd")),
+            fraction=_optional_float(stake_raw.get("fraction")),
+        ),
         execution=ExecutionConfig(
             max_slippage=float(execution_raw.get("max_slippage", 0.02)),
             fill_timeout_seconds=float(execution_raw.get("fill_timeout_seconds", 90.0)),
@@ -202,7 +255,9 @@ def load_live_node_config(path: Path | None = None) -> LiveNodeConfig:
             max_price=float(risk_raw.get("max_price", 0.90)),
             max_spread=float(risk_raw.get("max_spread", 0.10)),
             max_forecast_age_hours=float(risk_raw.get("max_forecast_age_hours", 6.0)),
+            bankroll_ref_usd=_optional_float(risk_raw.get("bankroll_ref_usd")),
         ),
+        dry_run_balance_usd=float(raw.get("dry_run_balance_usd", 50.0)),
     )
 
 

@@ -1,0 +1,42 @@
+# Hermes live node — 4% of on-chain collateral per ticket.
+#
+# mode: dry_run — full pipeline; orders simulated in-process.
+#       live    — real orders. Requires POLYMARKET_PRIVATE_KEY (and optionally
+#                 POLYMARKET_WALLET_ADDRESS) plus POLYTEMPO_LIVE_CONFIRM=1 in
+#                 .env.hermes. Refuses to start otherwise.
+mode: dry_run
+
+city: london
+target_day: tomorrow
+
+# Simulated collateral when mode is dry_run (live mode reads the chain).
+dry_run_balance_usd: 50.0
+
+knob:
+  id: whums_argmax_no_lead24_v1
+  model_strategy: weighted_historical_market_sigma
+  trade_strategy: argmax_no
+  lead_gates: [24]                  # hours before end of target day
+
+# Fraction of collateral_balance_usd per order. On a $50 wallet this is $2,
+# matching prod A's fixed ticket. Do not set fixed_usd here.
+stake:
+  fraction: 0.04
+
+execution:
+  max_slippage: 0.02
+  fill_timeout_seconds: 90
+  min_depth_usd: 50.0
+
+# Dollar caps below are the $50-bankroll equivalents; the node scales them by
+# balance / bankroll_ref_usd so the same percentages hold as the wallet grows.
+risk:
+  kill_switch_file: config/KILL_HERMES
+  bankroll_ref_usd: 50.0
+  max_daily_loss_usd: 8.0           # 16% of ref
+  max_open_exposure_usd: 15.0       # 30% of ref
+  max_event_exposure_usd: 5.0       # one 4% ticket plus headroom
+  min_price: 0.02
+  max_price: 0.90
+  max_spread: 0.10
+  max_forecast_age_hours: 6.0

@@ -28,6 +28,8 @@ from polytempo.live.config import (  # noqa: E402
     DEFAULT_LIVE_CONFIG_PATH,
     LiveCredentials,
     load_live_node_config,
+    resolve_stake_usd,
+    scale_risk_config,
 )
 from polytempo.live.execution import PolymarketExecutionClient  # noqa: E402
 
@@ -40,7 +42,11 @@ def main() -> int:
     try:
         from dotenv import load_dotenv
 
-        load_dotenv(REPO_ROOT / ".env")
+        env_name = os.environ.get("POLYTEMPO_ENV_FILE")
+        env_path = Path(env_name) if env_name else REPO_ROOT / ".env"
+        if not env_path.is_absolute():
+            env_path = REPO_ROOT / env_path
+        load_dotenv(env_path)
     except ImportError:
         pass
 
@@ -54,7 +60,10 @@ def main() -> int:
 
     print(f"mode        : {config.mode}")
     print(f"knob        : {config.knob.id}")
-    print(f"stake       : ${config.stake.fixed_usd:.2f}/ticket")
+    if config.stake.fraction is not None:
+        print(f"stake       : {config.stake.fraction:.0%} of collateral")
+    else:
+        print(f"stake       : ${config.stake.fixed_usd:.2f}/ticket")
     print(f"signer key  : {key[:4]}...{key[-4:]} (len {len(key)})")
     print(f"wallet      : {wallet or '(unset — SDK derives from signer)'}")
     print()
@@ -79,20 +88,24 @@ def main() -> int:
         print("\nCould not read collateral — treat as NOT ready.")
         return 1
 
-    # The node can hold several tickets at once, so the cap is what must be
-    # funded, not one stake.
-    needed = config.risk.max_open_exposure_usd
+    # The node can hold several tickets at once, so the (possibly scaled) cap is
+    # what must be funded, not one stake.
+    ticket = resolve_stake_usd(config.stake, balance)
+    needed = scale_risk_config(config.risk, balance).max_open_exposure_usd
     print()
+    if ticket is None:
+        print(">>> NOT READY — could not size a ticket from collateral.")
+        return 1
     if balance >= needed:
         print(f">>> READY — ${balance:,.2f} covers max_open_exposure_usd (${needed:,.2f}).")
         return 0
-    if balance >= config.stake.fixed_usd:
+    if balance >= ticket:
         print(
-            f">>> PARTIAL — ${balance:,.2f} funds a ${config.stake.fixed_usd:.2f} ticket but not "
+            f">>> PARTIAL — ${balance:,.2f} funds a ${ticket:.2f} ticket but not "
             f"the ${needed:,.2f} exposure cap; the node will open until funds run out."
         )
         return 0
-    print(f">>> NOT READY — ${balance:,.2f} is below one ${config.stake.fixed_usd:.2f} ticket.")
+    print(f">>> NOT READY — ${balance:,.2f} is below one ${ticket:.2f} ticket.")
     return 1
 
 

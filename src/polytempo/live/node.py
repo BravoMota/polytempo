@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from polytempo.analysis import analyze_event
-from polytempo.live.config import LiveNodeConfig
+from polytempo.live.config import (
+    LiveNodeConfig,
+    resolve_stake_usd,
+    scale_risk_config,
+)
 from polytempo.live.execution import ExecutionClient
 from polytempo.live.ledger import LiveLedger
 from polytempo.live.marketdata import fetch_book_depth
@@ -49,6 +53,7 @@ _CALIBRATED_MODEL_STRATEGIES = frozenset(
         "best_historical",
         "best_historical_updated",
         "weighted_historical_updated",
+        "weighted_historical_market_sigma",
     }
 )
 
@@ -166,9 +171,15 @@ def _try_open_for_profile(
             lines.append(f"{profile.id}  SKIP {row.label}: no order book")
             continue
 
+        balance_usd = client.collateral_balance_usd()
+        stake_usd = resolve_stake_usd(config.stake, balance_usd)
+        if stake_usd is None:
+            lines.append(f"{profile.id}  SKIP {row.label}: no collateral balance")
+            continue
+
         sized = size_buy(
             book,
-            config.stake.fixed_usd,
+            stake_usd,
             config.execution.max_slippage,
             config.execution.min_depth_usd,
             config.risk.max_price,
@@ -177,7 +188,12 @@ def _try_open_for_profile(
             lines.append(f"{profile.id}  SKIP {row.label}: unsizeable (thin/empty book)")
             continue
 
-        decision = risk.check_open(
+        tick_risk = (
+            risk
+            if config.risk.bankroll_ref_usd is None
+            else RiskEngine(scale_risk_config(config.risk, balance_usd))
+        )
+        decision = tick_risk.check_open(
             OpenCheckInputs(
                 stake_usd=sized.stake_usd,
                 limit_price=sized.limit_price,

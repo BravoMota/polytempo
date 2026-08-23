@@ -119,7 +119,10 @@ def main() -> int:
             return 1
         client = PolymarketExecutionClient(resolve_live_credentials())
     else:
-        client = DryRunExecutionClient(book_provider=_single_token_book)
+        client = DryRunExecutionClient(
+            book_provider=_single_token_book,
+            starting_balance_usd=config.dry_run_balance_usd,
+        )
     risk = RiskEngine(config.risk)
 
     logger.info(

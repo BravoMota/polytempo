@@ -15,6 +15,8 @@ LABELS=(
   com.polytempo.performance-export
   com.polytempo.performance-viewer
 )
+# com.polytempo.hermes is installed separately after .env.hermes and
+# polytempo_live_hermes exist. See deploy/launchd/README.md.
 
 usage() {
   cat <<EOF

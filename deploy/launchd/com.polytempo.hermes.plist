@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon: Hermes live node, config/live_node_hermes.yaml (mode: dry_run).
+  Env from /Users/jnlow/projects/PolyTempo/.env.hermes via run-with-env.sh
+  (POLYTEMPO_ENV_FILE). Needs POLYTEMPO_LIVE_DATABASE_URL pointing at
+  polytempo_live_hermes — never the paper DB or prod A's live DB.
+
+  Not in install-launchd.sh LABELS yet. Bootstrap this plist only after A is
+  on launchd and .env.hermes + the Hermes database exist.
+
+  Real orders need mode: live in the YAML *and* POLYMARKET_PRIVATE_KEY plus
+  POLYTEMPO_LIVE_CONFIRM=1 in .env.hermes. Never put confirm or keys here.
+
+  No KeepAlive: same money-process rule as com.polytempo.live-node.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.polytempo.hermes</string>
+
+    <key>UserName</key>
+    <string>jnlow</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>POLYTEMPO_ENV_FILE</key>
+        <string>/Users/jnlow/projects/PolyTempo/.env.hermes</string>
+    </dict>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jnlow/projects/PolyTempo/deploy/bin/run-with-env.sh</string>
+        <string>scripts/run_live_node.py</string>
+        <string>--config</string>
+        <string>config/live_node_hermes.yaml</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jnlow/projects/PolyTempo</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/hermes.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jnlow/projects/PolyTempo/logs/hermes.err.log</string>
+</dict>
+</plist>

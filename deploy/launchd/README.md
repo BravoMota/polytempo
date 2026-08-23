@@ -54,6 +54,32 @@ sudo deploy/bin/polytempo-service restart live-node
 `RunAtLoad` is on, so it does come back after a reboot or a daemon reinstall —
 open positions still need settlement sweeps.
 
+## Hermes (`com.polytempo.hermes`) — not in `install-launchd.sh` yet
+
+Second live node: `config/live_node_hermes.yaml` (`mode: dry_run`), one
+`whums_argmax_no_lead24_v1` knob, ticket size **4% of on-chain USDC**. Logs:
+`logs/hermes.{out,err}.log`. Same no-KeepAlive money rule as A.
+
+**Separate env file.** `run-with-env.sh` sources `$POLYTEMPO_ENV_FILE` if set,
+else `.env`. The Hermes plist sets `POLYTEMPO_ENV_FILE` to repo-root
+`.env.hermes` so A's `POLYMARKET_PRIVATE_KEY` is never mixed with Hermes'.
+`.env.hermes` is gitignored (`chmod 600`). Include weather DSN plus Hermes'
+`POLYTEMPO_LIVE_DATABASE_URL` (`…/polytempo_live_hermes`) and Polymarket keys.
+Do not set `POLYTEMPO_LIVE_CONFIRM` until go-live.
+
+**Do not** add this label to `install-launchd.sh`. After A is quiet on launchd:
+
+```bash
+# createdb polytempo_live_hermes && scripts/init_live_db.py with Hermes DSN only
+sudo cp deploy/launchd/com.polytempo.hermes.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.polytempo.hermes.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.polytempo.hermes.plist
+sudo deploy/bin/polytempo-service status hermes
+```
+
+Leave yaml `mode: dry_run` until a dry gate looks right. Kill switch:
+`touch config/KILL_HERMES`. Excluded from `restart all`.
+
 ## Verify calibration is working
 
 From any machine with DB access:

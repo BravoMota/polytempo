@@ -17,12 +17,13 @@ Operator runbook for running PolyTempo on **mac0** under user **`jnlow`**, super
 | `com.polytempo.collector` | `scripts/run_collector.py` | long-lived | internal UTC slots |
 | `com.polytempo.paper-bot` | `scripts/run_paper_bot.py` | long-lived | lead-time gates |
 | `com.polytempo.live-node` | `scripts/run_live_node.py` | long-lived, **no `KeepAlive`** | lead gates + settlement sweep |
+| `com.polytempo.hermes` | `scripts/run_live_node.py --config config/live_node_hermes.yaml` | long-lived, **no `KeepAlive`**, **not in `install-launchd.sh`** | 4% of on-chain USDC; `.env.hermes` |
 | `com.polytempo.calibration` | `scripts/run_daily_calibration.py --once` | calendar | **01:00 mac0 local** |
 | `com.polytempo.db-backup` | `scripts/backup_databases.py --once` | calendar | **02:00 mac0 local** |
 | `com.polytempo.performance-export` | `scripts/report_performance.py --all --csv …` | calendar | **03:30 mac0 local** |
 | `com.polytempo.performance-viewer` | Streamlit `scripts/view_performance.py` | long-lived | **127.0.0.1:8501** (SSH/Tailscale) |
 
-Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad` — except the live node, which handles money and is never auto-relaunched; see [deploy/launchd/README.md](../deploy/launchd/README.md).
+Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad` — except the live node and Hermes, which handle money and are never auto-relaunched; see [deploy/launchd/README.md](../deploy/launchd/README.md). Hermes is **not** installed by `install-launchd.sh`; bootstrap its plist only after A is on launchd, with gitignored `.env.hermes` (`chmod 600`) and database `polytempo_live_hermes`.
 
 ---
 
@@ -244,6 +245,8 @@ sudo deploy/bin/polytempo-service status all
 sudo deploy/bin/polytempo-service restart collector
 sudo deploy/bin/polytempo-service restart paper-bot
 sudo deploy/bin/polytempo-service restart live-node   # not covered by "restart all"
+sudo deploy/bin/polytempo-service status hermes       # not installed by install-launchd.sh
+sudo deploy/bin/polytempo-service restart hermes      # not covered by "restart all"
 sudo deploy/bin/polytempo-service run calibration
 sudo deploy/bin/polytempo-service run db-backup
 

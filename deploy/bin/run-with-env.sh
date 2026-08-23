@@ -12,7 +12,10 @@ for prefix in /opt/homebrew /usr/local; do
 done
 export PATH
 
-ENV_FILE="$REPO/.env"
+ENV_FILE="${POLYTEMPO_ENV_FILE:-$REPO/.env}"
+if [[ "$ENV_FILE" != /* ]]; then
+  ENV_FILE="$REPO/$ENV_FILE"
+fi
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "run-with-env.sh: missing $ENV_FILE" >&2
   exit 1

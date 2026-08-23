@@ -151,11 +151,19 @@ def _config(
     *,
     model_strategy="ensemble_spread",
     fixed_usd=10.0,
+    fraction=None,
     min_depth_usd=50.0,
     min_price=0.02,
     max_price=0.90,
     kill_switch_file=None,
+    bankroll_ref_usd=None,
+    max_event_exposure_usd=40.0,
 ):
+    stake = (
+        StakeConfig(fraction=fraction)
+        if fraction is not None
+        else StakeConfig(fixed_usd=fixed_usd)
+    )
     return LiveNodeConfig(
         mode=MODE_DRY_RUN,
         city="london",
@@ -166,7 +174,7 @@ def _config(
             trade_strategy="max_edge",
             lead_gates=(24.0,),
         ),
-        stake=StakeConfig(fixed_usd=fixed_usd),
+        stake=stake,
         execution=ExecutionConfig(
             max_slippage=0.02,
             fill_timeout_seconds=1.0,
@@ -176,11 +184,12 @@ def _config(
             kill_switch_file=kill_switch_file or (tmp_path / "NO_KILL"),
             max_daily_loss_usd=50.0,
             max_open_exposure_usd=120.0,
-            max_event_exposure_usd=40.0,
+            max_event_exposure_usd=max_event_exposure_usd,
             min_price=min_price,
             max_price=max_price,
             max_spread=0.10,
             max_forecast_age_hours=6.0,
+            bankroll_ref_usd=bankroll_ref_usd,
         ),
     )
 
@@ -192,9 +201,20 @@ def _ctx_fn(ctx):
     return fetch
 
 
-def _run_tick(config, ledger, *, fetch_context_fn, now=GATE_NOW, books=None):
+def _run_tick(
+    config,
+    ledger,
+    *,
+    fetch_context_fn,
+    now=GATE_NOW,
+    books=None,
+    starting_balance_usd=0.0,
+    client=None,
+):
     books = books or {}
-    client = DryRunExecutionClient(lambda tid: books.get(tid))
+    client = client or DryRunExecutionClient(
+        lambda tid: books.get(tid), starting_balance_usd=starting_balance_usd
+    )
     risk = RiskEngine(config.risk)
     return run_node_tick(
         config,
@@ -466,3 +486,95 @@ def test_context_lookup_skipped_and_other_error_lined(tmp_path) -> None:
     result = _run_tick(_config(tmp_path), FakeLedger(), fetch_context_fn=boom)
     assert len(result.lines) == 1
     assert "ERROR" in result.lines[0] and "gamma down" in result.lines[0]
+
+
+def test_fraction_of_mocked_balance_sizes_two_dollars(tmp_path, monkeypatch) -> None:
+    ledger = FakeLedger()
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]))
+    analysis = _Analysis(rows=[_Row("BUY_YES", "20-21C")])
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+
+    books = {"tokYES": _book("tokYES", asks=[(0.50, 200)], bids=[(0.48, 200)])}
+    result = _run_tick(
+        _config(tmp_path, fraction=0.04),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        starting_balance_usd=50.0,
+    )
+
+    assert len(ledger.intents) == 1
+    assert ledger.results[0].state == "FILLED"
+    assert ledger.results[0].filled_shares == 4.0
+    assert any("4.00/4.00sh" in line for line in result.lines)
+
+
+def test_fraction_skips_when_balance_is_none(tmp_path, monkeypatch) -> None:
+    ledger = FakeLedger()
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]))
+    analysis = _Analysis(rows=[_Row("BUY_YES", "20-21C")])
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+
+    class _NoBalance(DryRunExecutionClient):
+        def collateral_balance_usd(self) -> float | None:
+            return None
+
+    books = {"tokYES": _book("tokYES", asks=[(0.50, 200)], bids=[(0.48, 200)])}
+    result = _run_tick(
+        _config(tmp_path, fraction=0.04),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        client=_NoBalance(lambda tid: books.get(tid)),
+    )
+
+    assert any("no collateral balance" in line for line in result.lines)
+    assert ledger.intents == []
+
+
+def test_bankroll_ref_scales_event_exposure_cap(tmp_path, monkeypatch) -> None:
+    ledger = FakeLedger(event_exposure=6.0)
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]))
+    analysis = _Analysis(rows=[_Row("BUY_YES", "20-21C")])
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+
+    books = {"tokYES": _book("tokYES", asks=[(0.50, 200)], bids=[(0.48, 200)])}
+    result = _run_tick(
+        _config(
+            tmp_path,
+            fraction=0.04,
+            bankroll_ref_usd=50.0,
+            max_event_exposure_usd=5.0,
+        ),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        starting_balance_usd=100.0,
+    )
+
+    assert len(ledger.intents) == 1
+    assert ledger.results[0].state == "FILLED"
+    assert not any("RISK_DENY" in line for line in result.lines)
+
+
+def test_whums_model_fallback_skips(tmp_path, monkeypatch) -> None:
+    ledger = FakeLedger()
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]))
+    analysis = _Analysis(
+        rows=[_Row("BUY_YES", "20-21C")],
+        fallback_reason="no calibration row",
+        model_strategy="weighted_historical_market_sigma",
+    )
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+
+    result = _run_tick(
+        _config(tmp_path, model_strategy="weighted_historical_market_sigma"),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+    )
+
+    assert any(
+        "MODEL_FALLBACK_SKIP" in line and "no calibration row" in line
+        for line in result.lines
+    )
+    assert ledger.intents == []
