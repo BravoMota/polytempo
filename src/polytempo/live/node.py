@@ -28,7 +28,7 @@ from polytempo.live.models import (
 )
 from polytempo.live.orders import manage_order
 from polytempo.live.risk import OpenCheckInputs, RiskEngine
-from polytempo.live.sizing import size_buy
+from polytempo.live.sizing import size_buy, walk_cap
 from polytempo.markets.polymarket import (
     PolymarketBucket,
     PolymarketEvent,
@@ -177,10 +177,15 @@ def _try_open_for_profile(
             lines.append(f"{profile.id}  SKIP {row.label}: no collateral balance")
             continue
 
+        edge_pp = row.edge_yes_pp if row.side == SIDE_YES else row.edge_no_pp
         sized = size_buy(
             book,
             stake_usd,
-            config.execution.max_slippage,
+            walk_cap(
+                config.execution.max_slippage,
+                edge_pp=edge_pp,
+                edge_fraction=config.execution.slippage_edge_fraction,
+            ),
             config.execution.min_depth_usd,
             config.risk.max_price,
         )

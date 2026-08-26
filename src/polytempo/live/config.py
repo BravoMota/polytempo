@@ -73,6 +73,8 @@ class ExecutionConfig:
     max_slippage: float
     fill_timeout_seconds: float
     min_depth_usd: float
+    # When set, walk min(max_slippage, fraction * edge) instead of a flat cap.
+    slippage_edge_fraction: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.max_slippage < 1.0:
@@ -81,6 +83,13 @@ class ExecutionConfig:
             raise ValueError("execution.fill_timeout_seconds must be positive")
         if self.min_depth_usd < 0:
             raise ValueError("execution.min_depth_usd must be non-negative")
+        if self.slippage_edge_fraction is not None and not (
+            0.0 < self.slippage_edge_fraction <= 1.0
+        ):
+            raise ValueError(
+                "execution.slippage_edge_fraction must be in (0, 1], "
+                f"got {self.slippage_edge_fraction}"
+            )
 
 
 @dataclass(frozen=True)
@@ -245,6 +254,9 @@ def load_live_node_config(path: Path | None = None) -> LiveNodeConfig:
             max_slippage=float(execution_raw.get("max_slippage", 0.02)),
             fill_timeout_seconds=float(execution_raw.get("fill_timeout_seconds", 90.0)),
             min_depth_usd=float(execution_raw.get("min_depth_usd", 50.0)),
+            slippage_edge_fraction=_optional_float(
+                execution_raw.get("slippage_edge_fraction")
+            ),
         ),
         risk=RiskConfig(
             kill_switch_file=kill_file,
