@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from polytempo.live.models import BookDepth, BookLevel
-from polytempo.live.sizing import size_buy
+from polytempo.live.sizing import size_buy, walk_cap
 
 
 def _book(*, bids=(), asks=()) -> BookDepth:
@@ -86,3 +86,32 @@ def test_stake_exceeding_window_consumes_all_levels() -> None:
     assert sized.limit_price == pytest.approx(0.55)
     assert sized.shares == pytest.approx(200.0)
     assert sized.stake_usd == pytest.approx(50 + 55)
+
+
+def test_walk_cap_flat_when_fraction_unset() -> None:
+    assert walk_cap(0.02) == pytest.approx(0.02)
+    assert walk_cap(0.02, edge_pp=20.0) == pytest.approx(0.02)
+
+
+def test_walk_cap_uses_fraction_of_edge_capped_by_max() -> None:
+    # 20¢ edge × 0.25 = 5¢, under the 8¢ ceiling.
+    assert walk_cap(0.08, edge_pp=20.0, edge_fraction=0.25) == pytest.approx(0.05)
+    # 40¢ edge × 0.25 = 10¢, clipped to 8¢.
+    assert walk_cap(0.08, edge_pp=40.0, edge_fraction=0.25) == pytest.approx(0.08)
+    # Missing/non-positive edge → no walk beyond touch.
+    assert walk_cap(0.08, edge_pp=None, edge_fraction=0.25) == pytest.approx(0.0)
+    assert walk_cap(0.08, edge_pp=-5.0, edge_fraction=0.25) == pytest.approx(0.0)
+
+
+def test_edge_walk_includes_level_flat_cap_would_exclude() -> None:
+    book = _book(asks=[(0.50, 10), (0.55, 200)])
+    walk = walk_cap(0.08, edge_pp=20.0, edge_fraction=0.25)
+    sized = size_buy(book, stake_usd=10.0, max_slippage=walk, min_depth_usd=0.0, max_price=0.90)
+    assert sized is not None
+    assert sized.limit_price == pytest.approx(0.55)
+    assert sized.stake_usd == pytest.approx(10.0)
+
+    flat = size_buy(book, stake_usd=10.0, max_slippage=0.02, min_depth_usd=0.0, max_price=0.90)
+    assert flat is not None
+    assert flat.limit_price == pytest.approx(0.50)
+    assert flat.stake_usd == pytest.approx(5.0)

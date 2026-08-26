@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import pytest
+
 from polytempo.live.config import (
     ExecutionConfig,
     KnobConfig,
@@ -155,6 +157,8 @@ def _config(
     min_depth_usd=50.0,
     min_price=0.02,
     max_price=0.90,
+    max_slippage=0.02,
+    slippage_edge_fraction=None,
     kill_switch_file=None,
     bankroll_ref_usd=None,
     max_event_exposure_usd=40.0,
@@ -176,9 +180,10 @@ def _config(
         ),
         stake=stake,
         execution=ExecutionConfig(
-            max_slippage=0.02,
+            max_slippage=max_slippage,
             fill_timeout_seconds=1.0,
             min_depth_usd=min_depth_usd,
+            slippage_edge_fraction=slippage_edge_fraction,
         ),
         risk=RiskConfig(
             kill_switch_file=kill_switch_file or (tmp_path / "NO_KILL"),
@@ -374,6 +379,34 @@ def test_unsizeable_book_skips(tmp_path, monkeypatch) -> None:
 
     assert any("unsizeable" in line for line in result.lines)
     assert ledger.intents == []
+
+
+def test_edge_fraction_walk_reaches_next_ask(tmp_path, monkeypatch) -> None:
+    ledger = FakeLedger()
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]))
+    analysis = _Analysis(rows=[_Row("BUY_YES", "20-21C", edge_yes_pp=20.0)])
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+
+    # $5 at the touch, rest 5¢ up. Flat 2¢ cannot reach 0.55; 25% of 20¢ edge can.
+    books = {
+        "tokYES": _book("tokYES", asks=[(0.50, 10), (0.55, 200)], bids=[(0.48, 200)])
+    }
+    result = _run_tick(
+        _config(
+            tmp_path,
+            min_depth_usd=0.0,
+            max_slippage=0.08,
+            slippage_edge_fraction=0.25,
+        ),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+    )
+
+    assert len(ledger.intents) == 1
+    assert ledger.intents[0].limit_price == pytest.approx(0.55)
+    assert ledger.results[0].state == "FILLED"
+    assert any("FILLED" in line for line in result.lines)
 
 
 def test_risk_deny_per_order_continues(tmp_path, monkeypatch) -> None:

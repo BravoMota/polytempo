@@ -8,6 +8,7 @@ import pytest
 
 from polytempo.live.config import (
     DEFAULT_LIVE_CONFIG_PATH,
+    ExecutionConfig,
     KnobConfig,
     StakeConfig,
     load_live_node_config,
@@ -30,6 +31,8 @@ def test_checked_in_config_loads_and_is_dry_run() -> None:
     assert config.stake.fraction is None
     assert config.risk.bankroll_ref_usd is None
     assert config.risk.min_price < config.risk.max_price
+    assert config.execution.slippage_edge_fraction is None
+    assert config.execution.min_depth_usd == 50.0
 
 
 def test_to_trading_profiles_one_per_gate() -> None:
@@ -104,16 +107,19 @@ def test_live_credentials_read_optional_wallet_address(
 
 def test_hermes_config_loads_one_lead24_profile() -> None:
     config = load_live_node_config(REPO_ROOT / "config" / "live_node_hermes.yaml")
-    assert config.mode == "dry_run"
-    assert config.knob.id == "whums_argmax_no_lead24_v1"
+    assert config.mode == "live"
+    assert config.knob.id == "whums_argmax_no_lead24_frac08_v1"
     assert config.knob.model_strategy == "weighted_historical_market_sigma"
     assert config.knob.trade_strategy == "argmax_no"
     assert config.knob.lead_gates == (24.0,)
-    assert config.stake.fraction == 0.04
+    assert config.stake.fraction == 0.08
     assert config.stake.fixed_usd is None
     assert config.risk.bankroll_ref_usd == 50.0
     assert config.dry_run_balance_usd == 50.0
     assert config.risk.kill_switch_file.name == "KILL_HERMES"
+    assert config.execution.min_depth_usd == 0.0
+    assert config.execution.max_slippage == pytest.approx(0.08)
+    assert config.execution.slippage_edge_fraction == pytest.approx(0.25)
     profiles = config.to_trading_profiles()
     assert len(profiles) == 1
     assert profiles[0].entry_gate.target_lead_hours == 24.0
@@ -143,3 +149,20 @@ def test_scale_risk_config_scales_dollar_caps() -> None:
     assert scaled.max_open_exposure_usd == pytest.approx(30.0)
     assert scaled.max_event_exposure_usd == pytest.approx(10.0)
     assert scale_risk_config(config.risk, None) is config.risk
+
+
+def test_slippage_edge_fraction_rejected_out_of_range() -> None:
+    with pytest.raises(ValueError, match="slippage_edge_fraction"):
+        ExecutionConfig(
+            max_slippage=0.08,
+            fill_timeout_seconds=90.0,
+            min_depth_usd=0.0,
+            slippage_edge_fraction=0.0,
+        )
+    with pytest.raises(ValueError, match="slippage_edge_fraction"):
+        ExecutionConfig(
+            max_slippage=0.08,
+            fill_timeout_seconds=90.0,
+            min_depth_usd=0.0,
+            slippage_edge_fraction=1.1,
+        )
