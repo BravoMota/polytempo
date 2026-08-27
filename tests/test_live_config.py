@@ -26,24 +26,35 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 def test_checked_in_config_loads_and_is_dry_run() -> None:
     config = load_live_node_config(DEFAULT_LIVE_CONFIG_PATH)
     assert config.mode == "dry_run"
-    assert config.knob.id == "es_maxedge_lead3042_v1"
-    assert config.stake.fixed_usd is not None and config.stake.fixed_usd > 0
-    assert config.stake.fraction is None
-    assert config.risk.bankroll_ref_usd is None
+    assert config.knob.id == "whums_argmax_no_lead24_frac08_v1"
+    assert config.knob.model_strategy == "weighted_historical_market_sigma"
+    assert config.knob.trade_strategy == "argmax_no"
+    assert config.knob.lead_gates == (24.0,)
+    assert config.stake.fraction == 0.08
+    assert config.stake.fixed_usd is None
+    assert config.risk.bankroll_ref_usd == 50.0
+    assert config.dry_run_balance_usd == 50.0
+    assert config.risk.kill_switch_file.name == "KILL_LIVE"
     assert config.risk.min_price < config.risk.max_price
-    assert config.execution.slippage_edge_fraction is None
-    assert config.execution.min_depth_usd == 50.0
+    assert config.execution.min_depth_usd == 0.0
+    assert config.execution.max_slippage == pytest.approx(0.08)
+    assert config.execution.slippage_edge_fraction == pytest.approx(0.25)
 
 
 def test_to_trading_profiles_one_per_gate() -> None:
     config = load_live_node_config(DEFAULT_LIVE_CONFIG_PATH)
     profiles = config.to_trading_profiles()
+    assert len(profiles) == 1
     assert len(profiles) == len(config.knob.lead_gates)
     for profile, gate in zip(profiles, config.knob.lead_gates, strict=True):
         assert profile.entry_gate.target_lead_hours == gate
         assert profile.model_strategy == config.knob.model_strategy
         assert profile.trade_strategy == config.knob.trade_strategy
         assert profile.id.startswith(f"live_{config.knob.id}_lead")
+    assert profiles[0].entry_gate.target_lead_hours == 24.0
+    assert profiles[0].model_strategy == "weighted_historical_market_sigma"
+    assert profiles[0].trade_strategy == "argmax_no"
+    assert profiles[0].calibration_stats_path == DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH
 
 
 def test_unknown_model_strategy_rejected() -> None:

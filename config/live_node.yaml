@@ -1,4 +1,6 @@
-# Live trading node configuration.
+# Achilles live node — same trading envelope as Hermes: WHUMS × argmax_no ×
+# lead 24, 8% of on-chain collateral per ticket. Launchd label stays
+# com.polytempo.live-node (logs, .env, polytempo_live).
 #
 # mode: dry_run — full pipeline incl. sizing/risk/ledger, but orders are
 #                 simulated in-process; nothing leaves the machine.
@@ -10,47 +12,40 @@ mode: dry_run
 city: london
 target_day: tomorrow
 
-# ── THE KNOB ──────────────────────────────────────────────────────────────────
-# Which model x trade strategy x lead gates the node trades. Decided 2026-08-03
-# from the realized-P/L audit in docs/project-audit-2026-07-06.md (window
-# Jun 8 - Jul 6): ensemble_spread was the only profitable model family (+24.1%),
-# lead42 (+17.2%) and lead30 (+15.7%) the only profitable gates, and max_edge a
-# robust winner across families. Caveat: the es-vs-bh A/B rerun never happened,
-# so this rests on one ~4-week window. Change knob.id if the envelope changes so
-# ledger rows stay attributable.
-knob:
-  id: es_maxedge_lead3042_v1
-  model_strategy: ensemble_spread
-  trade_strategy: max_edge
-  lead_gates: [30, 42]              # hours before end of target day
+# Simulated collateral when mode is dry_run (live mode reads the chain).
+dry_run_balance_usd: 50.0
 
-# Flat stake per order in v1 (no Kelly/fraction sizing).
-# max_edge takes one ticket per event per profile, so two gates = <=2 tickets/day
-# on the same event. Both gates fire on D-1 and are held to settlement, so peak
-# concurrency is ~4 tickets. At $2 that is $8-12 against a $50 bankroll.
+knob:
+  id: whums_argmax_no_lead24_frac08_v1
+  model_strategy: weighted_historical_market_sigma
+  trade_strategy: argmax_no
+  lead_gates: [24]                  # hours before end of target day
+
+# Fraction of collateral_balance_usd per order. On a $50 wallet this is $4.
+# Do not set fixed_usd here.
 stake:
-  fixed_usd: 2.0
+  fraction: 0.08
 
 execution:
-  # Limit price = best_ask + max_slippage (capped by risk.max_price).
-  max_slippage: 0.02
-  # After this long, unfilled remainder is canceled and recorded.
+  # Ceiling on ask-walk (price units). Combined with slippage_edge_fraction:
+  # walk = min(max_slippage, fraction * modeled edge). A 20¢ edge at 0.25
+  # may pay 5¢ above best ask; a 2¢ edge barely walks. 0.90 still caps the
+  # limit via risk.max_price.
+  max_slippage: 0.08
   fill_timeout_seconds: 90
-  # Resting depth (USD) within the slippage window required to quote at all.
-  min_depth_usd: 50.0
+  # No impact floor: size whatever resting asks sit inside the walk window.
+  min_depth_usd: 0.0
+  slippage_edge_fraction: 0.25
 
-# Sized for a $50 bankroll. NOTE: nothing checks the real on-chain balance —
-# collateral_balance_usd() exists on the execution client but the node never
-# calls it, so these caps are the only thing bounding exposure.
+# Dollar caps below are the $50-bankroll equivalents; the node scales them by
+# balance / bankroll_ref_usd so the same percentages hold as the wallet grows.
 risk:
   # Touch this file to halt all opening instantly (settlement still runs).
   kill_switch_file: config/KILL_LIVE
-  # Realized-only and lagging: counts settlements landing today, which may be
-  # from positions opened days earlier.
-  max_daily_loss_usd: 8.0
-  max_open_exposure_usd: 15.0
-  # Two gates on one event = $4; this admits both and blocks a third.
-  max_event_exposure_usd: 5.0
+  bankroll_ref_usd: 50.0
+  max_daily_loss_usd: 8.0           # 16% of ref
+  max_open_exposure_usd: 15.0       # 30% of ref
+  max_event_exposure_usd: 5.0       # one 8% ticket on the $50 ref plus headroom
   min_price: 0.02
   max_price: 0.90
   max_spread: 0.10

@@ -1,4 +1,4 @@
-# Hermes live node — 8% of on-chain collateral per ticket (one gate = A's two $2 tickets).
+# Hermes live node — 8% of on-chain collateral per ticket (same envelope as Achilles).
 #
 # mode: dry_run — full pipeline; orders simulated in-process.
 #       live    — real orders. Requires POLYMARKET_PRIVATE_KEY (and optionally
@@ -18,8 +18,8 @@ knob:
   trade_strategy: argmax_no
   lead_gates: [24]                  # hours before end of target day
 
-# Fraction of collateral_balance_usd per order. On a $50 wallet this is $4,
-# matching A's $2×2 gates on one event. Do not set fixed_usd here.
+# Fraction of collateral_balance_usd per order. On a $50 wallet this is $4.
+# Do not set fixed_usd here.
 stake:
   fraction: 0.08
 

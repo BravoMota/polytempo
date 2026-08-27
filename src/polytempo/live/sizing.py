@@ -20,7 +20,7 @@ def walk_cap(
 ) -> float:
     """Ask-walk allowed when sizing, in price units.
 
-    With ``edge_fraction`` unset this is ``max_slippage`` (prod A). With it set,
+    With ``edge_fraction`` unset this is ``max_slippage``. With it set,
     walk ``min(max_slippage, fraction * edge)`` so a 20¢ edge at fraction 0.25
     may pay 5¢ above best ask, while a 2¢ edge barely walks. ``edge_pp`` is
     percentage points (16.8 → 0.168).

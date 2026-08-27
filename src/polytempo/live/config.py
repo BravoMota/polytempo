@@ -52,7 +52,7 @@ class KnobConfig:
 
 @dataclass(frozen=True)
 class StakeConfig:
-    """Exactly one of ``fixed_usd`` (prod A) or ``fraction`` of collateral (Hermes)."""
+    """Exactly one of ``fixed_usd`` or ``fraction`` of collateral (Achilles/Hermes)."""
 
     fixed_usd: float | None = None
     fraction: float | None = None

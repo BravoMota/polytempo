@@ -23,7 +23,7 @@ Operator runbook for running PolyTempo on **mac0** under user **`jnlow`**, super
 | `com.polytempo.performance-export` | `scripts/report_performance.py --all --csv …` | calendar | **03:30 mac0 local** |
 | `com.polytempo.performance-viewer` | Streamlit `scripts/view_performance.py` | long-lived | **127.0.0.1:8501** (SSH/Tailscale) |
 
-Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad` — except the live node and Hermes, which handle money and are never auto-relaunched; see [deploy/launchd/README.md](../deploy/launchd/README.md). Hermes is **not** installed by `install-launchd.sh`; bootstrap its plist only after A is on launchd, with gitignored `.env.hermes` (`chmod 600`) and database `polytempo_live_hermes`.
+Calendar jobs use `StartCalendarInterval` (macOS local wall clock, including DST). Long-lived jobs use `KeepAlive` + `RunAtLoad` — except the live node and Hermes, which handle money and are never auto-relaunched; see [deploy/launchd/README.md](../deploy/launchd/README.md). Hermes is **not** installed by `install-launchd.sh`; bootstrap its plist only after Achilles is on launchd, with gitignored `.env.hermes` (`chmod 600`) and database `polytempo_live_hermes`.
 
 ---
 

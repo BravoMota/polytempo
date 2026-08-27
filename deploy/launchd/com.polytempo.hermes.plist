@@ -5,9 +5,9 @@
   LaunchDaemon: Hermes live node, config/live_node_hermes.yaml (mode: dry_run).
   Env from /Users/jnlow/projects/PolyTempo/.env.hermes via run-with-env.sh
   (POLYTEMPO_ENV_FILE). Needs POLYTEMPO_LIVE_DATABASE_URL pointing at
-  polytempo_live_hermes — never the paper DB or prod A's live DB.
+  polytempo_live_hermes — never the paper DB or Achilles' live DB.
 
-  Not in install-launchd.sh LABELS yet. Bootstrap this plist only after A is
+  Not in install-launchd.sh LABELS yet. Bootstrap this plist only after Achilles is
   on launchd and .env.hermes + the Hermes database exist.
 
   Real orders need mode: live in the YAML *and* POLYMARKET_PRIVATE_KEY plus

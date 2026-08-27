@@ -12,7 +12,7 @@ Plists in this directory target:
 - Performance CSV export: **03:30 local** (`report_performance.py --all --csv`)
 - Performance viewer: long-lived Streamlit on **127.0.0.1:8501**
 
-## Live node (`com.polytempo.live-node`)
+## Live node (`com.polytempo.live-node`) — Achilles
 
 Runs `scripts/run_live_node.py` in a loop (lead gates, then a settlement sweep at
 least every 15 min, reconcile every 6 h). Logs: `logs/live-node.{out,err}.log`.
@@ -58,16 +58,16 @@ open positions still need settlement sweeps.
 
 Second live node: `config/live_node_hermes.yaml` (`mode: dry_run`), one
 `whums_argmax_no_lead24_v1` knob, ticket size **4% of on-chain USDC**. Logs:
-`logs/hermes.{out,err}.log`. Same no-KeepAlive money rule as A.
+`logs/hermes.{out,err}.log`. Same no-KeepAlive money rule as Achilles.
 
 **Separate env file.** `run-with-env.sh` sources `$POLYTEMPO_ENV_FILE` if set,
 else `.env`. The Hermes plist sets `POLYTEMPO_ENV_FILE` to repo-root
-`.env.hermes` so A's `POLYMARKET_PRIVATE_KEY` is never mixed with Hermes'.
+`.env.hermes` so Achilles' `POLYMARKET_PRIVATE_KEY` is never mixed with Hermes'.
 `.env.hermes` is gitignored (`chmod 600`). Include weather DSN plus Hermes'
 `POLYTEMPO_LIVE_DATABASE_URL` (`…/polytempo_live_hermes`) and Polymarket keys.
 Do not set `POLYTEMPO_LIVE_CONFIRM` until go-live.
 
-**Do not** add this label to `install-launchd.sh`. After A is quiet on launchd:
+**Do not** add this label to `install-launchd.sh`. After Achilles is quiet on launchd:
 
 ```bash
 # createdb polytempo_live_hermes && scripts/init_live_db.py with Hermes DSN only
