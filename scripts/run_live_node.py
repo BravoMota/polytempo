@@ -64,11 +64,15 @@ def _single_token_book(token_id: str):
 
 
 def _run_reconcile(ledger: LiveLedger, client) -> bool:
-    report = reconcile(
-        ledger,
-        client,
-        now_iso=datetime.now(timezone.utc).isoformat(),
-    )
+    try:
+        report = reconcile(
+            ledger,
+            client,
+            now_iso=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception:
+        logger.exception("reconciliation raised")
+        return False
     for line in report.discrepancies:
         logger.warning("reconcile: %s", line)
     for intent_id in report.resolved_intents:
@@ -159,8 +163,10 @@ def main() -> int:
 
         now = datetime.now(timezone.utc)
         if now - last_reconcile >= RECONCILE_INTERVAL:
-            _run_reconcile(ledger, client)
-            last_reconcile = now
+            if _run_reconcile(ledger, client):
+                last_reconcile = now
+            else:
+                logger.warning("reconciliation failed; will retry (not exiting)")
 
         wake_at = now + SETTLE_SWEEP_INTERVAL
         if tick is not None and tick.next_gate_wake is not None and tick.next_gate_wake > now:
