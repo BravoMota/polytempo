@@ -50,9 +50,11 @@ class FakeLedger:
     open_exposure: float = 0.0
     event_exposure: float = 0.0
     realized_pnl: float = 0.0
+    retry_pending: bool = False
     settlement_result: list[str] = field(default_factory=lambda: ["i1"])
 
     settlements: list[tuple[str, str]] = field(default_factory=list)
+    retry_checks: list[tuple[str, str]] = field(default_factory=list)
     intents: list = field(default_factory=list)
     order_states: list[tuple[str, float]] = field(default_factory=list)
     results: list = field(default_factory=list)
@@ -66,6 +68,10 @@ class FakeLedger:
 
     def has_open_on_event(self, event_id, profile_id=None) -> bool:
         return self.has_open
+
+    def unfilled_retry_pending(self, profile_id, since_iso) -> bool:
+        self.retry_checks.append((profile_id, since_iso))
+        return self.retry_pending
 
     def open_exposure_usd(self) -> float:
         return self.open_exposure
@@ -162,6 +168,7 @@ def _config(
     kill_switch_file=None,
     bankroll_ref_usd=None,
     max_event_exposure_usd=40.0,
+    retry_window_hours=0.0,
 ):
     stake = (
         StakeConfig(fraction=fraction)
@@ -184,6 +191,7 @@ def _config(
             fill_timeout_seconds=1.0,
             min_depth_usd=min_depth_usd,
             slippage_edge_fraction=slippage_edge_fraction,
+            retry_window_hours=retry_window_hours,
         ),
         risk=RiskConfig(
             kill_switch_file=kill_switch_file or (tmp_path / "NO_KILL"),
@@ -379,6 +387,90 @@ def test_unsizeable_book_skips(tmp_path, monkeypatch) -> None:
 
     assert any("unsizeable" in line for line in result.lines)
     assert ledger.intents == []
+
+
+# ── post-gate retry window ──────────────────────────────────────────────────────
+# 30 min past the lead-24 gate: lead is 23.5h, inside a 2h retry window.
+RETRY_NOW = datetime(2026, 7, 20, 0, 30, tzinfo=timezone.utc)
+
+
+def _retry_setup(monkeypatch):
+    ctx = _Ctx(_event(buckets=[_bucket("20-21C", yes_token="tokYES")]), lead_hours=23.5)
+    analysis = _Analysis(rows=[_Row("BUY_YES", "20-21C")])
+    monkeypatch.setattr("polytempo.live.node.analyze_event", lambda *a, **k: analysis)
+    books = {"tokYES": _book("tokYES", asks=[(0.50, 200)], bids=[(0.48, 200)])}
+    return ctx, books
+
+
+def test_retry_window_reopens_gate_when_nothing_filled(tmp_path, monkeypatch) -> None:
+    """A gate attempt that filled nothing is re-tried on a later tick."""
+    ledger = FakeLedger(retry_pending=True)
+    ctx, books = _retry_setup(monkeypatch)
+
+    result = _run_tick(
+        _config(tmp_path, min_depth_usd=0.0, retry_window_hours=2.0),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        now=RETRY_NOW,
+    )
+
+    assert len(ledger.intents) == 1
+    assert any("FILLED" in line for line in result.lines)
+    # Retry eligibility is asked per profile, scoped to the window.
+    assert ledger.retry_checks and ledger.retry_checks[0][0].endswith("_lead24")
+
+
+def test_retry_window_does_not_refire_after_a_fill(tmp_path, monkeypatch) -> None:
+    """Nothing to retry once the gate attempt filled: no second position."""
+    ledger = FakeLedger(retry_pending=False)
+    ctx, books = _retry_setup(monkeypatch)
+
+    result = _run_tick(
+        _config(tmp_path, min_depth_usd=0.0, retry_window_hours=2.0),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        now=RETRY_NOW,
+    )
+
+    assert ledger.intents == []
+    assert result.lines == []
+
+
+def test_retry_window_off_by_default(tmp_path, monkeypatch) -> None:
+    """retry_window_hours=0 keeps the old one-shot-at-the-gate behaviour."""
+    ledger = FakeLedger(retry_pending=True)
+    ctx, books = _retry_setup(monkeypatch)
+
+    result = _run_tick(
+        _config(tmp_path, min_depth_usd=0.0),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        now=RETRY_NOW,
+    )
+
+    assert ledger.intents == []
+    assert result.lines == []
+    assert ledger.retry_checks == []
+
+
+def test_retry_window_expires(tmp_path, monkeypatch) -> None:
+    """Past the window the gate stays shut even with a retryable attempt."""
+    ledger = FakeLedger(retry_pending=True)
+    ctx, books = _retry_setup(monkeypatch)
+
+    result = _run_tick(
+        _config(tmp_path, min_depth_usd=0.0, retry_window_hours=2.0),
+        ledger,
+        fetch_context_fn=_ctx_fn(ctx),
+        books=books,
+        now=datetime(2026, 7, 20, 2, 30, tzinfo=timezone.utc),  # lead 21.5h
+    )
+
+    assert ledger.intents == []
+    assert result.lines == []
 
 
 def test_edge_fraction_walk_reaches_next_ask(tmp_path, monkeypatch) -> None:

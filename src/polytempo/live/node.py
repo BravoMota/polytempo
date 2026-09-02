@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from polytempo.analysis import analyze_event
 from polytempo.live.config import (
@@ -37,7 +37,11 @@ from polytempo.markets.polymarket import (
     winning_label_from_event,
 )
 from polytempo.model.lead_time import lead_hours_at_target
-from polytempo.paper.bot import next_gate_wake_utc, work_units_for_profiles
+from polytempo.paper.bot import (
+    WorkUnit,
+    next_gate_wake_utc,
+    work_units_for_profiles,
+)
 from polytempo.paper.market_context import fetch_market_context
 from polytempo.profiles.models import TradingProfile
 from polytempo.weather.stations import get_station
@@ -287,18 +291,31 @@ def run_node_tick(
     lines: list[str] = []
     halted = False
 
+    retry_hours = config.execution.retry_window_hours
+    retry_since = (now - timedelta(hours=retry_hours)).isoformat()
     units = work_units_for_profiles(profiles, now=now)
+    # A target date drops out of the discovery set the moment its gate passes,
+    # so the retry window has to put it back or there is nothing to retry on.
+    units = units + _retry_units(profiles, now, retry_hours, units)
     for unit in units:
-        due = [
-            p
-            for p in profiles
-            if p.city == unit.city
-            and lead_hours_at_target(
-                _lead_for(unit.target_date, now),
-                p.entry_gate.target_lead_hours,
-                p.entry_gate.tolerance_seconds,
-            )
-        ]
+        lead = _lead_for(unit.target_date, now)
+        due = []
+        for profile in profiles:
+            if profile.city != unit.city:
+                continue
+            gate = profile.entry_gate
+            if lead_hours_at_target(
+                lead, gate.target_lead_hours, gate.tolerance_seconds
+            ):
+                due.append(profile)
+            elif _in_retry_window(lead, gate.target_lead_hours, retry_hours) and (
+                ledger.unfilled_retry_pending(profile.id, retry_since)
+            ):
+                # The gate has passed and that attempt filled nothing. Re-run the
+                # whole pipeline: fresh forecast, fresh book, same analysis and
+                # risk gates. If the edge is gone or the price no longer clears
+                # them, this produces NO_BUY_ROWS / RISK_DENY and buys nothing.
+                due.append(profile)
         if not due:
             continue
         try:
@@ -340,6 +357,43 @@ def run_node_tick(
         next_gate_wake=gate_wake,
         halted=halted,
     )
+
+
+def _retry_units(
+    profiles: list[TradingProfile],
+    now: datetime,
+    retry_window_hours: float,
+    existing: list[WorkUnit],
+) -> list[WorkUnit]:
+    """Work units for target dates whose gate has passed but is still retryable."""
+    if retry_window_hours <= 0:
+        return []
+    seen = {(u.city, u.target_date) for u in existing}
+    units: list[WorkUnit] = []
+    today = now.date()
+    for profile in profiles:
+        for offset in range(-1, 4):
+            target = today + timedelta(days=offset)
+            key = (profile.city, target)
+            if key in seen:
+                continue
+            if _in_retry_window(
+                _lead_for(target, now),
+                profile.entry_gate.target_lead_hours,
+                retry_window_hours,
+            ):
+                seen.add(key)
+                units.append(WorkUnit(city=profile.city, target_date=target))
+    return units
+
+
+def _in_retry_window(
+    lead_hours: float, target_lead_hours: float, retry_window_hours: float
+) -> bool:
+    """True when the gate has passed but is still inside the retry window."""
+    if retry_window_hours <= 0:
+        return False
+    return target_lead_hours - retry_window_hours <= lead_hours < target_lead_hours
 
 
 def _lead_for(target_date, now: datetime) -> float:

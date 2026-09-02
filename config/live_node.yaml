@@ -36,6 +36,12 @@ execution:
   # No impact floor: size whatever resting asks sit inside the walk window.
   min_depth_usd: 0.0
   slippage_edge_fraction: 0.25
+  # If the gate attempt fills nothing (exchange 503, or the limit never gets
+  # hit), re-try on each 15-min tick for this long after the gate. Every retry
+  # re-runs analysis and risk against a fresh forecast and book, so it only
+  # buys while the edge and price still clear the strategy. Costs some lead
+  # drift: a retry at the end of the window enters at lead 22h, not 24h.
+  retry_window_hours: 2.0
 
 # Dollar caps below are the $50-bankroll equivalents; the node scales them by
 # balance / bankroll_ref_usd so the same percentages hold as the wallet grows.

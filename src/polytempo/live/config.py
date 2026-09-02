@@ -75,8 +75,16 @@ class ExecutionConfig:
     min_depth_usd: float
     # When set, walk min(max_slippage, fraction * edge) instead of a flat cap.
     slippage_edge_fraction: float | None = None
+    # Hours after the gate during which an attempt that filled nothing is
+    # re-tried on later ticks. 0 disables retrying (one shot at the gate).
+    retry_window_hours: float = 0.0
 
     def __post_init__(self) -> None:
+        if self.retry_window_hours < 0:
+            raise ValueError(
+                "execution.retry_window_hours must be non-negative, "
+                f"got {self.retry_window_hours}"
+            )
         if not 0.0 <= self.max_slippage < 1.0:
             raise ValueError(f"execution.max_slippage must be in [0, 1), got {self.max_slippage}")
         if self.fill_timeout_seconds <= 0:
@@ -257,6 +265,7 @@ def load_live_node_config(path: Path | None = None) -> LiveNodeConfig:
             slippage_edge_fraction=_optional_float(
                 execution_raw.get("slippage_edge_fraction")
             ),
+            retry_window_hours=float(execution_raw.get("retry_window_hours", 0.0)),
         ),
         risk=RiskConfig(
             kill_switch_file=kill_file,

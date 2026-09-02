@@ -193,6 +193,66 @@ def test_has_open_on_event_scopes_by_profile(ledger: LiveLedger) -> None:
     assert ledger.has_open_on_event("evt1") is True  # unscoped sees any profile
 
 
+_BEFORE = "2026-07-18T00:00:00+00:00"  # earlier than _intent()'s ts_utc
+
+
+def test_retry_pending_after_unfilled_cancel(ledger: LiveLedger) -> None:
+    intent = _intent(metadata={"profile_id": "live_k_lead24"})
+    ledger.record_intent(intent)
+    ledger.record_result(ExecutionResult(intent, STATE_CANCELED, "o1", 0.0, None))
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", _BEFORE) is True
+    assert ledger.unfilled_retry_pending("live_other_lead24", _BEFORE) is False
+
+
+def test_retry_pending_after_placement_failure(ledger: LiveLedger) -> None:
+    """A 503 never reaches the book: no order id, safe to re-send."""
+    intent = _intent(metadata={"profile_id": "live_k_lead24"})
+    ledger.record_intent(intent)
+    ledger.record_result(ExecutionResult(intent, STATE_FAILED, None, 0.0, None))
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", _BEFORE) is True
+
+
+def test_no_retry_when_failed_order_may_be_resting(ledger: LiveLedger) -> None:
+    """FAILED *with* an order id means unknown state — never re-send."""
+    intent = _intent(metadata={"profile_id": "live_k_lead24"})
+    ledger.record_intent(intent)
+    ledger.record_result(ExecutionResult(intent, STATE_FAILED, "o1", 0.0, None))
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", _BEFORE) is False
+
+
+def test_no_retry_once_anything_filled(ledger: LiveLedger) -> None:
+    """One unfilled bucket does not license a retry when another one filled."""
+    unfilled = _intent(intent_id="i1", metadata={"profile_id": "live_k_lead24"})
+    filled = _intent(
+        intent_id="i2", bucket_label="25C", metadata={"profile_id": "live_k_lead24"}
+    )
+    ledger.record_intent(unfilled)
+    ledger.record_result(ExecutionResult(unfilled, STATE_CANCELED, "o1", 0.0, None))
+    ledger.record_intent(filled)
+    ledger.record_result(ExecutionResult(filled, STATE_FILLED, "o2", 100.0, 0.30))
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", _BEFORE) is False
+
+
+def test_no_retry_outside_the_window(ledger: LiveLedger) -> None:
+    intent = _intent(metadata={"profile_id": "live_k_lead24"})
+    ledger.record_intent(intent)
+    ledger.record_result(ExecutionResult(intent, STATE_CANCELED, "o1", 0.0, None))
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", "2026-07-19T00:00:00+00:00") is False
+
+
+def test_no_retry_while_intent_still_in_flight(ledger: LiveLedger) -> None:
+    """An INTENT with no RESULT is mid-attempt, not a finished failure."""
+    intent = _intent(metadata={"profile_id": "live_k_lead24"})
+    ledger.record_intent(intent)
+
+    assert ledger.unfilled_retry_pending("live_k_lead24", _BEFORE) is False
+
+
 def test_resolve_stale_intent_writes_terminal(ledger: LiveLedger) -> None:
     intent = _intent()
     ledger.record_intent(intent)

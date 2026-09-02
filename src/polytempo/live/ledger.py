@@ -208,6 +208,41 @@ class LiveLedger:
             ).fetchone()
         return row is not None
 
+    def unfilled_retry_pending(self, profile_id: str, since_iso: str) -> bool:
+        """True if ``profile_id`` tried since ``since_iso`` and nothing filled.
+
+        Gates the post-gate retry window. Retrying is only safe when the
+        exchange is known to hold nothing for us: a zero-fill CANCELED or
+        REJECTED, or a FAILED that never got an order id (placement itself
+        failed, e.g. a 503). A FAILED *with* an order id means the order may
+        still be resting, so it must never be re-sent. An intent with no RESULT
+        yet is in flight and is excluded by the join.
+        """
+        with get_live_connection(self._database_url) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COALESCE(BOOL_OR(r.filled_shares > 0), FALSE) AS any_filled,
+                    COALESCE(BOOL_OR(
+                        COALESCE(r.filled_shares, 0) = 0
+                        AND (
+                            r.state IN ('CANCELED', 'REJECTED')
+                            OR (r.state = 'FAILED' AND r.order_id IS NULL)
+                        )
+                    ), FALSE) AS any_retryable
+                FROM live_events i
+                JOIN live_events r
+                  ON r.event_type = 'RESULT' AND r.intent_id = i.intent_id
+                WHERE i.event_type = 'INTENT'
+                  AND i.metadata->>'profile_id' = %(pid)s
+                  AND i.ts_utc >= %(since)s
+                """,
+                {"pid": profile_id, "since": since_iso},
+            ).fetchone()
+        if row is None:
+            return False
+        return bool(row["any_retryable"]) and not bool(row["any_filled"])
+
     def journal_modes(self) -> set[str]:
         """Distinct ``mode`` values present in the journal (live-mode purity guard)."""
         with get_live_connection(self._database_url) as conn:
