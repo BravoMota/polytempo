@@ -10,7 +10,8 @@ from polytempo.visualizer.chart import (
     bucket_table_has_replay_mismatch,
     build_analysis_chart,
 )
-from polytempo.visualizer.loaders import load_replay
+from polytempo.markets.polymarket import winning_label_from_event
+from polytempo.visualizer.loaders import load_replay, load_settlement_replay
 from polytempo.visualizer.paths import ROW_HEIGHT
 from polytempo.visualizer.styling import style_bucket_table, table_height
 from polytempo.visualizer.trades import RealizedEventGroup, bucket_probs_from_trades
@@ -103,6 +104,55 @@ def render_event_replay(
         st.warning(err or "Replay unavailable for this event.")
         return
 
+    _render_replay_result(
+        replay,
+        traded_labels=traded_labels,
+        resolution_label=group.resolution_label,
+        trade_p_by_bucket=bucket_probs_from_trades(group.trades),
+        opened_at=opened_at,
+    )
+
+
+def render_settlement_replay(
+    *,
+    wallet: str,
+    settlement_date,
+    weather_url: str,
+    lead_hours: float | None,
+    model_strategy: str | None,
+) -> None:
+    """Gate-time snapshot replay when the paper ledger has no fills."""
+    try:
+        replay, err = load_settlement_replay(
+            wallet,
+            settlement_date,
+            weather_url,
+            lead_hours,
+            model_strategy,
+        )
+    except Exception as exc:
+        st.warning(f"Replay failed: {exc}")
+        return
+    if replay is None:
+        st.warning(err or "Replay unavailable for this settlement date.")
+        return
+    _render_replay_result(
+        replay,
+        traded_labels=set(),
+        resolution_label=winning_label_from_event(replay.event),
+        trade_p_by_bucket=None,
+        opened_at=replay.opened_at_utc,
+    )
+
+
+def _render_replay_result(
+    replay,
+    *,
+    traded_labels: set[str],
+    resolution_label: str | None,
+    trade_p_by_bucket: dict | None,
+    opened_at: str,
+) -> None:
     sources = replay.snapshot_sources
     _render_time_slot_banner(opened_at=opened_at, sources=sources)
 
@@ -110,7 +160,7 @@ def render_event_replay(
         replay.analysis,
         replay.event,
         traded_bucket_labels=traded_labels,
-        resolution_label=group.resolution_label,
+        resolution_label=resolution_label,
     )
     st.plotly_chart(chart_bundle.figure, width="stretch")
 
@@ -124,7 +174,7 @@ def render_event_replay(
 
     bucket_df = bucket_table_dataframe(
         replay.analysis,
-        trade_p_by_bucket=bucket_probs_from_trades(group.trades),
+        trade_p_by_bucket=trade_p_by_bucket,
     )
     st.dataframe(
         style_bucket_table(bucket_df),
@@ -133,7 +183,7 @@ def render_event_replay(
         height=table_height(len(bucket_df)),
         row_height=ROW_HEIGHT,
     )
-    if bucket_table_has_replay_mismatch(bucket_df):
+    if trade_p_by_bucket and bucket_table_has_replay_mismatch(bucket_df):
         st.warning(
             "Replay **P** does not match ledger **P (from trades)** for one or more "
             "traded buckets (calibration CSV or snapshots may differ from OPEN time)."

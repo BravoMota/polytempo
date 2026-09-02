@@ -13,7 +13,7 @@ from polytempo.visualizer.distribution_data import (
     list_cities,
     list_resolution_dates,
 )
-from polytempo.visualizer.replay import replay_event_analysis
+from polytempo.visualizer.replay import replay_at_settlement, replay_event_analysis
 from polytempo.visualizer.trades import fetch_realized_trades
 
 
@@ -59,6 +59,23 @@ def load_replay(
 
 
 @st.cache_data(show_spinner=False, ttl=300)
+def load_settlement_replay(
+    profile_id: str,
+    settlement_date: date,
+    weather_database_url: str,
+    lead_hours: float | None,
+    model_strategy: str | None,
+):
+    return replay_at_settlement(
+        profile_id=profile_id,
+        settlement_date=settlement_date,
+        weather_database_url=weather_database_url,
+        lead_hours=lead_hours,
+        model_strategy=model_strategy,
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=300)
 def load_cities(weather_url: str):
     return list_cities(weather_url)
 
@@ -75,6 +92,7 @@ def load_distribution_view(
     at_utc_iso: str,
     weather_url: str,
     calibration_source: str,
+    strategies: tuple[str, ...] = (),
 ):
     return build_distribution_view(
         city=city,
@@ -82,4 +100,5 @@ def load_distribution_view(
         at_utc=datetime.fromisoformat(at_utc_iso),
         weather_url=weather_url,
         calibration_source=Path(calibration_source),
+        strategies=strategies,
     )

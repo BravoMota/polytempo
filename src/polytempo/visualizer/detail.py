@@ -17,7 +17,7 @@ from polytempo.storage.paper_postgres import resolve_paper_database_url
 from polytempo.storage.postgres import resolve_database_url
 from polytempo.visualizer.csv_data import detail_context_from_filtered, wallet_settlement_dates
 from polytempo.visualizer.loaders import load_realized_trades
-from polytempo.visualizer.replay_panel import render_event_replay
+from polytempo.visualizer.replay_panel import render_event_replay, render_settlement_replay
 from polytempo.visualizer.trades import RealizedTrade, group_by_event
 
 
@@ -52,6 +52,31 @@ def trade_row_dict(trade: RealizedTrade) -> dict:
         "opened_at": trade.opened_at_utc,
         "realized_at": trade.realized_at_utc,
     }
+
+
+def _csv_replay_knobs(
+    filtered: pd.DataFrame,
+    wallet: str,
+    settlement_date: date,
+) -> tuple[float | None, str | None]:
+    """Lead hours and model strategy from the visible CSV row."""
+    sub = filtered[
+        (filtered["profile_id"] == wallet)
+        & (filtered["settlement_date"] == settlement_date)
+    ]
+    if sub.empty:
+        return None, None
+    row = sub.iloc[0]
+    lead_raw = row.get("lead_hours")
+    lead_hours: float | None
+    try:
+        text = "" if lead_raw is None else str(lead_raw).strip()
+        lead_hours = float(text) if text else None
+    except (TypeError, ValueError):
+        lead_hours = None
+    model_raw = row.get("model")
+    model_strategy = None if model_raw is None else str(model_raw).strip() or None
+    return lead_hours, model_strategy
 
 
 def trades_dataframe(trade_dicts: list[dict]) -> pd.DataFrame:
@@ -112,21 +137,39 @@ def render_trade_detail(
             st.caption(context)
 
         paper_url = paper_db_url()
-        if paper_url is None:
-            st.info("Set POLYTEMPO_PAPER_DATABASE_URL to inspect trades.")
-            return
-
-        try:
-            trades = load_realized_trades(wallet, settlement_date, paper_url)
-        except Exception as exc:
-            st.error(f"Could not load trades: {exc}")
-            return
-
-        if not trades:
-            st.warning("No matching trades in the paper ledger for this selection.")
-            return
+        trades: list[RealizedTrade] = []
+        if paper_url is not None:
+            try:
+                trades = load_realized_trades(wallet, settlement_date, paper_url)
+            except Exception as exc:
+                st.error(f"Could not load trades: {exc}")
+                return
 
         weather_url = weather_db_url()
+        if not trades:
+            if weather_url is None:
+                st.warning("No matching trades in the paper ledger for this selection.")
+                st.info(
+                    "Set POLYTEMPO_DATABASE_URL to replay the gate-time distribution "
+                    "(needed for backtest / research knobs)."
+                )
+                return
+            st.caption(
+                "No paper-ledger fills for this wallet — replaying the model at "
+                "the profile gate from weather snapshots."
+            )
+            lead_hours, model_strategy = _csv_replay_knobs(
+                filtered, wallet, settlement_date
+            )
+            render_settlement_replay(
+                wallet=wallet,
+                settlement_date=settlement_date,
+                weather_url=weather_url,
+                lead_hours=lead_hours,
+                model_strategy=model_strategy,
+            )
+            return
+
         for group in group_by_event(trades):
             st.markdown(
                 f"**Event** `{group.polymarket_event_id}` — "

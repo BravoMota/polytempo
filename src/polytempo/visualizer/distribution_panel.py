@@ -9,6 +9,12 @@ import streamlit as st
 from polytempo.analysis import MODEL_STRATEGIES
 from polytempo.visualizer.distribution_data import DistributionView
 from polytempo.visualizer.distribution_chart import FORECAST_COLORS, MODEL_PALETTE, STRAT_COLORS
+from polytempo.visualizer.prefs import (
+    OverlayPrefs,
+    enabled_strats_from_prefs,
+    load_prefs,
+    save_overlays,
+)
 from polytempo.weather.calibration_storage import WU_FORECAST_MODEL
 
 _GREY = "#888888"
@@ -23,17 +29,40 @@ class OverlayState:
     show_resolved: bool
 
 
+def _persist_overlays() -> None:
+    save_overlays(
+        OverlayPrefs(
+            show_forecasts=bool(st.session_state.dist_show_forecasts),
+            show_market=bool(st.session_state.dist_show_market),
+            show_resolved=bool(st.session_state.dist_show_resolved),
+            enabled_strats=[
+                strat
+                for strat in MODEL_STRATEGIES
+                if st.session_state.get(f"dist_strat_{strat}")
+            ],
+        )
+    )
+
+
 def _init_overlay_state() -> None:
+    overlays = load_prefs().overlays
     if "dist_show_forecasts" not in st.session_state:
-        st.session_state.dist_show_forecasts = True
+        st.session_state.dist_show_forecasts = (
+            True if overlays is None else overlays.show_forecasts
+        )
     if "dist_show_market" not in st.session_state:
-        st.session_state.dist_show_market = True
+        st.session_state.dist_show_market = (
+            True if overlays is None else overlays.show_market
+        )
     if "dist_show_resolved" not in st.session_state:
-        st.session_state.dist_show_resolved = True
+        st.session_state.dist_show_resolved = (
+            True if overlays is None else overlays.show_resolved
+        )
+    enabled = enabled_strats_from_prefs(overlays)
     for strat in MODEL_STRATEGIES:
         key = f"dist_strat_{strat}"
         if key not in st.session_state:
-            st.session_state[key] = True
+            st.session_state[key] = strat in enabled
 
 
 def read_overlay_state() -> OverlayState:
@@ -53,13 +82,25 @@ def render_overlay_controls() -> None:
     """Overlay toggles in the sidebar."""
     _init_overlay_state()
     st.sidebar.header("Overlays")
-    st.sidebar.toggle("Forecasts (Open-Meteo + WU)", key="dist_show_forecasts")
-    st.sidebar.toggle("Market (yes_ask + implied mean)", key="dist_show_market")
-    st.sidebar.toggle("Resolved bucket", key="dist_show_resolved")
+    st.sidebar.toggle(
+        "Forecasts (Open-Meteo + WU)",
+        key="dist_show_forecasts",
+        on_change=_persist_overlays,
+    )
+    st.sidebar.toggle(
+        "Market (yes_ask + implied mean)",
+        key="dist_show_market",
+        on_change=_persist_overlays,
+    )
+    st.sidebar.toggle(
+        "Resolved bucket",
+        key="dist_show_resolved",
+        on_change=_persist_overlays,
+    )
 
     st.sidebar.markdown("**Distribution strategies**")
     for strat in MODEL_STRATEGIES:
-        st.sidebar.toggle(strat, key=f"dist_strat_{strat}")
+        st.sidebar.toggle(strat, key=f"dist_strat_{strat}", on_change=_persist_overlays)
 
 
 def _wrap(html: str, *, disabled: bool) -> str:
@@ -132,10 +173,11 @@ def render_overlay_info(view: DistributionView, state: OverlayState) -> None:
             disabled = strat not in state.enabled_strats
             color = _strat_color(strat, disabled)
             if o is None:
+                note = "off" if disabled else "unavailable"
                 st.markdown(
                     _wrap(
                         f'<p style="margin:0 0 0.85rem;font-size:0.88rem;color:#666">'
-                        f"{strat} — unavailable</p>",
+                        f"{strat} — {note}</p>",
                         disabled=True,
                     ),
                     unsafe_allow_html=True,

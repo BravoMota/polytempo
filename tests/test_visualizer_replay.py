@@ -8,7 +8,11 @@ from unittest.mock import patch
 from polytempo.analysis import AnalysisResult
 from polytempo.markets.polymarket import PolymarketBucket, PolymarketEvent
 from polytempo.model.distribution import DistributionBuildInfo
-from polytempo.visualizer.replay import profile_by_id, replay_event_analysis
+from polytempo.visualizer.replay import (
+    profile_by_id,
+    replay_at_settlement,
+    replay_event_analysis,
+)
 from polytempo.profiles.models import EntryGate, TradingProfile
 from polytempo.storage.snapshot_reads import ClobSnapshotBundle, OpenMeteoSnapshotBundle
 from polytempo.weather.schema import ForecastValues
@@ -68,6 +72,70 @@ def test_profile_by_id_finds_known_wallet() -> None:
     profile = profile_by_id("bh_argmax_yes_lead42")
     assert profile is not None
     assert profile.trade_strategy == "argmax_yes"
+
+
+def test_replay_at_settlement_uses_gate_and_csv_model(monkeypatch) -> None:
+    from datetime import date
+
+    from polytempo.model.lead_time import gate_target_utc
+
+    profile = TradingProfile(
+        id="whums_dist_arb_lead24",
+        model_strategy="weighted_historical_market_sigma",
+        trade_strategy="dist_arb",
+        entry_gate=EntryGate(target_lead_hours=24.0),
+        city="london",
+    )
+    captured: dict = {}
+
+    def fake_replay(**kwargs):
+        captured.update(kwargs)
+        return (object(), None)
+
+    monkeypatch.setattr(
+        "polytempo.visualizer.replay.profile_by_id", lambda _pid: profile
+    )
+    monkeypatch.setattr(
+        "polytempo.visualizer.replay.event_id_for", lambda *_a, **_k: "evt-whums"
+    )
+    monkeypatch.setattr(
+        "polytempo.visualizer.replay.replay_event_analysis", fake_replay
+    )
+
+    settlement = date(2026, 8, 1)
+    result, err = replay_at_settlement(
+        profile_id="whums_dist_arb_lead24",
+        settlement_date=settlement,
+        weather_database_url="postgresql://local/test",
+        lead_hours=24.0,
+        model_strategy="weighted_historical_market_sigma",
+    )
+    assert err is None
+    assert result is not None
+    assert captured["polymarket_event_id"] == "evt-whums"
+    assert captured["model_strategy"] == "weighted_historical_market_sigma"
+    assert captured["opened_at_utc"] == gate_target_utc(settlement, 24.0).isoformat()
+
+
+def test_replay_at_settlement_unknown_profile(monkeypatch) -> None:
+    from datetime import date
+
+    monkeypatch.setattr("polytempo.visualizer.replay.profile_by_id", lambda _pid: None)
+    result, err = replay_at_settlement(
+        profile_id="missing_wallet",
+        settlement_date=date(2026, 8, 1),
+        weather_database_url="postgresql://local/test",
+    )
+    assert result is None
+    assert err is not None
+    assert "unknown profile_id" in err
+
+
+def test_profile_by_id_finds_backtest_only_whums_wallet() -> None:
+    profile = profile_by_id("whums_dist_arb_lead30")
+    assert profile is not None
+    assert profile.model_strategy == "weighted_historical_market_sigma"
+    assert profile.trade_strategy == "dist_arb"
 
 
 @patch("polytempo.visualizer.replay.fetch_nearest_wunderground_adjusted_tmax")

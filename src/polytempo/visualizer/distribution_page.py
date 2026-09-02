@@ -125,7 +125,12 @@ def render_distribution_page() -> None:
     )
 
     view = load_distribution_view(
-        city, settlement_date, at_utc.isoformat(), weather_url, str(calibration_source)
+        city,
+        settlement_date,
+        at_utc.isoformat(),
+        weather_url,
+        str(calibration_source),
+        tuple(sorted(overlay_state.enabled_strats)),
     )
 
     fig = build_distribution_chart(

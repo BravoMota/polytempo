@@ -9,6 +9,7 @@ memoized so scrubbing the time slider does not re-hit the network per tick.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache
@@ -318,11 +319,17 @@ def strat_overlays(
     *,
     station_id: str,
     lead_hours: float,
+    strategies: Iterable[str] | None = None,
 ) -> tuple[list[StratDistOverlay], list[str]]:
-    """One distribution per model strategy; returns (overlays, skipped warnings)."""
+    """One distribution per requested model strategy; returns (overlays, skipped).
+
+    ``strategies=None`` keeps the historical “all ``MODEL_STRATEGIES``” behaviour.
+    Pass an empty iterable to skip analysis entirely (sidebar toggles all off).
+    """
+    wanted = MODEL_STRATEGIES if strategies is None else tuple(strategies)
     overlays: list[StratDistOverlay] = []
     skipped: list[str] = []
-    for model_strategy in MODEL_STRATEGIES:
+    for model_strategy in wanted:
         try:
             result = analyze_event(
                 forecast,
@@ -379,6 +386,7 @@ def build_distribution_view(
     at_utc: datetime,
     weather_url: str,
     calibration_source: Path = DEFAULT_CALIBRATION_STATS_CSV_PATH,
+    strategies: Iterable[str] | None = None,
 ) -> DistributionView:
     """Assemble all overlays for one (city, settlement date, snapshot instant)."""
     station = get_station(city)
@@ -463,6 +471,7 @@ def build_distribution_view(
             event,
             station_id=station.icao,
             lead_hours=lead_hours,
+            strategies=strategies,
         )
         warnings.extend(f"strat skipped — {s}" for s in skipped)
 

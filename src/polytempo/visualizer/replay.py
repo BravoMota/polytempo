@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import lru_cache
+from pathlib import Path
 
 from polytempo.analysis import AnalysisResult, analyze_event
 from polytempo.markets.polymarket import (
@@ -11,9 +13,12 @@ from polytempo.markets.polymarket import (
     fetch_event,
     strip_untradeable_bucket_prices,
 )
+from polytempo.model.lead_time import gate_target_utc
 from polytempo.paper.settlement_reporting import build_event_settlement_dates
 from polytempo.profiles.load import DEFAULT_PROFILES_PATH, load_paper_profiles
 from polytempo.profiles.models import TradingProfile
+from polytempo.visualizer.distribution_data import event_id_for
+from polytempo.visualizer.paths import BACKTEST_PROFILES
 from polytempo.storage.snapshot_reads import (
     fetch_nearest_clob_snapshot,
     fetch_nearest_open_meteo_forecast,
@@ -30,9 +35,18 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+@lru_cache(maxsize=4)
+def _profiles_by_id(config_path: str) -> dict[str, TradingProfile]:
+    """Paper wallets first; backtest-only ids (whums / whus / es / …) fill the gaps."""
+    by_id: dict[str, TradingProfile] = {}
+    if BACKTEST_PROFILES.is_file():
+        by_id.update({p.id: p for p in load_paper_profiles(BACKTEST_PROFILES)})
+    by_id.update({p.id: p for p in load_paper_profiles(Path(config_path))})
+    return by_id
+
+
 def profile_by_id(profile_id: str, *, config_path=DEFAULT_PROFILES_PATH) -> TradingProfile | None:
-    profiles = load_paper_profiles(config_path)
-    return next((p for p in profiles if p.id == profile_id), None)
+    return _profiles_by_id(str(Path(config_path))).get(profile_id)
 
 
 @dataclass(frozen=True)
@@ -153,4 +167,40 @@ def replay_event_analysis(
             event=event,
         ),
         None,
+    )
+
+
+def replay_at_settlement(
+    *,
+    profile_id: str,
+    settlement_date: date,
+    weather_database_url: str,
+    lead_hours: float | None = None,
+    model_strategy: str | None = None,
+) -> tuple[ReplayResult | None, str | None]:
+    """Replay the profile's model at its lead gate for a settlement date.
+
+    Used when the paper ledger has no fills (backtest / research knobs). Event
+    id and CLOB/OM snapshots come from the weather DB; there are no OPEN rows.
+    """
+    profile = profile_by_id(profile_id)
+    if profile is None:
+        return None, f"unknown profile_id: {profile_id!r}"
+
+    hours = lead_hours
+    if hours is None:
+        hours = profile.entry_gate.target_lead_hours
+    event_id = event_id_for(profile.city, settlement_date, weather_database_url)
+    if event_id is None:
+        return None, (
+            f"no CLOB event for {profile.city} {settlement_date.isoformat()}"
+        )
+    at_utc = gate_target_utc(settlement_date, hours)
+    return replay_event_analysis(
+        profile_id=profile_id,
+        polymarket_event_id=event_id,
+        opened_at_utc=at_utc.isoformat(),
+        lead_hours=hours,
+        model_strategy=model_strategy or profile.model_strategy,
+        weather_database_url=weather_database_url,
     )
