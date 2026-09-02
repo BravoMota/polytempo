@@ -48,6 +48,7 @@ class FakeClient:
         statuses,
         place_state=STATE_OPEN,
         place_raises=None,
+        place_raw=None,
         cancel_result=True,
         order_id="ord-1",
     ) -> None:
@@ -55,6 +56,7 @@ class FakeClient:
         self._i = 0
         self._place_state = place_state
         self._place_raises = place_raises
+        self._place_raw = place_raw or {}
         self._cancel_result = cancel_result
         self._order_id = order_id
         self.cancel_calls = 0
@@ -62,11 +64,18 @@ class FakeClient:
     def place_limit_buy(self, intent):
         if self._place_raises is not None:
             raise self._place_raises
-        return PlacedOrder(order_id=self._order_id, intent_id=intent.intent_id, state=self._place_state)
+        return PlacedOrder(
+            order_id=self._order_id,
+            intent_id=intent.intent_id,
+            state=self._place_state,
+            raw=self._place_raw,
+        )
 
     def order_status(self, order_id):
         status = self._statuses[min(self._i, len(self._statuses) - 1)]
         self._i += 1
+        if isinstance(status, Exception):
+            raise status
         return status
 
     def cancel_order(self, order_id):
@@ -192,6 +201,59 @@ def test_cancel_but_status_still_open_forces_canceled() -> None:
 
     assert result.state == STATE_CANCELED
     assert result.filled_shares == pytest.approx(10.0)  # partial fill kept
+
+
+def test_fill_on_entry_survives_a_failed_status_read() -> None:
+    """A matched-on-entry order must keep its fill when get_order then errors.
+
+    The exchange stops serving a fully matched order from the open-order
+    endpoint, so the poll after a FILLED ack routinely raises. Journaling
+    FAILED with zero shares there would strand a real position.
+    """
+    client = FakeClient(
+        place_state=STATE_FILLED,
+        place_raw={"filled_shares": 11.47, "avg_fill_price": 0.46},
+        statuses=[RuntimeError("get_order failed: OpenOrder not found")],
+    )
+    transitions: list[tuple[str, float]] = []
+
+    result = manage_order(
+        client,
+        _intent(),
+        timeout_seconds=10.0,
+        now_fn=_clock([0.0, 1.0]),
+        sleep_fn=lambda _s: None,
+        on_transition=lambda state, status: transitions.append(
+            (state, status.filled_shares)
+        ),
+    )
+
+    assert result.state == STATE_FILLED
+    assert result.order_id == "ord-1"
+    assert result.filled_shares == pytest.approx(11.47)
+    assert result.avg_fill_price == pytest.approx(0.46)
+    # The journaled ack carries the fill too, not a placeholder zero.
+    assert transitions == [(STATE_FILLED, pytest.approx(11.47))]
+
+
+def test_status_read_failure_while_resting_still_fails() -> None:
+    """A non-terminal ack leaves the true state unknown: FAILED for reconcile."""
+    client = FakeClient(
+        place_state=STATE_OPEN,
+        statuses=[RuntimeError("boom")],
+    )
+
+    result = manage_order(
+        client,
+        _intent(),
+        timeout_seconds=10.0,
+        now_fn=_clock([0.0, 1.0]),
+        sleep_fn=lambda _s: None,
+    )
+
+    assert result.state == STATE_FAILED
+    assert result.filled_shares == pytest.approx(0.0)
+    assert result.message == "order_status failed: boom"
 
 
 def test_place_failure_returns_failed() -> None:

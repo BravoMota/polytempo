@@ -148,10 +148,13 @@ def main() -> int:
     while not _stop:
         try:
             tick = run_node_tick(config, ledger, client, risk)
+            # flush: launchd redirects stdout to a file, so Python block-buffers
+            # it and order outcomes sit unwritten for days. The operator reads
+            # this log to see what the node did — it has to land immediately.
             for line in tick.lines:
-                print(line)
+                print(line, flush=True)
             if tick.settled_events:
-                print(f"settled: {', '.join(tick.settled_events)}")
+                print(f"settled: {', '.join(tick.settled_events)}", flush=True)
             if tick.halted:
                 logger.error("tick stopped by risk hard-stop; check kill switch/limits")
         except Exception:

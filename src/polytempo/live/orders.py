@@ -55,12 +55,15 @@ def manage_order(
                 on_transition(state, status)
 
     # Journal the ack with its order id immediately: if we crash before the
-    # first poll, reconciliation must know the order was placed.
+    # first poll, reconciliation must know the order was placed. Carry any fill
+    # the placement response already reported — for an order that matched on
+    # entry this is the only fill record we get, since the exchange stops
+    # serving a fully matched order from the open-order endpoint.
     ack = OrderStatus(
         order_id=order_id,
         state=placed.state,
-        filled_shares=0.0,
-        avg_fill_price=None,
+        filled_shares=_raw_float(placed.raw, "filled_shares") or 0.0,
+        avg_fill_price=_raw_float(placed.raw, "avg_fill_price"),
         raw=placed.raw,
     )
     emit(placed.state, ack)
@@ -76,6 +79,13 @@ def manage_order(
         try:
             status = client.order_status(order_id)
         except Exception as exc:  # noqa: BLE001 — state unknown; reconcile resolves it
+            # A terminal ack already told us the outcome, so a failed status
+            # read adds nothing: trust it rather than journaling FAILED with
+            # zero fills. Reporting FAILED here would strand a real position —
+            # the ledger would hold no shares to settle, and reconcile only
+            # compares tokens the ledger already has a position in.
+            if placed.state in TERMINAL_STATES:
+                return _result(intent, order_id, ack)
             return ExecutionResult(
                 intent=intent,
                 state=STATE_FAILED,
@@ -114,6 +124,14 @@ def manage_order(
     # Cancel accepted but the status read still shows it resting: report CANCELED,
     # keeping any partial fill we observed.
     return _result(intent, order_id, final, forced_state=STATE_CANCELED)
+
+
+def _raw_float(raw: dict[str, object], key: str) -> float | None:
+    """Read a numeric field out of a placement ack's ``raw`` payload."""
+    value = raw.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 def _result(
