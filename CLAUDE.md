@@ -63,3 +63,25 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## Operations: restarting daemons on mac0
+
+`jnlow` on mac0 is not an admin and has **no general sudo** — `sudo -n true` fails, and that is expected, not a broken setup. Its one sudo right is the allowlisted wrapper in `deploy/sudoers.d/polytempo.example`:
+
+```
+jnlow ALL=(root) NOPASSWD: /Users/jnlow/projects/PolyTempo/deploy/bin/polytempo-service *
+```
+
+So restart the money-handling jobs through the wrapper, from the repo root:
+
+```
+sudo -n deploy/bin/polytempo-service restart live-node
+sudo -n deploy/bin/polytempo-service restart hermes
+```
+
+- `-n` means don't prompt; it succeeds only because that exact command is NOPASSWD. Raw `sudo launchctl kickstart -k ...` does the same thing but needs the Admin password, so use the wrapper.
+- `live-node` and `hermes` must be named explicitly — `restart all` skips them on purpose (never bounce a money-handling process from an unattended deploy).
+- Run from `~/projects/PolyTempo`, not `~/projects/polytempo`. They are the same inode on a case-insensitive volume, but sudo resolves the relative path against cwd and matches sudoers case-sensitively, so the lowercase path misses the NOPASSWD rule and falls back to prompting.
+- Installing a **new** launchd job (copying plists into `/Library/LaunchDaemons`, running `install-launchd.sh`) is still outside the allowlist and needs an admin account.
