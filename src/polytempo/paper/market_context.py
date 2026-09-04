@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
+from polytempo.collectors.config import models_for_station
 from polytempo.markets.polymarket import (
     PolymarketEvent,
     fetch_event,
@@ -153,7 +154,7 @@ def fetch_market_context(
         latitude=station.latitude,
         longitude=station.longitude,
         timezone=station.timezone,
-        models=DEFAULT_MODELS,
+        models=models_for_station(station.icao) or DEFAULT_MODELS,
         target_dates=[target_date],
         fetched_at_utc=fetched_at,
     )

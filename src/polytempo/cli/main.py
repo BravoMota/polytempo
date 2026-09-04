@@ -45,6 +45,7 @@ from polytempo.weather.calibration_stats_csv import (
     DEFAULT_CALIBRATION_STATS_CSV_PATH,
     DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH,
 )
+from polytempo.collectors.config import models_for_station
 from polytempo.model.lead_time import lead_hours_to_end_of_target_day
 from polytempo.markets.buckets import bucket_label_for_value, parse_temperature_bucket
 from polytempo.markets.polymarket import (
@@ -416,7 +417,7 @@ def _run_live_one_day(
                 latitude=station.latitude,
                 longitude=station.longitude,
                 timezone=station.timezone,
-                models=DEFAULT_MODELS,
+                models=models_for_station(station.icao) or DEFAULT_MODELS,
                 target_dates=[target_date],
                 fetched_at_utc=run_at,
             )

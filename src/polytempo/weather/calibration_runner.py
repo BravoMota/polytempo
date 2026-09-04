@@ -152,7 +152,7 @@ def ingest_forecasts_for_range(
     for station in config.stations:
         if station.lat is None or station.lon is None:
             continue
-        for model_cfg in config.models:
+        for model_cfg in config.models_for(station.station_id):
             grid_start = floor_run_time_to_init_grid(
                 run_start_utc,
                 model_cfg.run_init_interval_hours,

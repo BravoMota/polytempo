@@ -1,0 +1,147 @@
+# MADRID paper trading profiles: model x trade strategy x lead-time entry gate x sizing.
+# Sibling of config/paper_profiles.yaml (London); every knob below is identical
+# to London's so the first Madrid run is a like-for-like comparison and the city
+# is the only variable.
+#
+# Madrid wallets live in their OWN database: point
+# POLYTEMPO_PAPER_DATABASE_URL at polytempo_paper_madrid before running.
+# Profile ids collide with London's (bh_dist_arb_lead30 etc.) and paper_events
+# has no city column, so sharing polytempo_paper would merge the two cities.
+#
+# Hold grid: 378 legacy + 378 budget_normalize_wallet_percent (_bnwp) = 756
+# (3 model x 14 trade x 9 lead gates x {legacy, bnwp}).
+#
+# Live paper bot + ledger ONLY. Research / overnight backtests use
+# config/backtest_profiles_madrid.yaml.
+
+# "all_twelve" is the legacy keyword for "every combination" (same as omitting it).
+active_profiles: all_twelve
+
+city: madrid
+target_day: tomorrow
+
+calibration_stats_path: data/weather/statistical/calibration_stats.csv
+updated_calibration_stats_path: data/weather/statistical/calibration_stats_updated.csv
+
+# Strategy knob: which event-budget method(s) to include in the live paper grid.
+event_budgets:
+  - legacy
+  - budget_normalize_wallet_percent
+
+# Implementation param for budget_normalize_wallet_percent only (not a strategy knob).
+event_budget_fraction: 0.10
+
+# Bot wakes at the exact UTC instant when lead_hours == target_lead_hours
+# (± tolerance_seconds, default 90s). Not a multi-hour window.
+lead_gates:
+  lead12:
+    target_lead_hours: 12
+  lead15:
+    target_lead_hours: 15
+  lead18:
+    target_lead_hours: 18
+  lead24:
+    target_lead_hours: 24
+  lead30:
+    target_lead_hours: 30
+  lead36:
+    target_lead_hours: 36
+  lead42:
+    target_lead_hours: 42
+  lead48:
+    target_lead_hours: 48
+  lead54:
+    target_lead_hours: 54
+
+model_strategies:
+  - best_historical
+  - best_historical_updated
+  - weighted_historical_updated
+  # Registered but not wired into paper wallets (opt-in via backtest):
+  # - weighted_historical_market_sigma
+  # - weighted_historical_updated_sharp
+  # - ensemble_spread
+
+trade_strategies:
+  - argmax_yes
+  - argmax_no
+  - dist_arb
+  - mid_band
+  - topk_yes
+  - topk_no
+  - max_edge
+  - edge_band
+  - book_arb
+  - coverage_band
+  - max_roi
+  - dist_arb_tight
+  - dist_arb_kelly
+  - tail_fade
+  # Registered but not wired into paper wallets (opt-in via backtest):
+  # - mass_side
+
+# Profile ids generated as: {bh|bhu|whu}_{trade}_{leadN} (legacy sizing)
+# and {bh|bhu|whu}_{trade}_{leadN}_bnwp (budget_normalize_wallet_percent).
+# e.g. bh_dist_arb_lead30, bhu_topk_no_lead12, whu_mid_band_lead24_bnwp
+
+# Active-sell experiment (Phase D). The TP/SL exit bracket is an orthogonal
+# layer bolted onto existing entry strategies: each combo below becomes a
+# separate $1000 wallet with id {base}_xsell (e.g. bh_max_edge_lead42_xsell)
+# that sells early on the bracket instead of holding to resolution, and is
+# A/B-compared against its hold-to-settle twin (bh_max_edge_lead42).
+# Goal: find which entry strategy x model consistently captures +20-50%
+# intraday on resolution day without waiting for settlement.
+xsell_wallets:
+  exit_policy:
+    take_profit_ratio: 1.5   # sell when live mark >= 1.5x entry (+50%)
+    stop_loss_ratio: 0.5     # sell when live mark <= 0.5x entry (-50%)
+  models:
+    - best_historical
+    - best_historical_updated
+  trade_strategies:
+    - max_edge
+    - dist_arb
+    - edge_band
+    - topk_yes
+    # Registered but not wired:
+    # - mass_side
+  lead_gates:
+    - lead42
+    - lead48
+
+# Active edge-following experiment. Each {model} x {trade} combo below is one
+# $1000 wallet `{model}_{trade}_active` with NO lead gate: at each lead-gate
+# tick (lead hours 12/15/18/24/30/36/42/48/54 — the hold wallets' clock) it
+# re-prices its open legs against a fresh forecast + live book, scales in while
+# a leg's edge stays >= add_edge_pp (one ramp ticket per tick, capped at
+# max_position_fraction of balance per leg) and flattens the leg when its edge
+# drops below exit_edge_pp. Lead is the decision clock, not a partition ->
+# wallets = model x strat (3 x 14 = 42).
+active_wallets:
+  knobs:
+    add_edge_pp: 5.0          # scale-in floor (don't add into spread noise)
+    exit_edge_pp: 0.0         # flatten the leg when edge drops below this
+    max_position_fraction: 0.15  # cap per-leg stake at 15% of wallet balance
+    max_spread: 0.05          # skip a leg this tick if the quote is wider
+    min_liquidity_usd: 100.0
+  models:
+    - best_historical
+    - best_historical_updated
+    - weighted_historical_updated
+  trade_strategies:
+    - argmax_yes
+    - argmax_no
+    - dist_arb
+    - mid_band
+    - topk_yes
+    - topk_no
+    - max_edge
+    - edge_band
+    - book_arb
+    - coverage_band
+    - max_roi
+    - dist_arb_tight
+    - dist_arb_kelly
+    - tail_fade
+    # Registered but not wired:
+    # - mass_side

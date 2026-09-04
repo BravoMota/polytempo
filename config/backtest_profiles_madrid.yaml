@@ -1,0 +1,79 @@
+# MADRID backtest / research profile grid -- NOT used by the live paper bot or ledger.
+# Sibling of config/backtest_profiles.yaml (London); every knob below is
+# identical to London's so the first Madrid backtest is a like-for-like
+# comparison and the city is the only variable.
+#
+# Madrid paper wallets live in their OWN database (polytempo_paper_madrid, via
+# POLYTEMPO_PAPER_DATABASE_URL) and stay in config/paper_profiles_madrid.yaml;
+# edit this file freely for overnight sweeps without growing that database.
+#
+# Use with: python scripts/backtest.py --config config/backtest_profiles_madrid.yaml
+#
+# Hold grid here is wider than paper: includes opt-in model strategies.
+# Omit xsell / active -- backtest v1 is hold-to-settlement only.
+
+active_profiles: all_twelve
+
+city: madrid
+target_day: tomorrow
+
+calibration_stats_path: data/weather/statistical/calibration_stats.csv
+updated_calibration_stats_path: data/weather/statistical/calibration_stats_updated.csv
+
+# Strategy knob: which event-budget method(s) to include.
+# Future methods can be added here without changing the fraction param below.
+event_budgets:
+  - legacy
+  - budget_normalize_wallet_percent
+
+# Implementation param for budget_normalize_wallet_percent only (not a strategy knob).
+event_budget_fraction: 0.10
+
+lead_gates:
+  lead12:
+    target_lead_hours: 12
+  lead15:
+    target_lead_hours: 15
+  lead18:
+    target_lead_hours: 18
+  lead24:
+    target_lead_hours: 24
+  lead30:
+    target_lead_hours: 30
+  lead36:
+    target_lead_hours: 36
+  lead42:
+    target_lead_hours: 42
+  lead48:
+    target_lead_hours: 48
+  lead54:
+    target_lead_hours: 54
+
+model_strategies:
+  - best_historical
+  - best_historical_updated
+  - weighted_historical_updated
+  # Research-only (not in live paper_profiles.yaml):
+  - weighted_historical_market_sigma
+  - weighted_historical_updated_sharp
+  - ensemble_spread
+
+trade_strategies:
+  - argmax_yes
+  - argmax_no
+  - dist_arb
+  - mid_band
+  - topk_yes
+  - topk_no
+  - max_edge
+  - edge_band
+  - book_arb
+  - coverage_band
+  - max_roi
+  - dist_arb_tight
+  - dist_arb_kelly
+  - tail_fade
+  # Research-only:
+  - mass_side
+
+# No xsell_wallets / active_wallets — hold-to-settlement backtest only.

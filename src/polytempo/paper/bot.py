@@ -35,6 +35,7 @@ from polytempo.paper.run import open_event_ids, run_profile, run_profiles
 from polytempo.profiles.load import load_paper_profiles
 from polytempo.profiles.models import TradingProfile
 from polytempo.storage.paper_postgres import fetch_bot_state, upsert_bot_state
+from polytempo.weather.stations import get_station
 
 logger = logging.getLogger(__name__)
 
@@ -205,11 +206,25 @@ def _bucket_by_label(event: PolymarketEvent, label: str) -> PolymarketBucket | N
     return None
 
 
-def _in_active_exit_window(now: datetime, settlement_date: date | None) -> bool:
-    """True when ``now`` is on the event's resolution day (London local) in the peak window."""
+def _station_tz(profile: TradingProfile) -> ZoneInfo:
+    """Contract-station timezone for a profile (Europe/London for EGLC)."""
+    return ZoneInfo(get_station(profile.city).timezone)
+
+
+def _in_active_exit_window(
+    now: datetime,
+    settlement_date: date | None,
+    tz: ZoneInfo = LONDON_TZ,
+) -> bool:
+    """True when ``now`` is on the event's resolution day (station local) in the peak window.
+
+    ``tz`` is the profile's contract-station timezone: the peak is a local-clock
+    phenomenon, so a Madrid wallet must not be gated on London's clock (an hour
+    early year-round). Defaults to London, which is what EGLC resolves to.
+    """
     if settlement_date is None:
         return False
-    local = now.astimezone(LONDON_TZ)
+    local = now.astimezone(tz)
     return local.date() == settlement_date and local.hour >= ACTIVE_EXIT_WINDOW_START_HOUR
 
 
@@ -245,6 +260,7 @@ def sweep_active_exits(
     for profile in active:
         policy = profile.exit_policy
         assert policy is not None  # narrowed by the filter above
+        tz = _station_tz(profile)
         for trade in store.read_state(profile.id).open_trades:
             eid = trade.event_id
             if eid not in events:
@@ -252,7 +268,7 @@ def sweep_active_exits(
             event = events[eid]
             if event is None or is_event_resolved(event):
                 continue
-            if _in_active_exit_window(now, event.settlement_date):
+            if _in_active_exit_window(now, event.settlement_date, tz):
                 fast_poll = True
             bucket = _bucket_by_label(event, trade.bucket_label)
             if bucket is None or trade.entry_price in (None, 0):

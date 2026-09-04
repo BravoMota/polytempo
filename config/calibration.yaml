@@ -5,7 +5,9 @@ updated_stats_csv: data/weather/statistical/calibration_stats_updated.csv
 collector_config: config/weather_collectors.yaml
 station_ids:
   - EGLC
+  - LEMD
 
+# Default model set (used by any station without a `station_models` override).
 models:
   - name: ukmo_uk_deterministic_2km
     run_init_interval_hours: 3
@@ -22,6 +24,27 @@ models:
   - name: gfs_seamless
     run_init_interval_hours: 6
     forecast_days: 16
+
+# Per-station overrides. Must mirror the station's `models:` in
+# config/weather_collectors.yaml so calibration is fitted over the same model
+# set the trading path later requests.
+station_models:
+  LEMD:
+    - name: meteofrance_arpege_europe
+      run_init_interval_hours: 6
+      forecast_days: 4
+    - name: icon_eu
+      run_init_interval_hours: 3
+      forecast_days: 5
+    - name: ecmwf_ifs025
+      run_init_interval_hours: 6
+      forecast_days: 15
+    - name: gfs_seamless
+      run_init_interval_hours: 6
+      forecast_days: 16
+    - name: ukmo_global_deterministic_10km
+      run_init_interval_hours: 6
+      forecast_days: 7
 
 wunderground_forecast:
   enabled: true

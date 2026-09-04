@@ -259,3 +259,54 @@ collectors:
     lemd = next(s for s in collector.stations if s.station_id == "LEMD")
     assert eglc.models == ()
     assert lemd.models == ("meteofrance_arpege_europe", "icon_eu")
+
+
+def _require_default_config() -> None:
+    from polytempo.collectors.config import DEFAULT_CONFIG_PATH
+
+    if not DEFAULT_CONFIG_PATH.is_file():
+        pytest.skip("default config not present")
+
+
+def test_models_for_station_london_falls_back_to_default_models() -> None:
+    """London/EGLC has no override, so the trading path keeps DEFAULT_MODELS."""
+    from polytempo.collectors.config import models_for_station
+    from polytempo.weather.open_meteo import DEFAULT_MODELS
+
+    _require_default_config()
+
+    assert models_for_station("EGLC") is None
+    resolved = models_for_station("EGLC") or DEFAULT_MODELS
+    assert resolved == (
+        "ukmo_global_deterministic_10km",
+        "icon_eu",
+        "gfs_seamless",
+        "ecmwf_ifs025",
+        "ukmo_uk_deterministic_2km",
+        "ukmo_seamless",
+        "ecmwf_ifs",
+        "icon_seamless",
+    )
+    assert resolved == DEFAULT_MODELS
+
+
+def test_models_for_station_madrid_uses_override() -> None:
+    from polytempo.collectors.config import models_for_station
+
+    _require_default_config()
+
+    assert models_for_station("LEMD") == (
+        "meteofrance_arpege_europe",
+        "icon_eu",
+        "ecmwf_ifs025",
+        "gfs_seamless",
+        "ukmo_global_deterministic_10km",
+    )
+
+
+def test_models_for_station_unknown_station_returns_none() -> None:
+    from polytempo.collectors.config import models_for_station
+    from polytempo.weather.open_meteo import DEFAULT_MODELS
+
+    assert models_for_station("ZZZZ") is None
+    assert (models_for_station("ZZZZ") or DEFAULT_MODELS) == DEFAULT_MODELS

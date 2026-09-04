@@ -36,11 +36,25 @@ def main() -> int:
         action="store_true",
         help="Skip v1 API daily Tmax fetch; use observations already in the DB",
     )
+    parser.add_argument(
+        "--station",
+        "--station-id",
+        dest="stations",
+        action="append",
+        default=None,
+        metavar="STATION_ID",
+        help=(
+            "Limit INGEST to this station (repeatable; default: all configured stations). "
+            "The recomputed stats CSV always covers every station in the store."
+        ),
+    )
     args = parser.parse_args()
 
     database_url = resolve_database_url(override=args.database_url)
     initialize_database(database_url)
     config = load_calibration_config(args.config)
+    if args.stations:
+        config = config.subset_stations(args.stations)
     return run_wu_bootstrap(config, database_url, skip_observations=args.no_obs)
 
 

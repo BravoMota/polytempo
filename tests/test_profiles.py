@@ -171,3 +171,49 @@ def test_topk_no_resolves_to_no_side_variant() -> None:
     assert isinstance(strat, TopKStrategy)
     assert strat.name == "topk_no"
     assert strat.side == "NO"
+
+
+# --------------------------------------------------------------------------- #
+# Madrid grids: separate config files, city is the only difference
+# --------------------------------------------------------------------------- #
+MADRID_CONFIGS = (
+    (Path("config/paper_profiles.yaml"), Path("config/paper_profiles_madrid.yaml")),
+    (
+        Path("config/backtest_profiles.yaml"),
+        Path("config/backtest_profiles_madrid.yaml"),
+    ),
+)
+
+
+@pytest.mark.parametrize("madrid_path", [m for _, m in MADRID_CONFIGS])
+def test_madrid_configs_load_with_city_madrid(madrid_path: Path) -> None:
+    if not madrid_path.is_file():
+        pytest.skip(f"{madrid_path} missing")
+    profiles = load_paper_profiles(madrid_path)
+    assert profiles
+    assert {p.city for p in profiles} == {"madrid"}
+    assert all(p.calibration_stats_path.is_absolute() for p in profiles)
+
+
+@pytest.mark.parametrize(("london_path", "madrid_path"), MADRID_CONFIGS)
+def test_madrid_configs_differ_from_london_only_in_city(
+    london_path: Path, madrid_path: Path
+) -> None:
+    """Like-for-like: same strategy grid, city is the only variable."""
+    if not (london_path.is_file() and madrid_path.is_file()):
+        pytest.skip("profile configs missing")
+    london = yaml.safe_load(london_path.read_text(encoding="utf-8"))
+    madrid = yaml.safe_load(madrid_path.read_text(encoding="utf-8"))
+    assert london.pop("city") == "london"
+    assert madrid.pop("city") == "madrid"
+    assert madrid == london
+
+
+def test_madrid_paper_grid_matches_london_wallet_counts() -> None:
+    london_path = Path("config/paper_profiles.yaml")
+    madrid_path = Path("config/paper_profiles_madrid.yaml")
+    if not (london_path.is_file() and madrid_path.is_file()):
+        pytest.skip("profile configs missing")
+    london = load_paper_profiles(london_path)
+    madrid = load_paper_profiles(madrid_path)
+    assert {p.id for p in madrid} == {p.id for p in london}

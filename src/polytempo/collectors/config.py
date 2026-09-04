@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "weather_collectors.yaml"
 DEFAULT_RAW_BASE_DIR = WEATHER_DATA_DIR / "raw"
+OPEN_METEO_COLLECTOR_NAME = "open_meteo"
 
 
 @dataclass(frozen=True)
@@ -214,6 +216,39 @@ def load_weather_collectors_config(
         raw_base_dir=raw_base,
         collectors=collectors,
     )
+
+
+@lru_cache(maxsize=1)
+def _open_meteo_station_model_overrides() -> dict[str, tuple[str, ...]]:
+    """Per-station ``models:`` overrides in the open_meteo collector, cached."""
+    config = load_weather_collectors_config()
+    overrides: dict[str, tuple[str, ...]] = {}
+    for collector in config.collectors:
+        if collector.name != OPEN_METEO_COLLECTOR_NAME:
+            continue
+        for station in collector.stations:
+            if station.models:
+                overrides[station.station_id] = station.models
+    return overrides
+
+
+def models_for_station(station_id: str) -> tuple[str, ...] | None:
+    """Open-Meteo model override for ``station_id``, or None when it has none.
+
+    Sits on the per-tick trading path, so the parsed YAML is cached. Callers
+    fall back to their own default when this returns None; a config that cannot
+    be read is treated as "no override" so the fallback still applies.
+    """
+    try:
+        overrides = _open_meteo_station_model_overrides()
+    except Exception:
+        logger.warning(
+            "could not read per-station Open-Meteo models from %s; using defaults",
+            DEFAULT_CONFIG_PATH,
+            exc_info=True,
+        )
+        return None
+    return overrides.get(station_id.strip())
 
 
 def sync_stations_from_config(

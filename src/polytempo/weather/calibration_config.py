@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from pathlib import Path
@@ -47,6 +48,28 @@ class CalibrationConfig:
     models: list[CalibrationModelConfig]
     collector_config_path: Path
     wunderground_forecast: WundergroundForecastConfig | None = None
+    station_models: dict[str, list[CalibrationModelConfig]] = field(default_factory=dict)
+
+    def models_for(self, station_id: str) -> list[CalibrationModelConfig]:
+        """Per-station model list, falling back to the global default."""
+        return self.station_models.get(station_id) or self.models
+
+    def subset_stations(self, station_ids: Iterable[str]) -> "CalibrationConfig":
+        """Return a copy restricted to ``station_ids`` (config order preserved)."""
+        wanted = {str(sid).strip().upper() for sid in station_ids if str(sid).strip()}
+        if not wanted:
+            return self
+        unknown = wanted - {sid.upper() for sid in self.station_ids}
+        if unknown:
+            raise ValueError(
+                f"station(s) not configured for calibration: {sorted(unknown)}; "
+                f"configured: {self.station_ids}"
+            )
+        return replace(
+            self,
+            station_ids=[sid for sid in self.station_ids if sid.upper() in wanted],
+            stations=[st for st in self.stations if st.station_id.upper() in wanted],
+        )
 
 
 def _resolve_path(value: str | Path, *, base: Path = REPO_ROOT) -> Path:
@@ -63,6 +86,28 @@ def _stations_by_id(collector_config_path: Path) -> dict[str, StationConfig]:
         for station in collector.stations:
             out[station.station_id] = station
     return out
+
+
+def _parse_models(raw_entries: object, *, context: str) -> list[CalibrationModelConfig]:
+    if not isinstance(raw_entries, list):
+        raise ValueError(f"{context} must be a list of model entries")
+    models: list[CalibrationModelConfig] = []
+    for entry in raw_entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"each model entry in {context} must be a mapping")
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"model name is required in {context}")
+        models.append(
+            CalibrationModelConfig(
+                name=name,
+                run_init_interval_hours=float(entry["run_init_interval_hours"]),
+                forecast_days=int(entry["forecast_days"]),
+            )
+        )
+    if not models:
+        raise ValueError(f"{context} must define at least one model")
+    return models
 
 
 def load_calibration_config(
@@ -94,25 +139,17 @@ def load_calibration_config(
             raise ValueError(f"station {station_id!r} missing lat/lon in collector config")
         stations.append(station)
 
-    models_raw = raw.get("models") or []
-    models: list[CalibrationModelConfig] = []
-    for entry in models_raw:
-        if not isinstance(entry, dict):
-            raise ValueError("each model entry must be a mapping")
-        name = str(entry.get("name") or "").strip()
-        interval = float(entry["run_init_interval_hours"])
-        forecast_days = int(entry["forecast_days"])
-        if not name:
-            raise ValueError("model name is required")
-        models.append(
-            CalibrationModelConfig(
-                name=name,
-                run_init_interval_hours=interval,
-                forecast_days=forecast_days,
-            )
-        )
-    if not models:
-        raise ValueError("models must be defined in calibration.yaml")
+    models = _parse_models(raw.get("models") or [], context="models")
+
+    station_models_raw = raw.get("station_models") or {}
+    if not isinstance(station_models_raw, dict):
+        raise ValueError("station_models must be a mapping of station_id -> model list")
+    station_models: dict[str, list[CalibrationModelConfig]] = {}
+    for raw_sid, raw_entries in station_models_raw.items():
+        sid = str(raw_sid)
+        if sid not in by_id:
+            raise ValueError(f"unknown station_id in station_models: {sid!r}")
+        station_models[sid] = _parse_models(raw_entries, context=f"station_models[{sid}]")
 
     updated_stats = _resolve_path(
         raw.get("updated_stats_csv", DEFAULT_UPDATED_CALIBRATION_STATS_CSV_PATH),
@@ -144,4 +181,5 @@ def load_calibration_config(
         models=models,
         collector_config_path=collector_path,
         wunderground_forecast=wu_config,
+        station_models=station_models,
     )

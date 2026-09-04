@@ -15,11 +15,17 @@ from polytempo.profiles.calibration_ready import (
 from polytempo.profiles.models import EntryGate, TradingProfile
 
 
+HEADER = "station_id,model,lead_hours,n_samples,bias_c,mae_c,rmse_c,error_std_c\n"
+EGLC_ROW = "EGLC,ukmo_uk_deterministic_2km,12,10,0.1,0.2,0.3,0.4\n"
+LEMD_ROW = "LEMD,ukmo_uk_deterministic_2km,12,10,0.1,0.2,0.3,0.4\n"
+
+
 def _profile(
     model_strategy: str,
     cal_path: Path,
     *,
     profile_id: str = "test_profile",
+    city: str = "london",
 ) -> TradingProfile:
     return TradingProfile(
         id=profile_id,
@@ -27,6 +33,7 @@ def _profile(
         trade_strategy="argmax_yes",
         entry_gate=EntryGate(target_lead_hours=12.0),
         calibration_stats_path=cal_path,
+        city=city,
     )
 
 
@@ -83,3 +90,76 @@ def test_filter_profiles_disables_bhu_when_updated_csv_missing(tmp_path: Path) -
     assert [p.id for p in enabled] == ["bh"]
     assert len(warnings) == 2
     assert all("missing_calibration_csv" in w for w in warnings)
+
+
+# --------------------------------------------------------------------------- #
+# Station-aware readiness: a profile needs rows for its OWN contract station
+# --------------------------------------------------------------------------- #
+def test_calibration_csv_ready_requires_rows_for_the_given_station(tmp_path: Path) -> None:
+    path = tmp_path / "stats.csv"
+    path.write_text(HEADER + EGLC_ROW)
+    assert calibration_csv_ready(path, station_id="EGLC") == (True, "")
+    assert calibration_csv_ready(path, station_id="LEMD") == (
+        False,
+        "no_calibration_rows_for_station",
+    )
+
+
+def test_calibration_csv_ready_without_station_id_is_unchanged(tmp_path: Path) -> None:
+    """London-unchanged proof at the primitive: no station_id -> old behaviour."""
+    path = tmp_path / "stats.csv"
+    path.write_text(HEADER + EGLC_ROW)
+    assert calibration_csv_ready(path) == (True, "")
+
+
+def test_filter_drops_madrid_profiles_on_a_london_only_csv(tmp_path: Path) -> None:
+    """Madrid is filtered out; London on the SAME csv stays ready (unchanged)."""
+    static = tmp_path / "static.csv"
+    static.write_text(HEADER + EGLC_ROW)
+    updated = tmp_path / "updated.csv"
+    updated.write_text(HEADER + EGLC_ROW)
+    profiles = [
+        _profile("best_historical", static, profile_id="bh_london"),
+        _profile(
+            MODEL_STRATEGY_BEST_HISTORICAL_UPDATED, updated, profile_id="bhu_london"
+        ),
+        _profile(
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED, updated, profile_id="whu_london"
+        ),
+        _profile("best_historical", static, profile_id="bh_madrid", city="madrid"),
+        _profile(
+            MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+            updated,
+            profile_id="bhu_madrid",
+            city="madrid",
+        ),
+        _profile(
+            MODEL_STRATEGY_WEIGHTED_HISTORICAL_UPDATED,
+            updated,
+            profile_id="whu_madrid",
+            city="madrid",
+        ),
+    ]
+    enabled, warnings = filter_profiles_by_calibration(profiles)
+    assert [p.id for p in enabled] == ["bh_london", "bhu_london", "whu_london"]
+    assert warnings
+    assert all("no_calibration_rows_for_station" in w for w in warnings)
+
+
+def test_filter_keeps_madrid_profiles_once_lemd_rows_exist(tmp_path: Path) -> None:
+    static = tmp_path / "static.csv"
+    static.write_text(HEADER + EGLC_ROW + LEMD_ROW)
+    updated = tmp_path / "updated.csv"
+    updated.write_text(HEADER + EGLC_ROW + LEMD_ROW)
+    profiles = [
+        _profile("best_historical", static, profile_id="bh_madrid", city="madrid"),
+        _profile(
+            MODEL_STRATEGY_BEST_HISTORICAL_UPDATED,
+            updated,
+            profile_id="bhu_madrid",
+            city="madrid",
+        ),
+    ]
+    enabled, warnings = filter_profiles_by_calibration(profiles)
+    assert [p.id for p in enabled] == ["bh_madrid", "bhu_madrid"]
+    assert warnings == []

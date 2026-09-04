@@ -38,8 +38,15 @@ def _handle_signal(signum: int, _frame: object) -> None:
     _stop = True
 
 
-def _run_once(config_path: Path, database_url: str) -> int:
+def _load_config(config_path: Path, stations: list[str] | None):
     config = load_calibration_config(config_path)
+    if stations:
+        config = config.subset_stations(stations)
+    return config
+
+
+def _run_once(config_path: Path, database_url: str, stations: list[str] | None = None) -> int:
+    config = _load_config(config_path, stations)
     om_code = run_daily(config, database_url)
     wu_code = run_wu_daily(config, database_url)
     if om_code != 0:
@@ -66,18 +73,30 @@ def main() -> int:
         action="store_true",
         help="Run one cycle and exit (for cron)",
     )
+    parser.add_argument(
+        "--station",
+        "--station-id",
+        dest="stations",
+        action="append",
+        default=None,
+        metavar="STATION_ID",
+        help=(
+            "Limit INGEST to this station (repeatable; default: all configured stations). "
+            "The recomputed stats CSV always covers every station in the store."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     database_url = resolve_database_url(override=args.database_url)
 
     if args.once:
-        return _run_once(args.config, database_url)
+        return _run_once(args.config, database_url, args.stations)
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    config = load_calibration_config(args.config)
+    config = _load_config(args.config, args.stations)
     interval_seconds = 24 * 3600
     last_slot: datetime | None = None
 
@@ -90,7 +109,7 @@ def main() -> int:
             anchor_time_utc=config.schedule_anchor_time_utc,
         ):
             logger.info("running daily calibration slot")
-            code = _run_once(args.config, database_url)
+            code = _run_once(args.config, database_url, args.stations)
             if code != 0:
                 logger.error("daily calibration failed with exit code %s", code)
             last_slot = now
