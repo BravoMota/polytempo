@@ -294,6 +294,13 @@ def calibration_path_as_of(base_path: Path, at_utc: datetime) -> Path:
     return future[0][1]
 
 
+def resolve_calibration_path(base_path: Path, at_utc: datetime, *, as_of: bool) -> Path:
+    """``calibration_path_as_of`` when ``as_of``, else the current ``base_path``."""
+    if as_of:
+        return calibration_path_as_of(base_path, at_utc)
+    return base_path
+
+
 # --------------------------------------------------------------------------- #
 # Point-in-time gate inputs
 # --------------------------------------------------------------------------- #
@@ -339,8 +346,14 @@ def build_gate_inputs(
     *,
     weather_database_url: str | None = None,
     use_wunderground: bool = True,
+    calibration_as_of: bool = True,
 ) -> tuple[GateInputs | None, str | None]:
     """Load point-in-time inputs at ``at_utc`` for ``profile`` on ``event``.
+
+    ``calibration_as_of=False`` pins the *current* calibration CSV for every
+    gate instant instead of the archive that was live at ``at_utc``. Needed for
+    a station whose calibration did not exist historically (the archives hold
+    no rows for it); note the calibrated strategies are then in-sample.
 
     Returns ``(inputs, None)`` on success or ``(None, reason)`` when a required
     snapshot is missing at the gate instant.
@@ -387,8 +400,8 @@ def build_gate_inputs(
         open_event=open_event,
         resolved_event=event,
         winning_label=winning_label_from_event(event),
-        calibration_path=calibration_path_as_of(
-            profile.calibration_stats_path, at_utc
+        calibration_path=resolve_calibration_path(
+            profile.calibration_stats_path, at_utc, as_of=calibration_as_of
         ),
     )
     return inputs, None
@@ -620,6 +633,7 @@ def run_backtest(
     city: str = "london",
     weather_database_url: str | None = None,
     use_wunderground: bool = True,
+    calibration_as_of: bool = True,
     event_for_date: EventForDate | None = None,
     input_builder: InputBuilder | None = None,
 ) -> BacktestResult:
@@ -647,6 +661,7 @@ def run_backtest(
             at_utc,
             weather_database_url=weather_database_url,
             use_wunderground=use_wunderground,
+            calibration_as_of=calibration_as_of,
         )
     )
 

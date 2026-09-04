@@ -331,6 +331,15 @@ def main() -> int:
         action="store_true",
         help="Skip Wunderground snapshot forecast in the input reconstruction",
     )
+    parser.add_argument(
+        "--calibration-current",
+        action="store_true",
+        help=(
+            "Use the current calibration CSV at every gate instead of the archive "
+            "live at the time (for a station with no historical archives; "
+            "calibrated strategies become in-sample)"
+        ),
+    )
     parser.add_argument("--csv", type=Path, default=None, help="Write summary CSV here")
     parser.add_argument(
         "--daily-csv",
@@ -397,6 +406,7 @@ def main() -> int:
         city=args.city,
         weather_database_url=args.database_url,
         use_wunderground=not args.no_wunderground,
+        calibration_as_of=not args.calibration_current,
     )
 
     _print_summary(result)

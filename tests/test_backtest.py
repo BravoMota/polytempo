@@ -375,3 +375,21 @@ def test_calibration_path_as_of(tmp_path: Path) -> None:
     assert calibration_path_as_of(base, _at("2026-06-05")) == late
     # After the last archive -> the current live file.
     assert calibration_path_as_of(base, _at("2026-06-20")) == base
+
+
+def test_resolve_calibration_path_pins_current_file_when_not_as_of(tmp_path):
+    """``as_of=False`` must ignore archives; ``as_of=True`` keeps the London walk-forward."""
+    from datetime import datetime, timezone
+
+    from polytempo.paper.backtest import resolve_calibration_path
+
+    base = tmp_path / "calibration_stats_updated.csv"
+    base.write_text("current\n")
+    historic = tmp_path / "historic"
+    historic.mkdir()
+    archive = historic / "calibration_stats_updated_20260901T000000Z.csv"
+    archive.write_text("archived\n")
+    at = datetime(2026, 8, 15, tzinfo=timezone.utc)
+
+    assert resolve_calibration_path(base, at, as_of=True) == archive
+    assert resolve_calibration_path(base, at, as_of=False) == base
