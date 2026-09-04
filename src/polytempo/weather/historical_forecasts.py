@@ -429,8 +429,11 @@ def build_single_run_request_params(
     """Build query params for one Open-Meteo Single Runs request.
 
     The Single Runs host rejects ``start_date`` / ``end_date`` when ``run`` is set.
-    The full forecast horizon is returned; pick ``target_date`` from ``daily.time``
-    during parsing.
+    It also rejects ``daily`` unless ``run`` starts at 00:00 in the requested
+    timezone, which no synoptic init does for a non-UTC station, so we ask for
+    ``hourly=temperature_2m`` and aggregate to a daily max during parsing.
+    Timestamps come back stamped in ``timezone``, so grouping on the date prefix
+    reproduces the station-local calendar day.
     """
     if forecast_run_time.tzinfo is None:
         raise ValueError("forecast_run_time must be timezone-aware")
@@ -443,7 +446,7 @@ def build_single_run_request_params(
     return {
         "latitude": latitude,
         "longitude": longitude,
-        "daily": "temperature_2m_max",
+        "hourly": "temperature_2m",
         "temperature_unit": "celsius",
         "models": model,
         "timezone": timezone,
@@ -542,18 +545,123 @@ def _find_tmax_series(daily: dict[str, Any], model: str) -> tuple[str, list[Any]
     raise ValueError("no temperature_2m_max series found in daily payload")
 
 
+def _find_hourly_series(hourly: dict[str, Any], model: str) -> tuple[str, list[Any]]:
+    """Locate the hourly 2m temperature series; prefer model-specific key."""
+    preferred = f"temperature_2m_{model}"
+    if preferred in hourly and isinstance(hourly[preferred], list):
+        return preferred, hourly[preferred]
+
+    if "temperature_2m" in hourly and isinstance(hourly["temperature_2m"], list):
+        return "temperature_2m", hourly["temperature_2m"]
+
+    for key, series in hourly.items():
+        if key.startswith("temperature_2m") and isinstance(series, list):
+            return key, series
+
+    raise ValueError("no temperature_2m series found in hourly payload")
+
+
+def _aggregate_hourly_to_daily_tmax(
+    hourly: dict[str, Any],
+    model: str,
+) -> tuple[list[str], list[Any]]:
+    """Reduce a local-stamped hourly series to one max per local calendar day.
+
+    Reproduces what ``daily=temperature_2m_max`` reported, verified against the
+    cached corpus: a day is the max over the hours the window holds for it, but
+    a day holding a *null* hour is itself null. Those two cases look alike and
+    are not: the leading part-day is short because the window starts mid-day and
+    still carried a value, while a day past the model horizon has its hours
+    present but empty and came back null.
+    """
+    times = hourly.get("time")
+    if not isinstance(times, list):
+        raise ValueError("hourly.time must be a list")
+
+    _key, series = _find_hourly_series(hourly, model)
+    if len(series) != len(times):
+        raise ValueError("hourly.time and temperature series length mismatch")
+
+    dates: list[str] = []
+    maxima: list[Any] = []
+    covered: list[bool] = []
+    first_hour: int | None = None
+    for stamp, raw in zip(times, series, strict=True):
+        text = str(stamp)
+        if len(text) < 13 or text[10] != "T":
+            raise ValueError(f"unexpected hourly timestamp: {text!r}")
+        hour = int(text[11:13])
+        if first_hour is None:
+            first_hour = hour
+
+        day = text[:10]
+        if not dates or dates[-1] != day:
+            dates.append(day)
+            maxima.append(None)
+            covered.append(True)
+
+        if raw is None:
+            covered[-1] = False
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"hourly temperature at {text} must be numeric") from exc
+        if not math.isfinite(value):
+            covered[-1] = False
+            continue
+        if maxima[-1] is None or value > maxima[-1]:
+            maxima[-1] = value
+
+    # The response window is forecast_days * 24 hours from the run's local time,
+    # so a run past local midnight leaves a trailing part-day that the old
+    # ``daily=`` response never reported. Drop it. The leading part-day is kept:
+    # ``daily=`` reported that one, maxed over the same partial hours.
+    if first_hour not in (None, 0) and len(dates) > 1:
+        dates.pop()
+        maxima.pop()
+        covered.pop()
+
+    return dates, [
+        value if ok else None for value, ok in zip(maxima, covered, strict=True)
+    ]
+
+
+def daily_tmax_series_from_payload(
+    payload: dict[str, Any],
+    model: str,
+) -> tuple[list[str], list[Any]]:
+    """Return ``(local ISO dates, predicted Tmax)`` from either payload shape.
+
+    Raw files cached before 2026-07 hold ``daily=temperature_2m_max`` responses
+    and are returned as-is. Current responses hold an ``hourly`` block stamped in
+    the requested timezone and are aggregated to a per-local-day max. The shape
+    is read off the payload, never assumed from the call site, so cached and
+    freshly fetched runs parse identically.
+    """
+    daily = payload.get("daily")
+    if isinstance(daily, dict) and isinstance(daily.get("time"), list):
+        times = [str(value) for value in daily["time"]]
+        _key, series = _find_tmax_series(daily, model)
+        if len(series) != len(times):
+            raise ValueError("daily.time and temperature series length mismatch")
+        return times, list(series)
+
+    hourly = payload.get("hourly")
+    if isinstance(hourly, dict) and isinstance(hourly.get("time"), list):
+        return _aggregate_hourly_to_daily_tmax(hourly, model)
+
+    raise ValueError("payload must contain a daily or hourly block")
+
+
 def extract_predicted_tmax_c(
     payload: dict[str, Any],
     model: str,
     target_date: date,
 ) -> float:
     """Read predicted daily Tmax for ``target_date`` from a Single Runs payload."""
-    daily = payload.get("daily")
-    if not isinstance(daily, dict):
-        raise ValueError("daily block is required")
-
-    times = daily.get("time")
-    if not isinstance(times, list) or not times:
+    times, series = daily_tmax_series_from_payload(payload, model)
+    if not times:
         raise ValueError("daily.time must be a non-empty list")
 
     target_iso = target_date.isoformat()
@@ -561,10 +669,6 @@ def extract_predicted_tmax_c(
         index = times.index(target_iso)
     except ValueError as exc:
         raise ValueError(f"target_date {target_iso} not found in daily.time") from exc
-
-    _key, series = _find_tmax_series(daily, model)
-    if index >= len(series):
-        raise ValueError(f"temperature series too short for index {index}")
 
     raw_value = series[index]
     if raw_value is None:
@@ -592,9 +696,12 @@ def parse_single_run_payload(
 ) -> HistoricalForecastRecord:
     """Parse Single Runs JSON into a HistoricalForecastRecord.
 
-    TODO: Open-Meteo Single-Runs daily variable keys may differ by model
-    (plain ``temperature_2m_max`` vs ``temperature_2m_max_<model>``). Verify
-    against ``http/open_meteo_single_runs.http`` when adding new models.
+    Accepts both the current ``hourly`` shape and the ``daily`` shape held by
+    raw files cached before 2026-07; see ``daily_tmax_series_from_payload``.
+
+    TODO: Open-Meteo Single-Runs variable keys may differ by model (plain
+    ``temperature_2m`` vs ``temperature_2m_<model>``). Verify against
+    ``http/open_meteo_single_runs.http`` when adding new models.
     """
     predicted_tmax_c = extract_predicted_tmax_c(payload, model, target_date)
 

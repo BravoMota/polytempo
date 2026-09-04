@@ -1,6 +1,6 @@
 """Tests for offline historical forecast ingestion."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -15,7 +15,9 @@ from polytempo.weather.historical_forecasts import (
     HistoricalForecastRecord,
     build_raw_forecast_filename,
     build_single_run_request_params,
+    daily_tmax_series_from_payload,
     existing_record_keys,
+    extract_predicted_tmax_c,
     fetch_historical_forecast_batch,
     fetch_historical_forecast_record,
     fetch_raw_forecast_runs,
@@ -181,6 +183,111 @@ def test_parse_single_run_payload_plain_key() -> None:
     assert record.predicted_tmax_c == pytest.approx(18.2)
 
 
+def _hourly_payload(
+    first_stamp: str,
+    hours: int,
+    values: list[float | None],
+    *,
+    key: str = "temperature_2m",
+) -> dict:
+    """Local-stamped hourly payload starting at ``first_stamp`` for ``hours`` steps."""
+    start = datetime.fromisoformat(first_stamp)
+    times = [
+        (start + timedelta(hours=offset)).strftime("%Y-%m-%dT%H:%M")
+        for offset in range(hours)
+    ]
+    return {
+        "latitude": 51.5,
+        "longitude": 0.0625,
+        "timezone": "Europe/London",
+        "utc_offset_seconds": 3600,
+        "hourly": {"time": times, key: values},
+    }
+
+
+def test_daily_tmax_series_reads_cached_daily_payload() -> None:
+    """Raw files cached before the hourly switch must still parse unchanged."""
+    times, values = daily_tmax_series_from_payload(_payload(tmax=24.1), "ukmo_seamless")
+    assert times == ["2026-05-21", "2026-05-22"]
+    assert values == [22.0, 24.1]
+
+
+def test_daily_tmax_series_aggregates_hourly_to_local_day_max() -> None:
+    payload = _hourly_payload(
+        "2026-06-16T00:00",
+        48,
+        [float(hour % 24) for hour in range(48)],
+    )
+    times, values = daily_tmax_series_from_payload(payload, "icon_eu")
+    assert times == ["2026-06-16", "2026-06-17"]
+    assert values == [pytest.approx(23.0), pytest.approx(23.0)]
+
+
+def test_daily_tmax_series_keeps_leading_part_day_and_drops_trailing_one() -> None:
+    """A 06:00Z run covers 07:00 local onward; ``daily=`` reported the same days."""
+    values: list[float | None] = [10.0] * 48
+    values[10] = 21.9  # 2026-06-15T17:00 local
+    values[30] = 23.1  # 2026-06-16T13:00 local
+    values[45] = 99.0  # 2026-06-17T04:00 local — trailing part-day, must be dropped
+    payload = _hourly_payload("2026-06-15T07:00", 48, values)
+
+    times, maxima = daily_tmax_series_from_payload(payload, "icon_eu")
+
+    assert times == ["2026-06-15", "2026-06-16"]
+    assert maxima == [pytest.approx(21.9), pytest.approx(23.1)]
+
+
+def test_daily_tmax_series_nulls_a_day_that_is_missing_an_hour() -> None:
+    """``daily=`` reported null past the model horizon; a partial max must not leak."""
+    values: list[float | None] = [12.0] * 48
+    values[30] = 23.1  # 2026-06-17T06:00 local
+    for index in range(32, 48):  # rest of 2026-06-17 beyond the model horizon
+        values[index] = None
+    payload = _hourly_payload("2026-06-16T00:00", 48, values)
+
+    times, maxima = daily_tmax_series_from_payload(payload, "icon_eu")
+
+    assert times == ["2026-06-16", "2026-06-17"]
+    assert maxima == [pytest.approx(12.0), None]
+    with pytest.raises(ValueError):
+        extract_predicted_tmax_c(payload, "icon_eu", date(2026, 6, 17))
+
+
+def test_daily_tmax_series_prefers_model_suffixed_hourly_key() -> None:
+    payload = _hourly_payload(
+        "2026-06-16T00:00",
+        24,
+        [12.0] * 23 + [19.5],
+        key="temperature_2m_icon_eu",
+    )
+    times, maxima = daily_tmax_series_from_payload(payload, "icon_eu")
+    assert times == ["2026-06-16"]
+    assert maxima == [pytest.approx(19.5)]
+
+
+def test_daily_tmax_series_rejects_payload_without_daily_or_hourly() -> None:
+    with pytest.raises(ValueError):
+        daily_tmax_series_from_payload({"latitude": 51.5}, "icon_eu")
+
+
+def test_parse_single_run_payload_hourly_shape() -> None:
+    payload = _hourly_payload("2026-05-19T07:00", 96, [15.0] * 96)
+    payload["hourly"]["temperature_2m"][60] = 24.3  # 2026-05-21T19:00 local
+
+    record = parse_single_run_payload(
+        payload,
+        station_id="EGLC",
+        source="open_meteo_single_runs",
+        model="ukmo_seamless",
+        target_date=date(2026, 5, 21),
+        forecast_run_time=datetime(2026, 5, 19, 6, 0, tzinfo=timezone.utc),
+        lead_hours=42.0,
+    )
+
+    assert record.predicted_tmax_c == pytest.approx(24.3)
+    assert record.target_date == date(2026, 5, 21)
+
+
 def test_historical_forecasts_jsonl_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "forecasts.jsonl"
     run_time = datetime(2026, 5, 19, 12, 0, tzinfo=timezone.utc)
@@ -288,6 +395,7 @@ def test_plan_historical_forecast_requests_dedupes_runs() -> None:
 
 
 def test_fetch_record_falls_back_when_primary_tmax_is_null(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job = HistoricalForecastJob(
@@ -334,7 +442,11 @@ def test_fetch_record_falls_back_when_primary_tmax_is_null(
 
     monkeypatch.setattr(httpx, "get", fake_get)
 
-    record = fetch_historical_forecast_record(job, base_url="https://example.test")
+    record = fetch_historical_forecast_record(
+        job,
+        base_url="https://example.test",
+        raw_dir=tmp_path / "raw",
+    )
 
     assert calls == ["2026-05-19T06:00", "2026-05-19T12:00"]
     assert record.predicted_tmax_c == pytest.approx(24.3)
@@ -402,7 +514,8 @@ def test_build_single_run_request_params_shape() -> None:
         timezone="Europe/London",
         forecast_days=14,
     )
-    assert params["daily"] == "temperature_2m_max"
+    assert params["hourly"] == "temperature_2m"
+    assert "daily" not in params
     assert params["models"] == "ukmo_seamless"
     assert params["run"] == "2026-05-19T00:00"
     assert params["forecast_days"] == 14

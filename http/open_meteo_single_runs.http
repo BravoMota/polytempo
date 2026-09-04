@@ -2,7 +2,10 @@
 # Host: single-runs-api.open-meteo.com (offline calibration only; see fetch-historical-forecasts).
 #
 # @run_time     UTC model init sent as run= (when the forecast was issued).
-# @target_date  NOT in the URL — after response, read daily.time[i]==target_date → temperature_2m_max[i].
+# @target_date  NOT in the URL — after response, group hourly.time by its local date
+#               prefix and take max(temperature_2m) for the day == target_date.
+# daily= is rejected unless run= is 00:00 in the requested timezone, so ask for
+# hourly=temperature_2m; timestamps come back stamped in timezone=.
 # Do not send start_date/end_date with run. Archive calls can take 30–120s.
 
 @latitude = 51.5053
@@ -12,7 +15,7 @@
 @target_date = 2026-06-10
 @timezone = Europe/London
 
-GET https://single-runs-api.open-meteo.com/v1/forecast?latitude={{latitude}}&longitude={{longitude}}&daily=temperature_2m_max&temperature_unit=celsius&models={{model}}&timezone={{timezone}}&run={{run_time}}
+GET https://single-runs-api.open-meteo.com/v1/forecast?latitude={{latitude}}&longitude={{longitude}}&hourly=temperature_2m&temperature_unit=celsius&models={{model}}&timezone={{timezone}}&run={{run_time}}
 
 #test
-GET https://single-runs-api.open-meteo.com/v1/forecast?latitude=51.5053&longitude=0.0553&daily=temperature_2m_max&temperature_unit=celsius&models=icon_eu&timezone=Europe%2FLondon&run=2026-02-08T21%3A00&forecast_days=5
+GET https://single-runs-api.open-meteo.com/v1/forecast?latitude=51.5053&longitude=0.0553&hourly=temperature_2m&temperature_unit=celsius&models=icon_eu&timezone=Europe%2FLondon&run=2026-02-08T21%3A00&forecast_days=5

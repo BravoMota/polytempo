@@ -16,6 +16,7 @@ from polytempo.weather.calibration_stats_csv import (
     archive_calibration_stats_csv_before_write,
     write_calibration_stats_csv,
 )
+from polytempo.weather.historical_forecasts import daily_tmax_series_from_payload
 
 
 @dataclass(frozen=True)
@@ -77,16 +78,7 @@ def iter_forecast_records_from_payload(
     run_time_utc: datetime,
 ) -> Iterator[ForecastRecord]:
     """Yield one row per non-null daily Tmax in a Single Runs payload."""
-    daily = payload.get("daily")
-    if not isinstance(daily, dict):
-        raise ValueError("daily block is required")
-
-    times = daily.get("time")
-    temps = daily.get("temperature_2m_max")
-    if not isinstance(times, list) or not isinstance(temps, list):
-        raise ValueError("daily.time and daily.temperature_2m_max must be lists")
-    if len(times) != len(temps):
-        raise ValueError("daily.time and daily.temperature_2m_max length mismatch")
+    times, temps = daily_tmax_series_from_payload(payload, model)
 
     forecast_lat, forecast_lon = _extract_forecast_coords(payload)
     run_utc = run_time_utc.astimezone(dt_timezone.utc)

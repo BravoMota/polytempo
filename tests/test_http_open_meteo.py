@@ -32,12 +32,14 @@ def test_open_meteo_single_runs_http_scratch_matches_request_builder() -> None:
     assert params == {
         "latitude": _HTTP_EGLC_LATITUDE,
         "longitude": _HTTP_EGLC_LONGITUDE,
-        "daily": "temperature_2m_max",
+        "hourly": "temperature_2m",
         "temperature_unit": "celsius",
         "models": _HTTP_MODEL,
         "timezone": _HTTP_TIMEZONE,
         "run": "2026-03-29T00:00",
+        "forecast_days": 7,
     }
+    assert "daily" not in params
     assert "start_date" not in params
     assert "end_date" not in params
 
@@ -55,11 +57,12 @@ def test_build_single_run_request_params_includes_run_and_dates() -> None:
     assert params == {
         "latitude": 51.5053,
         "longitude": 0.0553,
-        "daily": "temperature_2m_max",
+        "hourly": "temperature_2m",
         "temperature_unit": "celsius",
         "models": "ecmwf_ifs",
         "timezone": "UTC",
         "run": "2026-05-20T06:00",
+        "forecast_days": 7,
     }
 
 
@@ -71,7 +74,12 @@ def test_fetch_single_run_payload_success(monkeypatch: pytest.MonkeyPatch) -> No
             return None
 
         def json(self) -> dict:
-            return {"daily": {"time": ["2026-05-22"], "temperature_2m_max": [20.0]}}
+            return {
+                "hourly": {
+                    "time": ["2026-05-22T00:00", "2026-05-22T12:00"],
+                    "temperature_2m": [11.0, 20.0],
+                }
+            }
 
     def fake_get(url: str, params: dict, **kwargs: object) -> FakeResponse:
         calls.append((url, params))
@@ -89,9 +97,10 @@ def test_fetch_single_run_payload_success(monkeypatch: pytest.MonkeyPatch) -> No
         base_url="https://example.test/v1/forecast",
     )
 
-    assert payload["daily"]["time"] == ["2026-05-22"]
+    assert payload["hourly"]["time"][0] == "2026-05-22T00:00"
     assert calls[0][0] == "https://example.test/v1/forecast"
     assert calls[0][1]["models"] == "ukmo_seamless"
+    assert calls[0][1]["hourly"] == "temperature_2m"
 
 
 def test_fetch_single_run_payload_non_2xx_raises(monkeypatch: pytest.MonkeyPatch) -> None:
